@@ -1,0 +1,408 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import {
+  ArrowLeft,
+  ChevronRight,
+  Download,
+  FileText,
+  Loader2,
+  Search,
+} from "lucide-react";
+import ArticuloMarkdown from "@/components/ayuda/ArticuloMarkdown";
+import { apiFetch } from "@/lib/api/fetch-with-supabase-session";
+import { coincideBusqueda, tokenizarBusqueda } from "@/lib/proyectos/busqueda";
+import { formatBytes, type AyudaAdjunto, type AyudaArticulo } from "@/app/configuracion/ayuda/types";
+
+type Relacionado = { id: string; slug: string; titulo: string; categoria_nombre: string | null };
+
+/** Item del índice para el buscador: incluye el extracto del cuerpo. */
+type ItemBuscable = Relacionado & { resumen: string | null; texto?: string };
+
+/**
+ * Artículo de la Ayuda en línea.
+ *
+ * Layout de dos columnas: a la izquierda los artículos de la misma categoría
+ * —o el resto de la base si el artículo está solo— para poder saltar sin
+ * volver a la portada, y a la derecha el contenido. Arriba queda el buscador,
+ * porque la duda suele mutar mientras se lee.
+ */
+
+const TEAL_OSCURO = "#0B3A3D";
+
+/** MP4/WebM se reproducen en el navegador; el resto de los adjuntos se descarga. */
+function esVideo(adj: AyudaAdjunto): boolean {
+  return (adj.mime_type ?? "").startsWith("video/");
+}
+
+/**
+ * Video adjunto reproducido en la página. El enlace firmado se pide recién al
+ * montar (no viaja con el artículo) y dura horas, porque el navegador lo sigue
+ * usando mientras se reproduce.
+ */
+function VideoAdjunto({ slug, adjunto }: { slug: string; adjunto: AyudaAdjunto }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [fallo, setFallo] = useState(false);
+
+  useEffect(() => {
+    let cancelado = false;
+    (async () => {
+      try {
+        const r = await apiFetch(`/api/ayuda/${encodeURIComponent(slug)}/adjuntos/${adjunto.id}`);
+        const j = await r.json();
+        if (cancelado) return;
+        if (r.ok && j?.success && j.data?.url) setUrl(j.data.url as string);
+        else setFallo(true);
+      } catch {
+        if (!cancelado) setFallo(true);
+      }
+    })();
+    return () => {
+      cancelado = true;
+    };
+  }, [slug, adjunto.id]);
+
+  return (
+    <figure className="overflow-hidden rounded-xl border border-slate-200 bg-slate-950">
+      {url ? (
+        <video
+          src={url}
+          controls
+          playsInline
+          preload="metadata"
+          className="aspect-video w-full bg-black"
+        >
+          Tu navegador no puede reproducir este video.
+        </video>
+      ) : (
+        <div className="flex aspect-video w-full items-center justify-center text-sm text-slate-400">
+          {fallo ? "No se pudo cargar el video" : <Loader2 className="h-5 w-5 animate-spin" />}
+        </div>
+      )}
+    </figure>
+  );
+}
+
+export default function ArticuloClient({ slug }: { slug: string }) {
+  const router = useRouter();
+  const [articulo, setArticulo] = useState<AyudaArticulo | null>(null);
+  const [relacionados, setRelacionados] = useState<Relacionado[]>([]);
+  const [origenLista, setOrigenLista] = useState<"categoria" | "otros">("categoria");
+  const [adjuntos, setAdjuntos] = useState<AyudaAdjunto[]>([]);
+  const [descargando, setDescargando] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busqueda, setBusqueda] = useState("");
+  /** Índice completo, cargado una sola vez para buscar sin consultar. */
+  const [indice, setIndice] = useState<ItemBuscable[]>([]);
+  const [cerrado, setCerrado] = useState(false);
+  const cajaRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelado = false;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const r = await apiFetch(`/api/ayuda/${encodeURIComponent(slug)}`);
+        const j = await r.json();
+        if (cancelado) return;
+        if (!r.ok || !j?.success) {
+          setError(j?.error ?? `Error ${r.status}`);
+          return;
+        }
+        setArticulo(j.data.articulo as AyudaArticulo);
+        setRelacionados((j.data.relacionados ?? []) as Relacionado[]);
+        setOrigenLista((j.data.relacionados_origen ?? "categoria") as "categoria" | "otros");
+        setAdjuntos((j.data.adjuntos ?? []) as AyudaAdjunto[]);
+      } catch (e) {
+        if (!cancelado) setError(e instanceof Error ? e.message : "Error de red");
+      } finally {
+        if (!cancelado) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelado = true;
+    };
+  }, [slug]);
+
+  /**
+   * El índice se trae UNA vez, en segundo plano, mientras se lee el artículo.
+   *
+   * Antes cada tecla disparaba una consulta con 280 ms de espera y sólo miraba
+   * lo que el servidor devolvía para esa palabra exacta. Ahora el filtrado es
+   * local: instantáneo, sin acentos, por tokens en cualquier orden y contra el
+   * extracto del cuerpo que ya viaja en el listado.
+   */
+  useEffect(() => {
+    let cancelado = false;
+    (async () => {
+      try {
+        const r = await apiFetch("/api/ayuda");
+        const j = await r.json();
+        if (!cancelado && r.ok && j?.success) setIndice(j.data.articulos as ItemBuscable[]);
+      } catch {
+        /* silencioso: el buscador es un extra, no la razón de esta pantalla */
+      }
+    })();
+    return () => {
+      cancelado = true;
+    };
+  }, []);
+
+  const sugeridos = useMemo(() => {
+    if (cerrado) return [];
+    const tokens = tokenizarBusqueda(busqueda);
+    if (tokens.length === 0) return [];
+    return indice
+      .filter((a) => a.slug !== slug)
+      .filter((a) =>
+        coincideBusqueda(
+          tokens,
+          `${a.titulo} ${a.resumen ?? ""} ${a.categoria_nombre ?? ""} ${a.texto ?? ""}`
+        )
+      )
+      // Lo que coincide en el TÍTULO primero: es lo que se estaba buscando.
+      .sort((a, b) => Number(!coincideBusqueda(tokens, a.titulo)) - Number(!coincideBusqueda(tokens, b.titulo)))
+      .slice(0, 8);
+  }, [indice, busqueda, slug, cerrado]);
+
+  useEffect(() => {
+    setCerrado(false);
+  }, [busqueda]);
+
+  useEffect(() => {
+    const alClickear = (e: MouseEvent) => {
+      if (!cajaRef.current?.contains(e.target as Node)) setCerrado(true);
+    };
+    document.addEventListener("mousedown", alClickear);
+    return () => document.removeEventListener("mousedown", alClickear);
+  }, []);
+
+  const abrirAdjunto = useCallback(
+    async (adj: AyudaAdjunto) => {
+      setDescargando(adj.id);
+      try {
+        const r = await apiFetch(`/api/ayuda/${encodeURIComponent(slug)}/adjuntos/${adj.id}?download=1`);
+        const j = await r.json();
+        if (r.ok && j?.success && j.data?.url) {
+          window.open(j.data.url as string, "_blank", "noopener,noreferrer");
+        }
+      } catch {
+        /* silencioso: si falla, el usuario reintenta */
+      } finally {
+        setDescargando(null);
+      }
+    },
+    [slug]
+  );
+
+  const videos = useMemo(() => adjuntos.filter(esVideo), [adjuntos]);
+  const documentos = useMemo(() => adjuntos.filter((a) => !esVideo(a)), [adjuntos]);
+
+  const tituloLista = useMemo(() => {
+    if (origenLista === "otros") return "Otros artículos";
+    return articulo?.categoria_nombre ? `Artículos de ${articulo.categoria_nombre}` : "Artículos relacionados";
+  }, [origenLista, articulo]);
+
+  const buscador = (
+    <div ref={cajaRef} className="relative mx-auto w-full max-w-2xl">
+      <Search
+        aria-hidden="true"
+        className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#4FAEB2]"
+      />
+      <input
+        value={busqueda}
+        onChange={(e) => setBusqueda(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") setBusqueda("");
+          if (e.key === "Enter" && sugeridos[0]) router.push(`/ayuda/${encodeURIComponent(sugeridos[0].slug)}`);
+        }}
+        autoComplete="off"
+        placeholder="Ingresá acá tu consulta"
+        aria-label="Buscar en la ayuda"
+        className="w-full rounded-xl border border-white/20 bg-white/95 py-2.5 pl-10 pr-3 text-sm text-slate-900 outline-none transition-colors placeholder:text-slate-400 focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/30"
+      />
+      {busqueda.trim() && !cerrado ? (
+        <div className="absolute inset-x-0 top-full z-30 mt-2 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+          {sugeridos.length === 0 ? (
+            <p className="px-4 py-3 text-sm text-slate-400">
+              Nada para “{busqueda.trim()}”. Probá con otra palabra.
+            </p>
+          ) : (
+            <ul className="max-h-80 overflow-y-auto py-1">
+              {sugeridos.map((a) => (
+                <li key={a.id}>
+                  <Link
+                    href={`/ayuda/${encodeURIComponent(a.slug)}`}
+                    onClick={() => setBusqueda("")}
+                    className="block px-4 py-2.5 transition-colors hover:bg-[#4FAEB2]/10"
+                  >
+                    <span className="block truncate text-sm font-medium text-slate-800">{a.titulo}</span>
+                    <span className="block truncate text-[11px] text-slate-400">
+                      {a.categoria_nombre ?? "Sin categoría"}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-24 text-sm text-slate-400">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Cargando artículo…
+      </div>
+    );
+  }
+
+  if (error || !articulo) {
+    return (
+      <div className="mx-auto w-full max-w-3xl space-y-4 py-16 text-center">
+        <p className="text-sm font-semibold text-slate-700">{error ?? "Artículo no encontrado"}</p>
+        <Link
+          href="/ayuda"
+          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Volver a la Ayuda
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    // `overflow-x-hidden`: nada de esta pantalla justifica scroll horizontal, y
+    // sin el candado un solo bloque ancho corre TODO el layout hacia la izquierda.
+    <div className="-mx-4 -mt-4 overflow-x-hidden md:-mx-6 md:-mt-6">
+      {/* Banda superior con el buscador */}
+      <div
+        className="px-4 py-4 md:px-6"
+        style={{ background: `linear-gradient(160deg, ${TEAL_OSCURO} 0%, #17575A 60%, #2F6E71 100%)` }}
+      >
+        {buscador}
+      </div>
+
+      <div className="mx-auto w-full max-w-6xl px-4 pb-12 pt-5 md:px-6">
+        {/* Breadcrumb */}
+        <nav aria-label="Ruta" className="mb-4 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+          <Link
+            href="/ayuda"
+            className="inline-flex items-center gap-1.5 font-medium transition-colors hover:text-[#2F6E71]"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            Inicio
+          </Link>
+          {articulo.categoria_nombre ? (
+            <>
+              <ChevronRight aria-hidden="true" className="h-3.5 w-3.5 text-slate-300" />
+              <span className="text-slate-500">{articulo.categoria_nombre}</span>
+            </>
+          ) : null}
+          <ChevronRight aria-hidden="true" className="h-3.5 w-3.5 text-slate-300" />
+          <span className="font-semibold text-slate-800">{articulo.titulo}</span>
+        </nav>
+
+        <div className="grid gap-4 lg:grid-cols-[264px_minmax(0,1fr)]">
+          {/* Columna izquierda: por dónde seguir */}
+          <aside className="lg:sticky lg:top-4 lg:self-start">
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
+              <h2 className="border-b border-slate-100 pb-2 text-sm font-bold text-[#0B3A3D]">{tituloLista}</h2>
+              {relacionados.length === 0 ? (
+                <p className="px-1 py-3 text-xs text-slate-400">
+                  Es el único artículo cargado por ahora.
+                </p>
+              ) : (
+                <ul className="mt-1 divide-y divide-slate-100">
+                  {relacionados.map((a) => (
+                    <li key={a.id}>
+                      <Link
+                        href={`/ayuda/${encodeURIComponent(a.slug)}`}
+                        className="block py-2.5 pl-1 pr-1 text-[13px] leading-snug text-slate-600 transition-colors hover:text-[#2F6E71]"
+                      >
+                        {a.titulo}
+                        {origenLista === "otros" && a.categoria_nombre ? (
+                          <span className="mt-0.5 block text-[11px] text-slate-400">{a.categoria_nombre}</span>
+                        ) : null}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </aside>
+
+          {/* Columna derecha: el artículo */}
+          <article className="min-w-0 rounded-2xl border border-slate-200 bg-white p-5 md:p-7">
+            <header className="border-b border-slate-100 pb-4">
+              <h1 className="text-2xl font-bold tracking-tight text-[#0B3A3D] md:text-[28px]">
+                {articulo.titulo}
+              </h1>
+              {articulo.resumen ? (
+                <p className="mt-1.5 text-sm leading-relaxed text-slate-500">{articulo.resumen}</p>
+              ) : null}
+            </header>
+
+            <div className="pt-5">
+              <ArticuloMarkdown>{articulo.contenido_md}</ArticuloMarkdown>
+            </div>
+
+            {videos.length > 0 ? (
+              <section className="mt-6 space-y-4">
+                {videos.map((adj) => (
+                  <VideoAdjunto key={adj.id} slug={slug} adjunto={adj} />
+                ))}
+              </section>
+            ) : null}
+
+            {documentos.length > 0 ? (
+              <section className="mt-6 rounded-xl border border-slate-200 bg-slate-50/60 p-3.5">
+                <h2 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  Documentos adjuntos
+                </h2>
+                <ul className="mt-2 space-y-1.5">
+                  {documentos.map((adj) => (
+                    <li key={adj.id}>
+                      <button
+                        type="button"
+                        onClick={() => void abrirAdjunto(adj)}
+                        disabled={descargando === adj.id}
+                        className="flex w-full items-center gap-2.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left transition-colors hover:border-[#4FAEB2]/60 disabled:opacity-60"
+                      >
+                        <FileText aria-hidden="true" className="h-4 w-4 shrink-0 text-[#2F6E71]" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm text-slate-800">{adj.nombre}</span>
+                          {adj.size_bytes ? (
+                            <span className="block text-[11px] text-slate-400">{formatBytes(adj.size_bytes)}</span>
+                          ) : null}
+                        </span>
+                        {descargando === adj.id ? (
+                          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-slate-400" />
+                        ) : (
+                          <Download aria-hidden="true" className="h-4 w-4 shrink-0 text-slate-300" />
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+
+            <footer className="mt-6 border-t border-slate-100 pt-4 text-center">
+              <p className="text-sm italic text-[#2F6E71]">
+                Cada proceso que dominás nos hace crecer a todos. Eso es Neura.
+              </p>
+            </footer>
+          </article>
+        </div>
+      </div>
+    </div>
+  );
+}

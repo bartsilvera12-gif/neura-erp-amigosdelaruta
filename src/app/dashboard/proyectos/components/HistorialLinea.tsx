@@ -1,0 +1,372 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import SpotlightCard from "@/components/reactbits/SpotlightCard";
+import { inicialesNombre, nombreCapitular } from "@/lib/format/nombres";
+import { TZ_PY, horaPY } from "@/lib/format/hora-py";
+import { msLaborables } from "@/lib/proyectos/reloj-laboral";
+import { formatDurationHuman } from "@/lib/proyectos/brief-data";
+
+/**
+ * Historial del proyecto como línea de tiempo.
+ *
+ * Antes era una tabla de siete columnas donde convivían dos cosas distintas:
+ * los cambios de estado (con entrada, salida y duración) y las reasignaciones
+ * de técnico, que no tienen ni salida ni duración y ocupaban esas celdas con
+ * guiones. Encima la fecha completa se repetía en cada fila aunque todo hubiera
+ * pasado el mismo día, y los nombres se cortaban a mitad ("MARCO ALBERTO …").
+ *
+ * Un historial se lee como una secuencia, así que va como secuencia: agrupado
+ * por día, con la hora al costado y cada tipo de evento contando lo suyo.
+ */
+
+type Evento = Record<string, unknown>;
+
+/** Clave YYYY-MM-DD en hora de Paraguay, para agrupar por día real. */
+function diaPY(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ_PY,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+/** "Hoy" / "Ayer" / "viernes 21 de agosto de 2026". */
+function etiquetaDia(claveDia: string): string {
+  const hoy = diaPY(new Date().toISOString());
+  const ayer = diaPY(new Date(Date.now() - 86400000).toISOString());
+  if (claveDia === hoy) return "Hoy";
+  if (claveDia === ayer) return "Ayer";
+  const [y, m, d] = claveDia.split("-").map(Number);
+  if (!y) return claveDia;
+  // Mediodía y no medianoche: con 00:00 UTC el día se corría al anterior en PY.
+  const fecha = new Date(Date.UTC(y, m - 1, d, 12));
+  const s = new Intl.DateTimeFormat("es-PY", {
+    timeZone: TZ_PY,
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(fecha);
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function IconFlecha() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+      <path d="M5 12h14M13 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconPersona() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" strokeLinecap="round" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M19 8v6M22 11h-6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconCapas() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+      <path d="M12 2 2 7l10 5 10-5-10-5Z" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="m2 17 10 5 10-5M2 12l10 5 10-5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/**
+ * Color por estado: cada estado (por nombre) recibe siempre el mismo color, así
+ * se distinguen de un vistazo en la línea de tiempo. Los estados son
+ * configurables por empresa, por eso el color se deriva de un hash del nombre
+ * en vez de un mapa fijo. Ámbar e índigo quedan reservados para reasignación y
+ * sub-etapa (que no son estados), y no entran en esta paleta.
+ */
+type PaletaEstado = { icon: string; chip: string };
+const PALETAS_ESTADO: PaletaEstado[] = [
+  { icon: "bg-teal-100 text-teal-700", chip: "bg-teal-50 text-teal-700 border-teal-200" },
+  { icon: "bg-blue-100 text-blue-700", chip: "bg-blue-50 text-blue-700 border-blue-200" },
+  { icon: "bg-violet-100 text-violet-700", chip: "bg-violet-50 text-violet-700 border-violet-200" },
+  { icon: "bg-rose-100 text-rose-700", chip: "bg-rose-50 text-rose-700 border-rose-200" },
+  { icon: "bg-emerald-100 text-emerald-700", chip: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  { icon: "bg-orange-100 text-orange-700", chip: "bg-orange-50 text-orange-700 border-orange-200" },
+  { icon: "bg-cyan-100 text-cyan-700", chip: "bg-cyan-50 text-cyan-700 border-cyan-200" },
+  { icon: "bg-fuchsia-100 text-fuchsia-700", chip: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" },
+  { icon: "bg-sky-100 text-sky-700", chip: "bg-sky-50 text-sky-700 border-sky-200" },
+  { icon: "bg-pink-100 text-pink-700", chip: "bg-pink-50 text-pink-700 border-pink-200" },
+];
+function hashEstado(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+export function paletaEstado(key: string): PaletaEstado {
+  const k = key.trim().toLowerCase();
+  if (!k) return PALETAS_ESTADO[0];
+  return PALETAS_ESTADO[hashEstado(k) % PALETAS_ESTADO.length];
+}
+
+export function HistorialLinea({ eventos }: { eventos: Evento[] }) {
+  // "desc" = más nuevo primero (por defecto); "asc" = más antiguo primero (el
+  // alta del proyecto arriba). El usuario lo alterna con el botón de la cabecera.
+  const [orden, setOrden] = useState<"desc" | "asc">("desc");
+
+  // Reloj en vivo para el estado actual: el "X min acá" se recalcula solo cada
+  // 30s (sin recargar la ficha). El cálculo es horario LABORAL, la misma unidad
+  // que el resto del historial, así que de noche o el fin de semana no sube.
+  const [ahoraMs, setAhoraMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setAhoraMs(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const porDia = useMemo(() => {
+    // Se ordena tanto los días como los eventos dentro de cada día por
+    // `entered_at`, en el sentido elegido.
+    const ts = (e: Evento) => new Date(String(e.entered_at ?? "")).getTime() || 0;
+    const signo = orden === "desc" ? -1 : 1;
+    const m = new Map<string, Evento[]>();
+    for (const e of eventos) {
+      const k = diaPY(String(e.entered_at ?? ""));
+      const arr = m.get(k) ?? [];
+      arr.push(e);
+      m.set(k, arr);
+    }
+    for (const arr of m.values()) arr.sort((a, b) => signo * (ts(a) - ts(b)));
+    return [...m.entries()].sort(([a], [b]) => (a < b ? -signo : a > b ? signo : 0));
+  }, [eventos, orden]);
+
+  if (eventos.length === 0) {
+    return (
+      <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-12 text-center">
+        <p className="text-sm font-medium text-slate-700">Sin historial todavía</p>
+        <p className="mt-1 text-xs text-slate-500">
+          Acá van a aparecer los cambios de estado y las reasignaciones del proyecto.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-end">
+        <button
+          type="button"
+          onClick={() => setOrden((o) => (o === "desc" ? "asc" : "desc"))}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-medium text-slate-600 shadow-sm transition-colors hover:border-[#4FAEB2]/60 hover:text-[#2F6E71]"
+          title="Cambiar el orden del historial"
+          aria-label={`Orden actual: ${orden === "desc" ? "más recientes primero" : "más antiguos primero"}. Tocá para cambiar.`}
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            className={orden === "asc" ? "rotate-180" : ""}
+          >
+            <path d="M3 6h11M3 12h7M3 18h4" />
+            <path d="M18 9V4M18 4l-2.5 2.5M18 4l2.5 2.5" />
+          </svg>
+          {orden === "desc" ? "Más recientes primero" : "Más antiguos primero"}
+        </button>
+      </div>
+      {porDia.map(([dia, delDia]) => (
+        <section key={dia}>
+          <div className="mb-2.5 flex items-center gap-2">
+            <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+              {etiquetaDia(dia)}
+            </h3>
+            <span className="h-px flex-1 bg-slate-200" />
+            <span className="text-[11px] text-slate-400">
+              {delDia.length} {delDia.length === 1 ? "movimiento" : "movimientos"}
+            </span>
+          </div>
+
+          <ol className="space-y-2">
+            {delDia.map((h) => {
+              const usr = nombreCapitular((h.usuario_cambio_label as string | undefined) ?? "");
+              const hora = horaPY(String(h.entered_at ?? ""));
+              const esReasignacion = h.evento_tipo === "reasignacion_tecnico";
+              const esSubestado = h.evento_tipo === "subestado_desarrollo";
+              // `formatDurationHuman` devuelve "—" cuando todavía no hay salida;
+              // como string es truthy y se colaba en el badge como "— en este
+              // estado". Se normaliza a vacío.
+              const durCruda = String(h.duration_label ?? "").trim();
+              const duracion = durCruda && durCruda !== "—" ? durCruda : "";
+              // Segmento abierto = el proyecto sigue en ese estado (no tiene
+              // salida). Es el "estado actual": recién entrado, el tiempo laboral
+              // acumulado es ~0, y mostrar "0s en este estado" confundía.
+              const esEstadoActual = !h.exited_at;
+              // Tiempo laboral acumulado en el estado actual, recalculado en vivo
+              // contra `ahoraMs`. Bajo 1 min no se muestra número (solo "Estado
+              // actual"), para no mostrar un "0s"/"45s" que confunde.
+              const segActual = esEstadoActual
+                ? Math.floor(
+                    (msLaborables(
+                      String(h.entered_at ?? ""),
+                      new Date(ahoraMs).toISOString()
+                    ) ?? 0) / 1000
+                  )
+                : 0;
+              const duracionActual = segActual >= 60 ? formatDurationHuman(segActual) : "";
+              // Color propio del estado destino (el que quedó en negrita).
+              const palEstado = paletaEstado(
+                (h.estado_nuevo_nombre as string | undefined) ?? String(h.estado_nuevo_id ?? "")
+              );
+              // Primera sub-etapa (no había ninguna antes): se muestra como
+              // "Estableció: X" en vez del feo "Sin definir → X".
+              const subestadoPrimera =
+                esSubestado &&
+                !((h.metadata as { de?: unknown } | null | undefined)?.de);
+
+              return (
+                <li key={String(h.id)}>
+                  <SpotlightCard
+                    spotlightColor={
+                      esReasignacion
+                        ? "rgba(245, 158, 11, 0.10)"
+                        : esSubestado
+                          ? "rgba(99, 102, 241, 0.10)"
+                          : "rgba(79, 174, 178, 0.10)"
+                    }
+                    className={`rounded-xl border bg-white p-3 ${
+                      esReasignacion
+                        ? "border-amber-200"
+                        : esSubestado
+                          ? "border-indigo-200"
+                          : "border-slate-200"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <span
+                        aria-hidden="true"
+                        className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${
+                          esReasignacion
+                            ? "bg-amber-100 text-amber-700"
+                            : esSubestado
+                              ? "bg-indigo-100 text-indigo-700"
+                              : palEstado.icon
+                        }`}
+                      >
+                        {esReasignacion ? <IconPersona /> : esSubestado ? <IconCapas /> : <IconFlecha />}
+                      </span>
+
+                      <div className="min-w-0 flex-1">
+                        {esReasignacion ? (
+                          <>
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.07em] text-amber-700">
+                              Reasignación de técnico
+                            </p>
+                            <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[13px]">
+                              <span className="text-slate-500">
+                                {nombreCapitular(
+                                  (h.reasignacion_de_label as string | undefined) ?? "Sin asignar"
+                                )}
+                              </span>
+                              <span aria-hidden="true" className="text-slate-300">→</span>
+                              <span className="font-semibold text-slate-900">
+                                {nombreCapitular(
+                                  (h.reasignacion_a_label as string | undefined) ?? "Sin asignar"
+                                )}
+                              </span>
+                            </p>
+                          </>
+                        ) : esSubestado ? (
+                          <>
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.07em] text-indigo-600">
+                              Sub-etapa de desarrollo
+                            </p>
+                            {subestadoPrimera ? (
+                              <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[13px]">
+                                <span className="text-slate-500">Estableció:</span>
+                                <span className="font-semibold text-slate-900">
+                                  {(h.subestado_a_label as string | undefined) ?? "Sin definir"}
+                                </span>
+                              </p>
+                            ) : (
+                              <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[13px]">
+                                <span className="text-slate-500">
+                                  {(h.subestado_de_label as string | undefined) ?? "Sin definir"}
+                                </span>
+                                <span aria-hidden="true" className="text-slate-300">→</span>
+                                <span className="font-semibold text-slate-900">
+                                  {(h.subestado_a_label as string | undefined) ?? "Sin definir"}
+                                </span>
+                              </p>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <p className="flex flex-wrap items-center gap-1.5 text-[13px]">
+                              <span className="text-slate-500">
+                                {(h.estado_anterior_nombre as string | undefined) ?? "Alta del proyecto"}
+                              </span>
+                              <span aria-hidden="true" className="text-slate-300">→</span>
+                              <span
+                                className={`inline-flex items-center rounded-md border px-1.5 py-0.5 font-semibold ${palEstado.chip}`}
+                              >
+                                {(h.estado_nuevo_nombre as string | undefined) ??
+                                  String(h.estado_nuevo_id ?? "—")}
+                              </span>
+                            </p>
+                            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-400">
+                              {esEstadoActual ? (
+                                <span className="inline-flex items-center gap-1 rounded-md bg-[#4FAEB2]/10 px-1.5 py-0.5 font-medium text-[#2F6E71]">
+                                  Estado actual
+                                  {duracionActual ? ` · ${duracionActual} acá` : ""}
+                                </span>
+                              ) : duracion ? (
+                                <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-1.5 py-0.5 font-medium text-slate-600">
+                                  {duracion} en este estado
+                                </span>
+                              ) : null}
+                              {h.tipo_sla_label ? <span>{String(h.tipo_sla_label)}</span> : null}
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      {/*
+                        Quién y cuándo, visibles y no escondidos detrás de un
+                        tooltip: es el registro que se usa para seguimiento.
+                      */}
+                      <div className="flex shrink-0 flex-col items-end gap-1 pl-2">
+                        <span className="text-[12px] font-semibold tabular-nums text-slate-700">{hora}</span>
+                        {usr !== "—" ? (
+                          <span className="flex items-center gap-1.5">
+                            <span
+                              aria-hidden="true"
+                              className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-100 text-[8px] font-bold text-slate-500"
+                            >
+                              {inicialesNombre(usr)}
+                            </span>
+                            <span className="max-w-[140px] truncate text-[11px] text-slate-500" title={usr}>
+                              {usr}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-[11px] italic text-slate-300">sin registrar</span>
+                        )}
+                      </div>
+                    </div>
+                  </SpotlightCard>
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+      ))}
+    </div>
+  );
+}

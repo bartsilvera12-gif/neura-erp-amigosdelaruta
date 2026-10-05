@@ -1,0 +1,2089 @@
+"use client";
+
+import { inicialesNombre, nombreCapitular, nombreCorto } from "@/lib/format/nombres";
+import {
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import type { CSSProperties, ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
+import { createBrowserClientForSchema } from "@/lib/supabase";
+import { readSaasBriefData } from "@/lib/proyectos/brief-data";
+import { tipoIncluyeSaas } from "@/lib/proyectos/tipos-proyecto";
+import { coincideBusqueda, tokenizarBusqueda } from "@/lib/proyectos/busqueda";
+import { nombreClienteDisplay } from "@/lib/clientes/display-name";
+import { FechaSelect } from "@/components/ui/FechaSelect";
+import ProyectoDetalleModal from "./components/ProyectoDetalleModal";
+import ProyectoNuevoModal from "./components/ProyectoNuevoModal";
+import { FancySelect } from "./components/FancySelect";
+import { TZ_PY } from "@/lib/format/hora-py";
+import { BLOQUEO_RESPONSABLE_LABEL, esBloqueoResponsable } from "@/lib/proyectos/dashboard/config";
+
+type EstadoRow = {
+  id: string;
+  nombre: string;
+  codigo: string;
+  color: string;
+  sort_order: number;
+  cuenta_sla?: boolean;
+  sla_horas_objetivo?: number | null;
+  es_estado_final?: boolean;
+  inactiveFallback?: boolean;
+};
+
+type ProyectoCard = Record<string, unknown> & {
+  id: string;
+  titulo: string;
+  prioridad: string;
+  estado_id: string;
+  last_activity_at?: string;
+  fecha_ingreso?: string;
+  fecha_prometida?: string | null;
+  brief_data?: Record<string, unknown> | null;
+  bloqueado?: boolean;
+  archivado?: boolean;
+  /**
+   * `bloqueo_motivo` es el canónico; `pausa_motivo` quedó de antes y se sigue
+   * leyendo para no perder lo que se cargó con el campo viejo.
+   */
+  bloqueo_motivo?: string | null;
+  pausa_motivo?: string | null;
+  /** Quién tiene que destrabarlo y qué se hace: sin eso la pausa es un depósito. */
+  bloqueo_responsable?: string | null;
+  bloqueo_proxima_accion?: string | null;
+  cancelacion_motivo?: string | null;
+  /**
+   * Novedades de QA sin leer *para el usuario actual*. Es un dato por persona,
+   * no del proyecto: dos responsables ven badges distintos sobre la misma fila.
+   */
+  qa_novedades_no_leidas?: number;
+  project_manager?: { id: string; nombre?: string | null } | null;
+  proyecto_tipo?: { nombre?: string; codigo?: string } | null;
+  proyecto_estado?: {
+    nombre?: string;
+    codigo?: string;
+    color?: string;
+    cuenta_sla?: boolean;
+    sla_horas_objetivo?: number | null;
+    es_estado_final?: boolean;
+  } | null;
+  cliente?: { empresa?: string | null; nombre_contacto?: string | null } | null;
+  responsable_comercial?: { nombre?: string | null } | null;
+  responsable_tecnico?: { nombre?: string | null } | null;
+  tiempo_en_estado_segundos?: number | null;
+  estado_actual_desde?: string | null;
+  sla_estado_actual?: {
+    cuenta_sla: boolean;
+    objetivo_horas: number | null;
+    vencido: boolean;
+    restante_segundos: number | null;
+    excedido_segundos: number | null;
+  };
+};
+
+const ESTADO_ENTREGADO_CODIGO = "publicado";
+const POSTENTREGA_PERIODO_DIAS = 30;
+
+function isEntregado(p: ProyectoCard): boolean {
+  return (p.proyecto_estado?.codigo ?? "").toLowerCase() === ESTADO_ENTREGADO_CODIGO;
+}
+
+/** ym (YYYY-MM) en hora de Paraguay de una fecha ISO, o null. */
+
+/**
+ * Proyecto en estado FINAL "Entregado" (no cancelación) cuya entrega fue en un mes ANTERIOR al
+ * actual → se saca del tablero para que "Entregado" muestre solo lo del mes. El histórico de
+ * meses anteriores se consulta en el panel gerencial (Dashboard → Proyectos).
+ */
+/** ¿Es un proyecto ENTREGADO? (estado final que no es una cancelación). */
+function esEntregado(p: ProyectoCard): boolean {
+  const est = p.proyecto_estado;
+  if (!est || est.es_estado_final !== true) return false;
+  const cod = (est.codigo ?? "").toLowerCase();
+  const nom = (est.nombre ?? "").toLowerCase();
+  return !/cancel/.test(cod) && !/cancel/.test(nom);
+}
+
+/** Fecha de entrega (YYYY-MM-DD en hora de Paraguay) o "" si no se sabe. */
+function fechaEntregaDe(p: ProyectoCard): string {
+  if (!p.estado_actual_desde) return "";
+  const d = new Date(p.estado_actual_desde);
+  if (!Number.isFinite(d.getTime())) return "";
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: TZ_PY,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+/**
+ * ¿Queda fuera del rango de entrega elegido?
+ *
+ * ANTES esto era "entregado en un mes anterior al actual", y tenía un borde
+ * feo: el día 1 de cada mes la columna Entregado amanecía VACÍA. El 31 de
+ * agosto mostraba 42 proyectos y el 1 de septiembre, cero — sin que nadie
+ * hubiera tocado nada. Ahora la ventana la elige quien mira, con desde/hasta;
+ * sin rango, no se esconde nada.
+ *
+ * Sólo aplica a los ENTREGADOS: un proyecto en curso no tiene fecha de entrega
+ * y filtrarlo por ella lo haría desaparecer del tablero.
+ */
+function fueraDelRango(p: ProyectoCard, desde: string, hasta: string): boolean {
+  if (!desde && !hasta) return false;
+  if (!esEntregado(p)) return false;
+  const f = fechaEntregaDe(p);
+  if (!f) return false; // sin fecha conocida: se muestra, no se esconde en silencio
+  if (desde && f < desde) return true;
+  if (hasta && f > hasta) return true;
+  return false;
+}
+
+type PostentregaInfo = {
+  dia: number;
+  total: number;
+  vencido: boolean;
+  diasRestantes: number;
+};
+
+function getPostentregaInfo(p: ProyectoCard): PostentregaInfo | null {
+  if (!isEntregado(p)) return null;
+  const desde = p.estado_actual_desde;
+  if (!desde) return null;
+  const desdeMs = Date.parse(desde);
+  if (!Number.isFinite(desdeMs)) return null;
+  const diffMs = Date.now() - desdeMs;
+  const diaActual = Math.max(1, Math.floor(diffMs / (1000 * 60 * 60 * 24)) + 1);
+  const vencido = diaActual > POSTENTREGA_PERIODO_DIAS;
+  return {
+    dia: diaActual,
+    total: POSTENTREGA_PERIODO_DIAS,
+    vencido,
+    diasRestantes: Math.max(0, POSTENTREGA_PERIODO_DIAS - diaActual + 1),
+  };
+}
+
+type PrioridadConfig = {
+  codigo: string;
+  nombre: string;
+  color: string | null;
+  bg_color: string | null;
+  text_color: string | null;
+  border_color: string | null;
+  sort_order: number;
+  activo: boolean;
+};
+
+type ProjectCardViewProps = {
+  p: ProyectoCard;
+  estados: EstadoRow[];
+  estadoActivoIds: Set<string>;
+  prioridadConfig?: PrioridadConfig;
+  onOpen: (id: string) => void;
+  onMove: (proyectoId: string, estadoId: string) => void;
+  moving?: boolean;
+  dragOverlay?: boolean;
+};
+
+type KanbanColumnViewProps = {
+  col: EstadoRow;
+  children: ReactNode;
+};
+
+const PROJECT_DRAG_PREFIX = "project:";
+const COLUMN_DROP_PREFIX = "estado:";
+
+function projectDragId(projectId: string): string {
+  return `${PROJECT_DRAG_PREFIX}${projectId}`;
+}
+
+function estadoDropId(estadoId: string): string {
+  return `${COLUMN_DROP_PREFIX}${estadoId}`;
+}
+
+function readProjectIdFromDragId(id: unknown): string | null {
+  const raw = String(id ?? "");
+  return raw.startsWith(PROJECT_DRAG_PREFIX) ? raw.slice(PROJECT_DRAG_PREFIX.length) : null;
+}
+
+function readEstadoIdFromDropId(id: unknown): string | null {
+  const raw = String(id ?? "");
+  return raw.startsWith(COLUMN_DROP_PREFIX) ? raw.slice(COLUMN_DROP_PREFIX.length) : null;
+}
+
+type PriorityCardStyles = {
+  cardAccentClass: string;
+  badgeClass: string;
+  iconDotClass: string;
+};
+
+function getPriorityCardStyles(prioridad: string | null | undefined): PriorityCardStyles {
+  if (prioridad === "baja") {
+    return {
+      cardAccentClass: "border-l-emerald-500 hover:border-emerald-200",
+      badgeClass: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      iconDotClass: "bg-emerald-500",
+    };
+  }
+  if (prioridad === "alta") {
+    return {
+      cardAccentClass: "border-l-orange-500 hover:border-orange-200",
+      badgeClass: "border-orange-200 bg-orange-50 text-orange-700",
+      iconDotClass: "bg-orange-500",
+    };
+  }
+  if (prioridad === "urgente") {
+    return {
+      cardAccentClass: "border-l-rose-600 hover:border-rose-200",
+      badgeClass: "border-rose-200 bg-rose-50 text-rose-700",
+      iconDotClass: "bg-rose-600",
+    };
+  }
+  if (prioridad === "normal" || prioridad === "media") {
+    return {
+      cardAccentClass: "border-l-sky-500 hover:border-sky-200",
+      badgeClass: "border-sky-200 bg-sky-50 text-sky-700",
+      iconDotClass: "bg-sky-500",
+    };
+  }
+  return {
+    cardAccentClass: "border-l-slate-300 hover:border-slate-300",
+    badgeClass: "border-slate-200 bg-slate-50 text-slate-600",
+    iconDotClass: "bg-slate-400",
+  };
+}
+
+function prioridadFallbackLabel(p: string): string {
+  if (p === "normal") return "Media";
+  if (p === "alta") return "Alta";
+  if (p === "urgente") return "Urgente";
+  if (p === "baja") return "Baja";
+  return p;
+}
+
+function formatSlaDuration(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds)) return "—";
+  const totalHours = Math.max(0, Math.floor(seconds / 3600));
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+  if (days > 0 && hours > 0) return `${days}d ${hours}h`;
+  if (days > 0) return `${days}d`;
+  return `${hours}h`;
+}
+
+function formatSlaTarget(hours: number | null | undefined): string | null {
+  if (hours == null || !Number.isFinite(hours)) return null;
+  return formatSlaDuration(hours * 3600);
+}
+
+// Tiempo que la tarjeta lleva en su área/estado actual (se reinicia al moverla).
+// No hay metas de SLA definidas (objetivo en horas vacío), así que se muestra el
+// tiempo transcurrido como "En área: Xd". Si algún día se cargan metas, se
+// resalta el exceso ("Vencido: +…") y se muestra el objetivo al lado.
+function slaEstadoLabel(p: ProyectoCard): string {
+  const sla = p.sla_estado_actual;
+  if (sla?.cuenta_sla && sla.vencido) return `Vencido: +${formatSlaDuration(sla.excedido_segundos)}`;
+  const elapsed = formatSlaDuration(p.tiempo_en_estado_segundos);
+  if (elapsed === "—") return "—";
+  const target = sla?.cuenta_sla ? formatSlaTarget(sla.objetivo_horas) : null;
+  return target ? `En área: ${elapsed} / ${target}` : `En área: ${elapsed}`;
+}
+
+function saasModuleCountLabel(p: ProyectoCard): string | null {
+  if (!tipoIncluyeSaas(p.proyecto_tipo?.codigo)) return null;
+  const count = readSaasBriefData(p.brief_data).modulos_necesarios.length;
+  if (count <= 0) return null;
+  return count === 1 ? "1 módulo" : `${count} módulos`;
+}
+
+/**
+ * Scroll HORIZONTAL del Kanban al pasar el cursor por los bordes laterales.
+ * Muestra una flecha guía en el costado activo.
+ *
+ * Sólo horizontal, y a propósito. Antes también arrastraba en vertical al
+ * acercar el cursor al borde de arriba o de abajo, y eso peleaba con la rueda
+ * del mouse: la franja de arriba cae justo sobre los encabezados de columna
+ * —donde el cursor descansa mientras uno lee—, así que el tablero se iba solo
+ * hacia arriba y no había forma de bajar. Para el eje vertical ya existe la
+ * rueda, que es precisa y la maneja la persona.
+ *
+ * Y aunque quede sólo el eje horizontal, cualquier rueda pausa el arrastre: lo
+ * que hace la persona le gana siempre a la ayuda automática.
+ */
+function KanbanScroller({ children, className = "" }: { children: ReactNode; className?: string }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const dirXRef = useRef<-1 | 0 | 1>(0);
+  const rafRef = useRef<number | null>(null);
+  const [hintX, setHintX] = useState<-1 | 0 | 1>(0);
+  /** Hasta cuándo ignorar el arrastre automático por una rueda reciente. */
+  const pausaHastaRef = useRef(0);
+
+  const loop = useCallback(() => {
+    const el = ref.current;
+    if (el && dirXRef.current !== 0 && Date.now() >= pausaHastaRef.current) {
+      el.scrollLeft += dirXRef.current * 16;
+      rafRef.current = requestAnimationFrame(loop);
+    } else if (dirXRef.current !== 0) {
+      // En pausa por la rueda: se sigue mirando, pero sin mover nada.
+      rafRef.current = requestAnimationFrame(loop);
+    } else {
+      rafRef.current = null;
+    }
+  }, []);
+
+  const ensureLoop = useCallback(() => {
+    if (dirXRef.current !== 0 && rafRef.current == null) {
+      rafRef.current = requestAnimationFrame(loop);
+    }
+  }, [loop]);
+
+  const setDirX = useCallback(
+    (d: -1 | 0 | 1) => {
+      if (d === dirXRef.current) return;
+      dirXRef.current = d;
+      setHintX(d);
+      ensureLoop();
+    },
+    [ensureLoop]
+  );
+
+  const onMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const bandX = 72;
+    const canL = el.scrollLeft > 2;
+    const canR = el.scrollLeft < el.scrollWidth - el.clientWidth - 2;
+    if (x < bandX && canL) setDirX(-1);
+    else if (x > r.width - bandX && canR) setDirX(1);
+    else setDirX(0);
+  };
+
+  const stopAll = () => {
+    setDirX(0);
+  };
+
+  /**
+   * La rueda gana. Sin esto, con el cursor apoyado en una banda lateral el
+   * tablero seguía corriéndose solo mientras la persona intenta moverlo, y se
+   * siente como que la pantalla no obedece.
+   */
+  const onWheel = () => {
+    pausaHastaRef.current = Date.now() + 500;
+    setDirX(0);
+  };
+
+  useEffect(
+    () => () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    },
+    []
+  );
+
+  const arrowH = (dir: "left" | "right") => (
+    <span className="flex h-14 w-14 items-center justify-center rounded-full bg-white/75 text-[#3F8E91] shadow-lg ring-1 ring-[#4FAEB2]/30 backdrop-blur">
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="h-7 w-7"
+        aria-hidden="true"
+      >
+        {dir === "left" ? <polyline points="15 18 9 12 15 6" /> : <polyline points="9 18 15 12 9 6" />}
+      </svg>
+    </span>
+  );
+
+  return (
+    <div className={`relative ${className}`}>
+      <div
+        ref={ref}
+        onMouseMove={onMove}
+        onMouseLeave={stopAll}
+        onWheel={onWheel}
+        className="max-h-[calc(100vh-260px)] min-h-[520px] overflow-auto rounded-xl pb-4"
+      >
+        {children}
+      </div>
+      <div
+        className={`pointer-events-none absolute inset-y-0 left-0 flex w-16 items-center justify-start pl-1 transition-opacity duration-150 ${
+          hintX === -1 ? "opacity-100" : "opacity-0"
+        }`}
+      >
+        {arrowH("left")}
+      </div>
+      <div
+        className={`pointer-events-none absolute inset-y-0 right-0 flex w-16 items-center justify-end pr-1 transition-opacity duration-150 ${
+          hintX === 1 ? "opacity-100" : "opacity-0"
+        }`}
+      >
+        {arrowH("right")}
+      </div>
+    </div>
+  );
+}
+
+const IconKanban = ({ className = "h-3.5 w-3.5" }: { className?: string }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    aria-hidden="true"
+  >
+    <rect x="3" y="3" width="5" height="15" rx="1" />
+    <rect x="9.5" y="3" width="5" height="10" rx="1" />
+    <rect x="16" y="3" width="5" height="13" rx="1" />
+  </svg>
+);
+
+const IconList = ({ className = "h-3.5 w-3.5" }: { className?: string }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    aria-hidden="true"
+  >
+    <line x1="8" y1="6" x2="21" y2="6" />
+    <line x1="8" y1="12" x2="21" y2="12" />
+    <line x1="8" y1="18" x2="21" y2="18" />
+    <line x1="3" y1="6" x2="3.01" y2="6" />
+    <line x1="3" y1="12" x2="3.01" y2="12" />
+    <line x1="3" y1="18" x2="3.01" y2="18" />
+  </svg>
+);
+
+type ListPageSize = 25 | 50 | 100 | "todos";
+
+const LIST_AVATAR_COLORS = [
+  "bg-[#4FAEB2] text-white",
+  "bg-violet-500 text-white",
+  "bg-amber-500 text-white",
+  "bg-emerald-600 text-white",
+  "bg-rose-500 text-white",
+  "bg-sky-600 text-white",
+  "bg-indigo-500 text-white",
+  "bg-fuchsia-500 text-white",
+];
+
+function listAvatarColor(name: string) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h += name.charCodeAt(i);
+  return LIST_AVATAR_COLORS[h % LIST_AVATAR_COLORS.length];
+}
+
+function listInitials(name: string) {
+  if (!name) return "?";
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  return name.slice(0, 2).toUpperCase();
+}
+
+/** Avatar pequeño + nombre completo (con wrap a 2 líneas). Usado en columnas de responsables. */
+/**
+ * Novedades de QA sin leer para el usuario actual. Se apaga solo cuando esa
+ * persona abre el proyecto, así que dos responsables del mismo proyecto pueden
+ * ver cosas distintas acá — es intencional.
+ */
+function QANovedadesBadge({ cantidad }: { cantidad?: number }) {
+  const n = Number(cantidad ?? 0);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700"
+      title={n === 1 ? "1 novedad de QA sin leer" : `${n} novedades de QA sin leer`}
+    >
+      QA
+      <span className="tabular-nums">{n > 99 ? "99+" : n}</span>
+    </span>
+  );
+}
+
+function ResponsableCell({ nombre }: { nombre?: string | null }) {
+  const value = (nombre ?? "").trim();
+  if (!value) {
+    return <span className="text-[11px] italic text-slate-300">Sin asignar</span>;
+  }
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <span
+        className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ring-2 ring-white ${listAvatarColor(
+          value
+        )}`}
+        aria-hidden="true"
+      >
+        {listInitials(value)}
+      </span>
+      <span
+        className="min-w-0 break-words text-[12px] leading-tight text-slate-700"
+        title={value}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Vista Lista (tabla) para Proyectos. Equivalente al ProspectoLista del CRM
+ * Funnel: respeta los filtros del header (vienen ya aplicados desde la API)
+ * y permite mover de estado con el mismo FancySelect que las cards.
+ *
+ * Diseño:
+ * - El cliente va como subtítulo del nombre del proyecto (libera una columna).
+ * - Responsables con avatar + nombre, sin truncar agresivo (wrap a 2 líneas).
+ * - El selector de estado se tiñe con el color de su estado: borde + halo suave.
+ */
+function ProyectosLista({
+  proyectos,
+  estados,
+  estadoActivoIds,
+  prioridadByCodigo,
+  onOpen,
+  onMove,
+  movingProjectId,
+  pageSize,
+}: {
+  proyectos: ProyectoCard[];
+  estados: EstadoRow[];
+  estadoActivoIds: Set<string>;
+  prioridadByCodigo: Map<string, PrioridadConfig>;
+  onOpen: (id: string) => void;
+  onMove: (proyectoId: string, estadoId: string) => void;
+  movingProjectId: string | null;
+  pageSize: ListPageSize;
+}) {
+  const ordered = proyectos
+    .slice()
+    .sort((a, b) => {
+      const ta = a.last_activity_at ? new Date(a.last_activity_at).getTime() : 0;
+      const tb = b.last_activity_at ? new Date(b.last_activity_at).getTime() : 0;
+      return tb - ta;
+    });
+  const rows = pageSize === "todos" ? ordered : ordered.slice(0, pageSize);
+
+  const estadoOptions = estados.map((e) => ({ value: e.id, label: e.nombre }));
+  const estadoById = new Map(estados.map((e) => [e.id, e]));
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <div className="min-h-0 flex-1 overflow-auto rounded-2xl border border-slate-200 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+        <table className="w-full border-collapse text-sm">
+          <colgroup>
+            <col className="w-[26%]" />
+            <col className="w-[8%]" />
+            <col className="w-[8%]" />
+            <col className="w-[18%]" />
+            <col className="w-[14%]" />
+            <col className="w-[14%]" />
+            <col className="w-[12%]" />
+          </colgroup>
+          <thead className="sticky top-0 z-10 bg-slate-50/95 backdrop-blur">
+            <tr className="text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+              <th className="px-4 py-3 font-semibold">Proyecto</th>
+              <th className="px-3 py-3 font-semibold">Tipo</th>
+              <th className="px-3 py-3 font-semibold">Prioridad</th>
+              <th className="px-3 py-3 font-semibold">Estado</th>
+              <th className="px-3 py-3 font-semibold">Comercial</th>
+              <th className="px-3 py-3 font-semibold">Técnico</th>
+              <th className="px-3 py-3 font-semibold">Actividad / SLA</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="px-4 py-12 text-center text-slate-400">
+                  Sin proyectos
+                </td>
+              </tr>
+            ) : (
+              rows.map((p) => {
+                const prio = prioridadByCodigo.get(p.prioridad);
+                const prioStyles = getPriorityCardStyles(p.prioridad);
+                const cli = nombreClienteDisplay(p.cliente, "");
+                const slaVencido = p.sla_estado_actual?.vencido === true;
+                const estado = estadoById.get(p.estado_id);
+                const estadoColor = estado?.color || p.proyecto_estado?.color || "#94a3b8";
+                // Borde teñido + halo: el color del estado se nota pero sin saturar la fila.
+                const estadoTriggerStyle = {
+                  borderColor: estadoColor,
+                  borderWidth: "1.5px",
+                  boxShadow: `0 0 0 3px ${estadoColor}1f`,
+                } as React.CSSProperties;
+                return (
+                  <tr
+                    key={p.id}
+                    onClick={() => onOpen(p.id)}
+                    className={`group cursor-pointer border-t border-slate-100 align-top transition-colors hover:bg-slate-50/70 ${
+                      movingProjectId === p.id ? "bg-sky-50/40" : ""
+                    }`}
+                  >
+                    <td className="px-4 py-3.5">
+                      <div className="flex items-start gap-2">
+                        <span
+                          aria-hidden="true"
+                          className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${prioStyles.iconDotClass}`}
+                        />
+                        <div className="min-w-0">
+                          <div
+                            className="break-words text-[13.5px] font-semibold leading-snug text-slate-900 group-hover:text-[#3F8E91]"
+                            title={p.titulo}
+                          >
+                            {p.titulo}
+                          </div>
+                          {p.cliente ? (
+                            <div
+                              className="mt-0.5 break-words text-[11.5px] leading-tight text-slate-500"
+                              title={cli || undefined}
+                            >
+                              {cli || "—"}
+                            </div>
+                          ) : (
+                            <div className="mt-0.5">
+                              <span
+                                className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700"
+                                title="Este proyecto no tiene un cliente asignado: no aparece en la ficha de ningún cliente en Gestión."
+                              >
+                                Sin cliente asignado
+                              </span>
+                            </div>
+                          )}
+                          <div className="mt-1 flex flex-wrap items-center gap-1">
+                            {p.bloqueado ? (
+                              <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-700">
+                                Bloqueado
+                              </span>
+                            ) : null}
+                            <QANovedadesBadge cantidad={p.qa_novedades_no_leidas} />
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-3 py-3.5 text-[12px] text-slate-600">
+                      {p.proyecto_tipo?.nombre ?? "—"}
+                    </td>
+                    <td className="px-3 py-3.5">
+                      <span
+                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${prioStyles.badgeClass}`}
+                      >
+                        {prio?.nombre ?? prioridadFallbackLabel(p.prioridad)}
+                      </span>
+                    </td>
+                    <td className="px-3 py-3.5" onClick={(e) => e.stopPropagation()}>
+                      <FancySelect
+                        size="sm"
+                        ariaLabel="Mover a otro estado"
+                        value={p.estado_id}
+                        onChange={(v) => onMove(p.id, v)}
+                        triggerStyle={estadoTriggerStyle}
+                        options={[
+                          ...(!estadoActivoIds.has(p.estado_id)
+                            ? [
+                                {
+                                  value: p.estado_id,
+                                  label: "Estado actual oculto / no usado",
+                                  disabled: true,
+                                },
+                              ]
+                            : []),
+                          ...estadoOptions,
+                        ]}
+                      />
+                    </td>
+                    <td className="px-3 py-3.5">
+                      <ResponsableCell nombre={p.responsable_comercial?.nombre} />
+                    </td>
+                    <td className="px-3 py-3.5">
+                      <ResponsableCell nombre={p.responsable_tecnico?.nombre} />
+                    </td>
+                    <td className="px-3 py-3.5">
+                      <div className="text-[11px] tabular-nums text-slate-500">
+                        {fmtDateTime(p.last_activity_at)}
+                      </div>
+                      <div className="mt-1">
+                        <span
+                          className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                            slaVencido
+                              ? "border-rose-200 bg-rose-50 text-rose-700"
+                              : "border-slate-200 bg-slate-50 text-slate-600"
+                          }`}
+                        >
+                          {slaEstadoLabel(p)}
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+export default function ProyectosKanbanClient({ dataSchema }: { dataSchema: string }) {
+  const [estados, setEstados] = useState<EstadoRow[]>([]);
+  const [proyectos, setProyectos] = useState<ProyectoCard[]>([]);
+  const [prioridadesConfig, setPrioridadesConfig] = useState<PrioridadConfig[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [movingProjectId, setMovingProjectId] = useState<string | null>(null);
+  // Popup obligatorio de motivo al mover una tarjeta a Pausado (mismo requisito
+  // que la ficha; el servidor igual lo exige). Guarda a dónde iba la tarjeta.
+  const [pausaKanban, setPausaKanban] = useState<{ proyectoId: string; estadoId: string } | null>(null);
+  const [pausaMotivoK, setPausaMotivoK] = useState("");
+  const [pausaGuardandoK, setPausaGuardandoK] = useState(false);
+  const [pausaErrorK, setPausaErrorK] = useState<string | null>(null);
+  const [activeDragProjectId, setActiveDragProjectId] = useState<string | null>(null);
+
+  const [q, setQ] = useState("");
+  const [filtroEstado, setFiltroEstado] = useState("");
+  const [filtroTipo, setFiltroTipo] = useState("");
+  const [filtroRc, setFiltroRc] = useState("");
+  const [filtroRt, setFiltroRt] = useState("");
+  const [tipoOpts, setTipoOpts] = useState<{ id: string; nombre: string }[]>([]);
+  const [userOpts, setUserOpts] = useState<{ id: string; nombre?: string }[]>([]);
+  const [modalProjectId, setModalProjectId] = useState<string | null>(null);
+  // Solapa / canal con los que abrir el modal cuando se llega por un deep-link
+  // de notificación (?proyecto=…&tab=…&cc=…). En aperturas normales van vacíos.
+  const [modalInitialTab, setModalInitialTab] = useState<string | undefined>(undefined);
+  const [modalInitialCanal, setModalInitialCanal] = useState<string | undefined>(undefined);
+  // Adónde volver cuando el modal se abrió desde otra pantalla (hoy: el Tablero).
+  // En aperturas normales del Kanban queda null y no se muestra el "Volver".
+  const [modalBackHref, setModalBackHref] = useState<string | null>(null);
+  // Persiste que se llegó desde el Tablero: pinta el botón "Volver al Tablero"
+  // arriba en ESTA página y sigue visible aunque se cierre el popup (por eso no
+  // se limpia en onClose, a diferencia de `modalBackHref`).
+  const [desdeTablero, setDesdeTablero] = useState(false);
+  const [nuevoModalOpen, setNuevoModalOpen] = useState(false);
+
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // Abre el proyecto limpiando cualquier estado inicial (aperturas por click).
+  const abrirDetalle = useCallback((id: string) => {
+    setModalInitialTab(undefined);
+    setModalInitialCanal(undefined);
+    setModalBackHref(null);
+    setModalProjectId(id);
+  }, []);
+
+  // Deep-link de notificación: ?proyecto=<id>&tab=comentarios&cc=<canal> abre el
+  // modal del proyecto en la solapa/canal indicados. Luego limpia la query para
+  // que un refresh no lo reabra.
+  useEffect(() => {
+    const pid = searchParams?.get("proyecto");
+    if (!pid) return;
+    setModalInitialTab(searchParams.get("tab") ?? undefined);
+    setModalInitialCanal(searchParams.get("cc") ?? undefined);
+    // `from=tablero`: al cerrar/volver, ofrecer regresar al Tablero en vez de
+    // dejar al usuario en el Kanban (de donde no vino). El flag de página
+    // persiste; el del modal es sólo mientras el popup está abierto.
+    const vinoDeTablero = searchParams.get("from") === "tablero";
+    setModalBackHref(vinoDeTablero ? "/dashboard/tableros" : null);
+    if (vinoDeTablero) setDesdeTablero(true);
+    setModalProjectId(pid);
+    router.replace("/dashboard/proyectos", { scroll: false });
+  }, [searchParams, router]);
+  /** Paginación de la vista Lista (elevado desde ProyectosLista para mostrar el control en la barra). */
+  const [pageSize, setPageSize] = useState<ListPageSize>(25);
+  /** Rango de FECHA DE ENTREGA. Vacío = sin recorte: se ven todos los entregados. */
+  const [entregaDesde, setEntregaDesde] = useState("");
+  const [entregaHasta, setEntregaHasta] = useState("");
+
+  /** Vista del tablero: "kanban" (cards por estado) | "lista" (tabla). Persiste por navegador. */
+  const [vista, setVista] = useState<"kanban" | "lista">(() => {
+    if (typeof window === "undefined") return "kanban";
+    return window.localStorage.getItem("proyectos:vista") === "lista" ? "lista" : "kanban";
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("proyectos:vista", vista);
+    } catch {
+      /* ignore */
+    }
+  }, [vista]);
+
+  /**
+   * Alcance del tablero: "mios" (solo donde soy responsable — comercial/técnico/QA)
+   * o "todos". Recuerda la última elección por navegador. El DEFAULT depende del
+   * nivel: gerencia (admin/supervisor) arranca en "todos"; el resto en "mios".
+   * Queda `null` hasta resolver el nivel del usuario, para no cargar con el alcance
+   * equivocado (evita el parpadeo "todos → míos").
+   */
+  const [alcance, setAlcance] = useState<"mios" | "todos" | null>(() => {
+    if (typeof window === "undefined") return null;
+    const s = window.localStorage.getItem("proyectos:alcance:v2");
+    return s === "mios" || s === "todos" ? s : null;
+  });
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      try {
+        // El servidor decide el arranque: gerencia (admin/supervisor/PM) O quien NO es responsable
+        // de ningún proyecto → "todos" (su vista "Mías" estaría vacía y no encontraría nada al
+        // buscar; caso Sol/MKT). El resto → "mios".
+        const r = await fetchWithSupabaseSession("/api/proyectos/mi-vista", { cache: "no-store" });
+        const j = (await r.json().catch(() => ({}))) as {
+          success?: boolean;
+          data?: { alcance_default?: "todos" | "mios"; es_responsable?: boolean };
+        };
+        const def: "todos" | "mios" = j.data?.alcance_default === "mios" ? "mios" : "todos";
+        const esResponsable = j.data?.es_responsable === true;
+        if (cancel) return;
+        setAlcance((prev) => {
+          // Un "Mías" guardado para alguien que NO es responsable de ningún proyecto está SIEMPRE
+          // vacío (no encontraría nada al buscar): lo corregimos a "Todas". El resto respeta lo
+          // guardado; sin nada guardado usa el default del servidor.
+          if (prev === "mios" && !esResponsable) return "todos";
+          return prev !== null ? prev : def;
+        });
+      } catch {
+        if (!cancel) setAlcance((prev) => prev ?? "todos");
+      }
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (alcance === null) return;
+    try {
+      window.localStorage.setItem("proyectos:alcance:v2", alcance);
+    } catch {
+      /* ignore */
+    }
+  }, [alcance]);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor)
+  );
+
+  /** Generación de la carga en vuelo: solo la más nueva aplica su resultado (anti-carrera). */
+  const loadGenRef = useRef(0);
+
+  // Catálogos (estados, tipos, usuarios, prioridades): cambian rara vez y NO
+  // dependen de los filtros. Se cargan una sola vez. Antes se re-descargaban los
+  // 5 endpoints juntos en cada cambio de filtro y en cada evento de realtime.
+  const loadCatalogos = useCallback(async () => {
+    const [rEst, rTipos, rUsers, rPrioridades] = await Promise.all([
+      fetchWithSupabaseSession("/api/proyectos/estados", { cache: "no-store" }),
+      fetchWithSupabaseSession("/api/proyectos/tipos", { cache: "no-store" }),
+      fetchWithSupabaseSession("/api/usuarios/empresa-activos", { cache: "no-store" }),
+      fetchWithSupabaseSession("/api/configuracion/proyectos/prioridades", { cache: "no-store" }),
+    ]);
+    const jEst = (await rEst.json().catch(() => ({}))) as { success?: boolean; data?: EstadoRow[] };
+    const jTipos = (await rTipos.json().catch(() => ({}))) as {
+      success?: boolean;
+      data?: { id: string; nombre: string }[];
+    };
+    const jUsers = (await rUsers.json().catch(() => ({}))) as { usuarios?: { id: string; nombre?: string }[] };
+    const jPrioridades = (await rPrioridades.json().catch(() => ({}))) as {
+      success?: boolean;
+      data?: { prioridades?: PrioridadConfig[] };
+    };
+    if (rEst.ok && jEst.success) setEstados(jEst.data ?? []);
+    if (jTipos.success && jTipos.data) setTipoOpts(jTipos.data);
+    if (jUsers.usuarios) setUserOpts(jUsers.usuarios);
+    if (rPrioridades.ok && jPrioridades.success && jPrioridades.data?.prioridades) {
+      setPrioridadesConfig(jPrioridades.data.prioridades);
+    } else {
+      setPrioridadesConfig([]);
+    }
+  }, []);
+
+  // Lista de proyectos: depende de los filtros (igualdades exactas, indexadas).
+  // El texto NO viaja al servidor: se filtra en memoria (ver `proyectosVisibles`).
+  // Guardián de generación anti-carrera: si mientras carga se dispara otra
+  // (búsqueda/filtro/realtime), la respuesta que llegue TARDE no pisa a la nueva.
+  const loadProyectos = useCallback(async () => {
+    if (alcance === null) return; // esperar a resolver el default por nivel
+    const ticket = ++loadGenRef.current;
+    setLoading(true);
+    setErr(null);
+    const sp = new URLSearchParams();
+    if (filtroEstado) sp.set("estado_id", filtroEstado);
+    if (filtroTipo) sp.set("tipo_id", filtroTipo);
+    if (filtroRc) sp.set("responsable_comercial_id", filtroRc);
+    if (filtroRt) sp.set("responsable_tecnico_id", filtroRt);
+    if (alcance === "mios") sp.set("mios", "1");
+
+    try {
+      const rPr = await fetchWithSupabaseSession(`/api/proyectos?${sp.toString()}`, { cache: "no-store" });
+      const jPr = (await rPr.json().catch(() => ({}))) as { success?: boolean; data?: ProyectoCard[]; error?: string };
+
+      if (ticket !== loadGenRef.current) return;
+      if (!rPr.ok || !jPr.success) {
+        setErr(jPr.error ?? "No se pudieron cargar proyectos");
+        return;
+      }
+      // Se guarda lo que vino tal cual: qué se muestra lo decide `proyectosVisibles`.
+      setProyectos((jPr.data ?? []) as ProyectoCard[]);
+    } catch (e) {
+      // Sin esto, un corte de red dejaba el Kanban en "Cargando proyectos…" para
+      // siempre. Sólo el ticket vigente toca el estado (respeta el anti-carrera).
+      if (ticket === loadGenRef.current) {
+        setErr(e instanceof Error ? e.message : "No se pudieron cargar proyectos.");
+      }
+    } finally {
+      if (ticket === loadGenRef.current) setLoading(false);
+    }
+  }, [filtroEstado, filtroTipo, filtroRc, filtroRt, alcance]);
+
+  // Catálogos una sola vez (deps estables); la lista en el mount y en cada cambio de filtro.
+  useEffect(() => {
+    void loadCatalogos();
+  }, [loadCatalogos]);
+  useEffect(() => {
+    void loadProyectos();
+  }, [loadProyectos]);
+
+  // Realtime: sólo re-carga la LISTA (no los catálogos) y COALESCIDO. Antes cada
+  // edición de tarea / movimiento de tarjeta de cualquiera disparaba una recarga
+  // completa de 5 endpoints en todos los tableros abiertos; ahora se junta en un
+  // solo refetch de /api/proyectos con debounce.
+  const loadProyectosRef = useRef(loadProyectos);
+  useEffect(() => {
+    loadProyectosRef.current = loadProyectos;
+  }, [loadProyectos]);
+  const realtimeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleReloadProyectos = useCallback(() => {
+    if (realtimeTimerRef.current) clearTimeout(realtimeTimerRef.current);
+    realtimeTimerRef.current = setTimeout(() => {
+      realtimeTimerRef.current = null;
+      void loadProyectosRef.current?.();
+    }, 400);
+  }, []);
+  useEffect(
+    () => () => {
+      if (realtimeTimerRef.current) clearTimeout(realtimeTimerRef.current);
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!dataSchema) return;
+    const sb = createBrowserClientForSchema(dataSchema);
+
+    const channel = sb
+      .channel("proyectos-kanban")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: dataSchema, table: "proyectos" },
+        () => scheduleReloadProyectos()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: dataSchema, table: "proyecto_tareas" },
+        () => scheduleReloadProyectos()
+      )
+      .subscribe();
+
+    return () => {
+      void sb.removeChannel(channel);
+    };
+  }, [dataSchema, scheduleReloadProyectos]);
+
+  const tokensBusqueda = useMemo(() => tokenizarBusqueda(q), [q]);
+
+  /**
+   * Lo que efectivamente se muestra. Dos decisiones, las dos en memoria:
+   *
+   *  1. Por defecto el tablero muestra el trabajo activo + lo entregado del MES
+   *     en curso; los entregados viejos viven en el panel gerencial. Si hay una
+   *     búsqueda o un filtro, el usuario busca algo puntual y se muestra todo lo
+   *     que coincida, o el proyecto "desaparecería" justo al buscarlo.
+   *  2. El texto se compara contra todo lo visible de la tarjeta —cliente,
+   *     título, tipo, estado y responsables—, sin acentos y por tokens sueltos.
+   */
+  const proyectosVisibles = useMemo(() => {
+    const base = proyectos.filter((p) => !fueraDelRango(p, entregaDesde, entregaHasta));
+    if (tokensBusqueda.length === 0) return base;
+    return base.filter((p) =>
+      coincideBusqueda(
+        tokensBusqueda,
+        [
+          p.titulo,
+          p.cliente?.empresa,
+          p.cliente?.nombre_contacto,
+          p.proyecto_tipo?.nombre,
+          p.proyecto_estado?.nombre,
+          p.responsable_comercial?.nombre,
+          p.responsable_tecnico?.nombre,
+        ]
+          .filter(Boolean)
+          .join(" ")
+      )
+    );
+  }, [proyectos, tokensBusqueda, entregaDesde, entregaHasta]);
+
+  const estadoActivoIds = useMemo(() => new Set(estados.map((e) => e.id)), [estados]);
+
+  const kanbanColumns = useMemo(() => {
+    const columns = [...estados];
+    const missing = new Map<string, EstadoRow>();
+    for (const p of proyectosVisibles) {
+      if (estadoActivoIds.has(p.estado_id) || missing.has(p.estado_id)) continue;
+      missing.set(p.estado_id, {
+        id: p.estado_id,
+        nombre: `Oculto / no usado: ${p.proyecto_estado?.nombre ?? "Estado sin configurar"}`,
+        codigo: p.proyecto_estado?.codigo ?? "estado_inactivo",
+        color: p.proyecto_estado?.color ?? "#94a3b8",
+        sort_order: 9999,
+        inactiveFallback: true,
+      });
+    }
+    return [...columns, ...missing.values()];
+  }, [estadoActivoIds, estados, proyectosVisibles]);
+
+  const byColumn = useMemo(() => {
+    const m = new Map<string, ProyectoCard[]>();
+    for (const e of kanbanColumns) m.set(e.id, []);
+    for (const p of proyectosVisibles) {
+      const col = m.get(p.estado_id);
+      if (col) col.push(p);
+    }
+    return m;
+  }, [kanbanColumns, proyectosVisibles]);
+
+  const prioridadByCodigo = useMemo(() => {
+    const m = new Map<string, PrioridadConfig>();
+    for (const prioridad of prioridadesConfig) {
+      if (prioridad.activo) m.set(prioridad.codigo, prioridad);
+    }
+    return m;
+  }, [prioridadesConfig]);
+
+  const activeDragProject = useMemo(
+    () => proyectos.find((p) => p.id === activeDragProjectId) ?? null,
+    [activeDragProjectId, proyectos]
+  );
+
+  async function cambiarEstado(proyectoId: string, estadoId: string, motivo?: string): Promise<boolean> {
+    if (!estadoActivoIds.has(estadoId)) {
+      setErr("No se puede mover a una columna inactiva.");
+      return false;
+    }
+
+    const currentProject = proyectos.find((p) => p.id === proyectoId);
+    if (!currentProject) {
+      setErr("No se encontró el proyecto a mover.");
+      return false;
+    }
+    if (currentProject.estado_id === estadoId) return true;
+
+    const previousProjects = proyectos;
+    const destino = estados.find((e) => e.id === estadoId);
+
+    // Mover a Pausado exige el motivo: se abre el popup y NO se mueve la tarjeta
+    // hasta que se confirme (con el motivo, que el servidor también valida).
+    if (destino?.codigo === "pausado" && !motivo) {
+      setPausaMotivoK("");
+      setPausaErrorK(null);
+      setPausaKanban({ proyectoId, estadoId });
+      return false;
+    }
+
+    setErr(null);
+    setMovingProjectId(proyectoId);
+    setProyectos((prev) =>
+      prev.map((p) =>
+        p.id === proyectoId
+          ? {
+              ...p,
+              estado_id: estadoId,
+              proyecto_estado: destino
+                ? {
+                    ...(p.proyecto_estado ?? {}),
+                    nombre: destino.nombre,
+                    codigo: destino.codigo,
+                    color: destino.color,
+                    cuenta_sla: destino.cuenta_sla,
+                    sla_horas_objetivo: destino.sla_horas_objetivo,
+                    es_estado_final: destino.es_estado_final ?? p.proyecto_estado?.es_estado_final,
+                  }
+                : p.proyecto_estado,
+            }
+          : p
+      )
+    );
+
+    try {
+      const res = await fetchWithSupabaseSession(`/api/proyectos/${proyectoId}/cambiar-estado`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ estado_id: estadoId, ...(motivo ? { motivo } : {}) }),
+      });
+      const j = (await res.json().catch(() => ({}))) as { success?: boolean; error?: string };
+      if (!res.ok || !j.success) {
+        setProyectos(previousProjects);
+        setErr(j.error ?? "No se pudo cambiar el estado. La tarjeta volvió a su columna anterior.");
+        setMovingProjectId(null);
+        return false;
+      }
+      setMovingProjectId(null);
+      // La tarjeta ya se movió optimistamente; la reconciliación va coalescida
+      // (junto con el eco de realtime del propio cambio), sin bloquear.
+      scheduleReloadProyectos();
+      return true;
+    } catch (e) {
+      setProyectos(previousProjects);
+      setErr(
+        e instanceof Error
+          ? `${e.message}. La tarjeta volvió a su columna anterior.`
+          : "No se pudo cambiar el estado. La tarjeta volvió a su columna anterior."
+      );
+      setMovingProjectId(null);
+      return false;
+    }
+  }
+
+  /**
+   * `cambiarEstado` se recrea en cada render, asi que una lambda inline en la
+   * tarjeta cambiaria de identidad siempre y anularia el `memo` de abajo. El
+   * ref deja pasar la ultima version con un callback que nunca cambia; mismo
+   * patron que `loadRef`.
+   */
+  async function confirmarPausaKanban() {
+    if (!pausaKanban || pausaGuardandoK) return;
+    const motivo = pausaMotivoK.trim();
+    if (!motivo) {
+      setPausaErrorK("Escribí el motivo de la pausa.");
+      return;
+    }
+    setPausaGuardandoK(true);
+    setPausaErrorK(null);
+    try {
+      const ok = await cambiarEstado(pausaKanban.proyectoId, pausaKanban.estadoId, motivo);
+      if (!ok) {
+        setPausaErrorK("No se pudo pausar. Probá de nuevo.");
+        return;
+      }
+      setPausaKanban(null);
+      setPausaMotivoK("");
+    } finally {
+      setPausaGuardandoK(false);
+    }
+  }
+
+  const cambiarEstadoRef = useRef(cambiarEstado);
+  useEffect(() => {
+    cambiarEstadoRef.current = cambiarEstado;
+  });
+  const handleMove = useCallback((proyectoId: string, estadoId: string) => {
+    void cambiarEstadoRef.current(proyectoId, estadoId);
+  }, []);
+
+  function handleDragStart(event: DragStartEvent) {
+    setActiveDragProjectId(readProjectIdFromDragId(event.active.id));
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const proyectoId = readProjectIdFromDragId(event.active.id);
+    const estadoId = readEstadoIdFromDropId(event.over?.id);
+    setActiveDragProjectId(null);
+
+    if (!proyectoId || !estadoId) return;
+    void cambiarEstado(proyectoId, estadoId);
+  }
+
+  if (loading && proyectos.length === 0 && estados.length === 0) {
+    return <div className="p-6 text-sm text-slate-500">Cargando proyectos…</div>;
+  }
+
+  if (err && proyectos.length === 0) {
+    return (
+      <div className="flex flex-col items-start gap-2 p-6 text-sm">
+        <p className="text-red-600">{err}</p>
+        <button
+          type="button"
+          onClick={() => void loadProyectos()}
+          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-medium text-slate-600 shadow-sm transition-colors hover:bg-slate-50"
+        >
+          Reintentar
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-[1800px] space-y-3 px-4 pb-4 pt-2 md:px-6 md:pb-6 md:pt-3">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          {desdeTablero ? (
+            <button
+              type="button"
+              onClick={() => router.push("/dashboard/tableros")}
+              className="mb-2 inline-flex items-center gap-1 whitespace-nowrap text-[12px] font-medium text-[#4FAEB2] transition-colors hover:text-[#3F8E91] hover:underline"
+            >
+              ← Volver al Tablero
+            </button>
+          ) : null}
+          <div className="flex items-center gap-2">
+            <span
+              aria-hidden="true"
+              className="inline-block h-2 w-2 shrink-0 rounded-full bg-[#4FAEB2] shadow-[0_0_0_3px_rgba(79,174,178,0.18)]"
+            />
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#4FAEB2]">
+              Tablero
+            </p>
+          </div>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">Proyectos</h1>
+        </div>
+        <button
+          type="button"
+          onClick={() => setNuevoModalOpen(true)}
+          className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-[#4FAEB2] px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-[#4FAEB2]/20 transition-colors hover:bg-[#3F8E91]"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden="true">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          Nuevo proyecto
+        </button>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/dashboard/proyectos/paginas"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm transition-colors hover:border-[#4FAEB2]/60 hover:text-[#4FAEB2]"
+            title="Páginas: catálogo de las webs que hicimos (cliente, vendedor, rubro y acceso)"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-3.5 w-3.5"
+              aria-hidden="true"
+            >
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path d="M3 9h18" />
+              <path d="M7 6.5h.01M10 6.5h.01" />
+            </svg>
+            Páginas
+          </Link>
+          <Link
+            href="/dashboard/proyectos/tareas-equipo"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm transition-colors hover:border-[#4FAEB2]/60 hover:text-[#4FAEB2]"
+            title="Tareas del equipo: proyectos por programador, etapa y días"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-3.5 w-3.5"
+              aria-hidden="true"
+            >
+              <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+            </svg>
+            Tareas del equipo
+          </Link>
+          <Link
+            href="/dashboard/proyectos/reportes/entregados-por-tecnico"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm transition-colors hover:border-[#4FAEB2]/60 hover:text-[#4FAEB2]"
+            title="Reporte: proyectos entregados por técnico"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-3.5 w-3.5"
+              aria-hidden="true"
+            >
+              <path d="M3 3v18h18" />
+              <path d="M7 14l4-4 4 4 5-6" />
+            </svg>
+            Reportes
+          </Link>
+          {/* Alcance: "Mías" (donde soy responsable) | "Todas". Default por nivel, recuerda elección. */}
+          {alcance !== null ? (
+            <div className="flex items-center gap-0.5 rounded-xl border border-slate-200 bg-slate-100/80 p-0.5">
+              <button
+                type="button"
+                onClick={() => setAlcance("mios")}
+                aria-pressed={alcance === "mios"}
+                title="Solo los proyectos donde soy responsable (comercial, técnico o QA)"
+                className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+                  alcance === "mios" ? "bg-white text-[#3F8E91] shadow-sm" : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                Mías
+              </button>
+              <button
+                type="button"
+                onClick={() => setAlcance("todos")}
+                aria-pressed={alcance === "todos"}
+                title="Todos los proyectos del equipo"
+                className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+                  alcance === "todos" ? "bg-white text-[#3F8E91] shadow-sm" : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                Todas
+              </button>
+            </div>
+          ) : null}
+          {/* Toggle de vista: Kanban (cards) | Lista (tabla). Mismo patrón que CRM Funnel. */}
+          <div className="flex items-center gap-0.5 rounded-xl border border-slate-200 bg-slate-100/80 p-0.5">
+            <button
+              type="button"
+              onClick={() => setVista("kanban")}
+              aria-pressed={vista === "kanban"}
+              title="Vista Kanban (cards por estado)"
+              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+                vista === "kanban" ? "bg-white text-[#3F8E91] shadow-sm" : "text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              <IconKanban />
+              Kanban
+            </button>
+            <button
+              type="button"
+              onClick={() => setVista("lista")}
+              aria-pressed={vista === "lista"}
+              title="Vista Lista (tabla de filas)"
+              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+                vista === "lista" ? "bg-white text-[#3F8E91] shadow-sm" : "text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              <IconList />
+              Lista
+            </button>
+          </div>
+          {vista === "lista" ? (
+            <div className="flex items-center gap-2 text-[11px] text-slate-500">
+              <span>
+                Mostrando{" "}
+                <strong className="text-slate-700">
+                  {pageSize === "todos" ? proyectosVisibles.length : Math.min(pageSize, proyectosVisibles.length)}
+                </strong>{" "}
+                de {proyectosVisibles.length}
+              </span>
+              <label className="flex items-center gap-1.5">
+                <span>Registros:</span>
+                <select
+                  value={String(pageSize)}
+                  onChange={(e) =>
+                    setPageSize(e.target.value === "todos" ? "todos" : (Number(e.target.value) as ListPageSize))
+                  }
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 outline-none focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/20"
+                  aria-label="Cantidad de registros a mostrar"
+                >
+                  <option value="25">25</option>
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                  <option value="todos">Todos</option>
+                </select>
+              </label>
+            </div>
+          ) : null}
+        </div>
+
+      {err ? <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{err}</div> : null}
+
+      <div className="flex flex-col gap-2 xl:flex-row xl:flex-wrap xl:items-center">
+        <div className="relative min-w-[220px] flex-1">
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-[#4FAEB2]"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-4 w-4"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-3.5-3.5" />
+            </svg>
+          </span>
+          <input
+            className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-900 shadow-sm transition-colors placeholder:text-slate-400 hover:border-[#4FAEB2]/60 focus:border-[#4FAEB2] focus:outline-none focus:ring-2 focus:ring-[#4FAEB2]/20"
+            placeholder="Buscar cliente, tipo, estado o responsable…"
+            aria-label="Buscar proyectos"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => e.key === "Escape" && setQ("")}
+          />
+        </div>
+        <FancySelect
+          className="min-w-[180px] shrink-0"
+          ariaLabel="Filtrar por estado"
+          placeholder="Todos los estados"
+          value={filtroEstado}
+          onChange={setFiltroEstado}
+          options={[
+            { value: "", label: "Todos los estados" },
+            ...estados.map((e) => ({ value: e.id, label: e.nombre })),
+          ]}
+        />
+        <FancySelect
+          className="min-w-[160px] shrink-0"
+          ariaLabel="Filtrar por tipo"
+          placeholder="Todos los tipos"
+          value={filtroTipo}
+          onChange={setFiltroTipo}
+          options={[
+            { value: "", label: "Todos los tipos" },
+            ...tipoOpts.map((t) => ({ value: t.id, label: t.nombre })),
+          ]}
+        />
+        <FancySelect
+          className="min-w-[190px] shrink-0"
+          ariaLabel="Filtrar por responsable comercial"
+          placeholder="Resp. comercial"
+          value={filtroRc}
+          onChange={setFiltroRc}
+          options={[
+            { value: "", label: "Resp. comercial" },
+            ...userOpts.map((u) => ({
+              value: u.id,
+              label: u.nombre ?? u.id.slice(0, 8),
+            })),
+          ]}
+        />
+        <FancySelect
+          className="min-w-[190px] shrink-0"
+          ariaLabel="Filtrar por responsable técnico"
+          placeholder="Resp. técnico"
+          value={filtroRt}
+          onChange={setFiltroRt}
+          options={[
+            { value: "", label: "Resp. técnico" },
+            ...userOpts.map((u) => ({
+              value: u.id,
+              label: u.nombre ?? u.id.slice(0, 8),
+            })),
+          ]}
+        />
+        {/*
+          Rango de entrega. Va al final de la barra porque acota una sola
+          columna del tablero (Entregado), no todo el pipeline.
+        */}
+        <div className="flex shrink-0 items-center gap-1.5">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+            Entregado
+          </span>
+          <FechaSelect
+            value={entregaDesde}
+            onChange={(e) => setEntregaDesde(e.target.value)}
+            placeholder="Desde"
+            aria-label="Entregados desde"
+            max={entregaHasta || undefined}
+            className="w-[132px] rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-colors hover:border-[#4FAEB2]/60 focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/20"
+          />
+          <FechaSelect
+            value={entregaHasta}
+            onChange={(e) => setEntregaHasta(e.target.value)}
+            placeholder="Hasta"
+            aria-label="Entregados hasta"
+            min={entregaDesde || undefined}
+            className="w-[132px] rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition-colors hover:border-[#4FAEB2]/60 focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/20"
+          />
+        </div>
+        {(q || filtroEstado || filtroTipo || filtroRc || filtroRt || entregaDesde || entregaHasta) ? (
+          <button
+            type="button"
+            className="shrink-0 rounded-xl border border-transparent px-3 py-2.5 text-xs font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+            onClick={() => {
+              setQ("");
+              setFiltroEstado("");
+              setFiltroTipo("");
+              setFiltroRc("");
+              setFiltroRt("");
+              setEntregaDesde("");
+              setEntregaHasta("");
+            }}
+          >
+            Limpiar filtros
+          </button>
+        ) : null}
+      </div>
+
+      {vista === "lista" ? (
+        <ProyectosLista
+          proyectos={proyectosVisibles}
+          estados={estados}
+          estadoActivoIds={estadoActivoIds}
+          prioridadByCodigo={prioridadByCodigo}
+          onOpen={abrirDetalle}
+          onMove={handleMove}
+          movingProjectId={movingProjectId}
+          pageSize={pageSize}
+        />
+      ) : (
+      <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <KanbanScroller>
+          <div className="flex min-h-full gap-4">
+            {kanbanColumns.map((col) => {
+              const items = byColumn.get(col.id) ?? [];
+              return (
+                <KanbanColumnView key={col.id} col={col}>
+                  <div
+                    className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 bg-white px-3 py-2 shadow-sm"
+                    style={{ borderTopColor: col.color, borderTopWidth: 3 }}
+                  >
+                    <span className="text-sm font-semibold text-slate-800">{col.nombre}</span>
+                    <span className="rounded-full bg-white px-2 py-0.5 text-xs text-slate-600">{items.length}</span>
+                  </div>
+                  {col.inactiveFallback ? (
+                    <div className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      Esta columna está inactiva, pero contiene proyectos. Movelos a una columna activa.
+                    </div>
+                  ) : null}
+                  <div className="flex flex-1 flex-col gap-2 p-2">
+                    {items.map((p) => (
+                      <ProjectCardView
+                        key={p.id}
+                        p={p}
+                        estados={estados}
+                        estadoActivoIds={estadoActivoIds}
+                        prioridadConfig={prioridadByCodigo.get(p.prioridad)}
+                        onOpen={abrirDetalle}
+                        onMove={handleMove}
+                        moving={movingProjectId === p.id}
+                      />
+                    ))}
+                    {items.length === 0 ? (
+                      <div className="py-8 text-center text-xs text-slate-400">Soltá tarjetas acá</div>
+                    ) : null}
+                  </div>
+                </KanbanColumnView>
+              );
+            })}
+          </div>
+        </KanbanScroller>
+        <DragOverlay>
+          {activeDragProject ? (
+            <ProjectCardView
+              p={activeDragProject}
+              estados={estados}
+              estadoActivoIds={estadoActivoIds}
+              prioridadConfig={prioridadByCodigo.get(activeDragProject.prioridad)}
+              onOpen={() => undefined}
+              onMove={() => undefined}
+              dragOverlay
+            />
+          ) : null}
+        </DragOverlay>
+      </DndContext>
+      )}
+
+      {vista === "kanban" ? (
+        <p className="text-center text-xs text-slate-400">
+          Arrastrá tarjetas entre columnas activas o usá el selector “Mover a” como alternativa.
+        </p>
+      ) : null}
+
+      <ProyectoDetalleModal
+        projectId={modalProjectId}
+        open={modalProjectId != null}
+        // Solapa/canal iniciales sólo cuando se abre por deep-link de notificación.
+        initialTab={modalInitialTab}
+        initialCanal={modalInitialCanal}
+        // La fila ya está en memoria del tablero: se la pasamos para que la
+        // cabecera del detalle se pinte al instante mientras llega el GET.
+        proyectoPreview={
+          modalProjectId != null
+            ? proyectos.find((p) => p.id === modalProjectId) ?? null
+            : null
+        }
+        // Al cerrar se recarga el listado además de al guardar: abrir el
+        // proyecto marca leídas sus novedades de QA, y el badge de la fila
+        // tiene que apagarse sin que el usuario refresque la página.
+        onClose={() => {
+          setModalProjectId(null);
+          setModalInitialTab(undefined);
+          setModalInitialCanal(undefined);
+          setModalBackHref(null);
+          void loadProyectos();
+        }}
+        onUpdated={() => void loadProyectos()}
+        dataSchema={dataSchema}
+        backHref={modalBackHref}
+        backLabel="Volver al Tablero"
+      />
+
+      <ProyectoNuevoModal
+        open={nuevoModalOpen}
+        onClose={() => setNuevoModalOpen(false)}
+        onCreated={(id) => {
+          setNuevoModalOpen(false);
+          void loadProyectos();
+          abrirDetalle(id);
+        }}
+      />
+
+      {pausaKanban ? (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Cerrar"
+            className="absolute inset-0 bg-slate-900/55 backdrop-blur-sm"
+            onClick={() => { if (!pausaGuardandoK) setPausaKanban(null); }}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="relative w-full max-w-md overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-2xl"
+          >
+            <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-amber-400 via-amber-400/80 to-amber-300/40" />
+            <div className="flex items-start gap-3 border-b border-slate-100 px-5 pb-4 pt-5">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-50 text-amber-600 ring-1 ring-amber-200">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                  <rect x="6" y="5" width="4" height="14" rx="1" />
+                  <rect x="14" y="5" width="4" height="14" rx="1" />
+                </svg>
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-base font-semibold text-slate-900">Pausar proyecto</h2>
+                <p className="mt-1 text-xs text-slate-500">
+                  Dejá acotado por qué se pausa. Queda como comentario y el cambio va al historial.
+                </p>
+              </div>
+            </div>
+            <div className="space-y-2 px-5 py-4">
+              <label className="block text-xs font-medium text-slate-600">
+                Motivo de la pausa <span className="text-rose-500">*</span>
+              </label>
+              <textarea
+                autoFocus
+                rows={3}
+                value={pausaMotivoK}
+                onChange={(e) => { setPausaMotivoK(e.target.value); if (pausaErrorK) setPausaErrorK(null); }}
+                placeholder="Ej.: falta que el cliente mande el logo y los textos."
+                className="w-full resize-none rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                disabled={pausaGuardandoK}
+              />
+              {pausaErrorK ? <p className="text-xs text-red-600">{pausaErrorK}</p> : null}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-5 py-3">
+              <button
+                type="button"
+                onClick={() => { if (!pausaGuardandoK) setPausaKanban(null); }}
+                disabled={pausaGuardandoK}
+                className="rounded-lg px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmarPausaKanban()}
+                disabled={pausaGuardandoK || !pausaMotivoK.trim()}
+                className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-amber-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
+              >
+                {pausaGuardandoK ? "Pausando…" : "Pausar proyecto"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function KanbanColumnView({ col, children }: KanbanColumnViewProps) {
+  const { isOver, setNodeRef } = useDroppable({
+    id: estadoDropId(col.id),
+    disabled: col.inactiveFallback === true,
+    data: { estadoId: col.id, active: col.inactiveFallback !== true },
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`flex w-[300px] shrink-0 flex-col rounded-xl border bg-slate-50/80 transition-colors ${
+        isOver && !col.inactiveFallback
+          ? "border-[#4FAEB2]/50 bg-[#4FAEB2]/8 ring-2 ring-[#4FAEB2]/20"
+          : "border-slate-200"
+      }`}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Tarjeta del Kanban. Se exporta MEMOIZADA (`ProjectCardView`, al final del
+ * archivo) y no cruda.
+ *
+ * Por que: cada tarjeta llama a `useDraggable`, que la suscribe al DndContext,
+ * y ademas parsea el brief del proyecto para calcular los badges. Sin memo,
+ * escribir una letra en el buscador re-renderizaba las ~100 tarjetas del
+ * tablero enteras — por eso en Lista (que pinta 25 filas simples) se sentia
+ * instantaneo y en Kanban no. Con memo solo se montan/desmontan las que
+ * entran o salen del resultado; las que siguen ahi no hacen nada.
+ *
+ * Requisito: todas las props tienen que ser estables entre renders. `estados`
+ * y `estadoActivoIds` ya vienen memoizados, y `onMove` es `handleMove`.
+ */
+function ProjectCardViewBase({
+  p,
+  estados,
+  estadoActivoIds,
+  prioridadConfig,
+  onOpen,
+  onMove,
+  moving,
+  dragOverlay,
+}: ProjectCardViewProps) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: projectDragId(p.id),
+    disabled: dragOverlay === true,
+    data: { projectId: p.id, estadoId: p.estado_id },
+  });
+
+  const cli = nombreClienteDisplay(p.cliente, "");
+  const saasModulesLabel = saasModuleCountLabel(p);
+  const priorityStyles = getPriorityCardStyles(p.prioridad);
+  const postentrega = getPostentregaInfo(p);
+
+  const style: CSSProperties | undefined = transform
+    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` }
+    : undefined;
+  const baseBadgeClass =
+    "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium leading-4";
+  const neutralBadgeClass =
+    "inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium leading-4 text-slate-600";
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className={`touch-none rounded-2xl border border-l-4 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${
+        dragOverlay ? "rotate-1 cursor-grabbing shadow-2xl" : "cursor-grab active:cursor-grabbing"
+      } ${priorityStyles.cardAccentClass} ${isDragging ? "opacity-40" : ""} ${moving ? "ring-2 ring-sky-100" : ""}`}
+    >
+      <button
+        type="button"
+        className="block w-full text-left"
+        onClick={() => {
+          if (!dragOverlay) onOpen(p.id);
+        }}
+      >
+        <div className="flex items-start gap-2">
+          <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${priorityStyles.iconDotClass}`} />
+          <div className="min-w-0 flex-1">
+            <div className="text-[15px] font-semibold leading-snug text-slate-950 hover:underline">
+              {p.titulo}
+            </div>
+            {p.cliente ? (
+              <div className="mt-1 text-xs font-medium text-slate-600">{cli || "—"}</div>
+            ) : (
+              <div className="mt-1">
+                <span
+                  className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700"
+                  title="Este proyecto no tiene un cliente asignado: no aparece en la ficha de ningún cliente en Gestión."
+                >
+                  Sin cliente asignado
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          <span className={neutralBadgeClass}>
+            {p.proyecto_tipo?.nombre ?? "Tipo"}
+          </span>
+          {saasModulesLabel ? (
+            <span className={neutralBadgeClass}>
+              {saasModulesLabel}
+            </span>
+          ) : null}
+          <span className={`${baseBadgeClass} font-semibold ${priorityStyles.badgeClass}`}>
+            {prioridadConfig?.nombre ?? prioridadFallbackLabel(p.prioridad)}
+          </span>
+          <span className={p.sla_estado_actual?.vencido ? `${baseBadgeClass} border-rose-200 bg-rose-50 text-rose-700` : neutralBadgeClass}>
+            {slaEstadoLabel(p)}
+          </span>
+          {postentrega ? (
+            <span
+              className={`${baseBadgeClass} font-semibold ${
+                postentrega.vencido
+                  ? "border-rose-200 bg-rose-50 text-rose-700"
+                  : postentrega.dia >= 25
+                    ? "border-amber-200 bg-amber-50 text-amber-700"
+                    : "border-[#4FAEB2]/30 bg-[#4FAEB2]/10 text-[#3F8E91]"
+              }`}
+              title={
+                postentrega.vencido
+                  ? `Período de cambios cerrado (día ${postentrega.dia})`
+                  : `Día ${postentrega.dia} de ${postentrega.total} para cambios gratis`
+              }
+            >
+              {postentrega.vencido
+                ? `Día ${postentrega.dia} / ${postentrega.total} · vencido`
+                : `Día ${postentrega.dia} / ${postentrega.total}`}
+            </span>
+          ) : null}
+          {p.bloqueado ? (
+            <span className={`${baseBadgeClass} border-rose-200 bg-rose-50 text-rose-800`}>
+              Bloqueado
+            </span>
+          ) : null}
+          <QANovedadesBadge cantidad={p.qa_novedades_no_leidas} />
+          {moving ? (
+            <span className={`${baseBadgeClass} border-sky-200 bg-sky-50 text-sky-800`}>
+              Guardando...
+            </span>
+          ) : null}
+        </div>
+        <div className="mt-3 space-y-1.5 rounded-xl bg-slate-50/80 px-3 py-2.5">
+          {/* Las tres personas del proyecto, una por línea. El PM sale de la
+              ficha del cliente y se sincroniza solo; está acá porque es a quien
+              hay que escribirle cuando algo se traba. */}
+          <PersonaMeta rol="PM" nombre={p.project_manager?.nombre} />
+          <PersonaMeta rol="Téc" nombre={p.responsable_tecnico?.nombre} />
+          <PersonaMeta rol="Com" nombre={p.responsable_comercial?.nombre} />
+
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1 border-t border-slate-200/70 pt-1.5 text-[10.5px]">
+            <FechaMeta label="Ingreso" value={fmtDate(p.fecha_ingreso)} />
+            {/* Sin fecha prometida se dice que falta, en vez de un guión que se
+                lee como "no aplica": es un dato pendiente de cargar. */}
+            <FechaMeta
+              label="Prometido"
+              value={fmtDate(p.fecha_prometida)}
+              alerta={!p.fecha_prometida}
+            />
+            <div className="col-span-2">
+              <FechaMeta label="Actividad" value={fmtDateTime(p.last_activity_at)} />
+            </div>
+          </div>
+
+          {/* El porqué, cuando el estado lo pide.
+              Una tarjeta parada o cancelada sin explicación obliga a abrirla
+              para entender qué pasó, y eso es justo lo que un tablero tendría
+              que ahorrarte. */}
+          <MotivoMeta p={p} />
+        </div>
+      </button>
+      {!dragOverlay ? (
+        <>
+          <div className="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-3" onClick={(e) => e.stopPropagation()}>
+            <Link
+              href={`/dashboard/proyectos/${p.id}`}
+              className="text-[11px] font-semibold text-[#4FAEB2] hover:text-[#3F8E91] hover:underline"
+              onClick={(e) => e.stopPropagation()}
+            >
+              Abrir en página completa
+            </Link>
+          </div>
+          <div
+            className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2"
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <label className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+              Mover a
+            </label>
+            <div className="mt-1">
+              <FancySelect
+                size="sm"
+                ariaLabel="Mover a otro estado"
+                value={p.estado_id}
+                onChange={(v) => onMove(p.id, v)}
+                options={[
+                  ...(!estadoActivoIds.has(p.estado_id)
+                    ? [
+                        {
+                          value: p.estado_id,
+                          label: "Estado actual oculto / no usado",
+                          disabled: true,
+                        },
+                      ]
+                    : []),
+                  ...estados.map((e) => ({ value: e.id, label: e.nombre })),
+                ]}
+              />
+            </div>
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+const ProjectCardView = memo(ProjectCardViewBase);
+
+/** Paleta de los avatares. El color sale del texto: la misma persona, el mismo color. */
+const COLORES_PERSONA = ["#4FAEB2", "#8b5cf6", "#f59e0b", "#ec4899", "#22c55e", "#0ea5e9"];
+
+function colorDePersona(nombre: string): string {
+  let h = 0;
+  for (let i = 0; i < nombre.length; i++) h = (h * 31 + nombre.charCodeAt(i)) >>> 0;
+  return COLORES_PERSONA[h % COLORES_PERSONA.length];
+}
+
+/**
+ * Una persona del proyecto: rol, avatar y nombre en UNA línea.
+ *
+ * Antes eran nombres completos en mayúsculas que ocupaban tres renglones cada
+ * uno —"EMMANUEL MAXIMILIANO GUILLEN MARTINEZ"— y empujaban las fechas fuera de
+ * la vista. Se muestra nombre y primer apellido, que es como se lo nombra en la
+ * oficina, y el completo queda en el `title`.
+ */
+function PersonaMeta({ rol, nombre }: { rol: string; nombre?: string | null }) {
+  const completo = (nombre ?? "").trim();
+  if (!completo) {
+    return (
+      <div className="flex min-w-0 items-center gap-1.5">
+        <span className="w-7 shrink-0 text-[9px] font-bold uppercase tracking-wide text-slate-400">
+          {rol}
+        </span>
+        <span className="text-[11px] text-slate-300">Sin asignar</span>
+      </div>
+    );
+  }
+  const color = colorDePersona(completo);
+  return (
+    <div className="flex min-w-0 items-center gap-1.5" title={`${rol}: ${nombreCapitular(completo)}`}>
+      <span className="w-7 shrink-0 text-[9px] font-bold uppercase tracking-wide text-slate-400">
+        {rol}
+      </span>
+      <span
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[8px] font-bold"
+        style={{ background: `${color}22`, color }}
+      >
+        {inicialesNombre(completo)}
+      </span>
+      <span className="min-w-0 truncate text-[11px] font-medium text-slate-700">
+        {nombreCorto(completo)}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * El motivo de que la tarjeta esté parada o cancelada.
+ *
+ * Sólo aparece en Pausado y en Cancelado: en cualquier otro estado no hay nada
+ * que explicar, y un renglón vacío en cada tarjeta es ruido.
+ *
+ * Cuando el estado lo pide y el motivo NO está cargado, se dice. Un hueco en
+ * silencio se lee como "no hace falta"; el aviso lo convierte en algo que
+ * alguien puede ir a completar.
+ */
+function MotivoMeta({ p }: { p: ProyectoCard }) {
+  const codigo = String(p.proyecto_estado?.codigo ?? "").toLowerCase();
+  const esPausa = codigo === "pausado" || p.bloqueado === true;
+  const esCancelado = codigo === "cancelado";
+  if (!esPausa && !esCancelado) return null;
+
+  const texto = (
+    esCancelado ? p.cancelacion_motivo : (p.bloqueo_motivo ?? p.pausa_motivo)
+  )?.trim();
+
+  const paleta = esCancelado
+    ? { caja: "bg-slate-100 text-slate-600", rotulo: "text-slate-500" }
+    : { caja: "bg-amber-50 text-amber-800", rotulo: "text-amber-600" };
+
+  return (
+    <div className={`mt-1.5 rounded-lg px-2 py-1.5 ${paleta.caja}`}>
+      <span className={`block text-[9.5px] font-semibold uppercase tracking-wide ${paleta.rotulo}`}>
+        {esCancelado ? "Motivo de cancelación" : "Motivo de la pausa"}
+      </span>
+      {texto ? (
+        <span className="mt-0.5 block text-[11px] leading-snug">{texto}</span>
+      ) : (
+        <span className="mt-0.5 block text-[11px] italic leading-snug opacity-70">
+          Sin cargar
+        </span>
+      )}
+      {/* Quién destraba y qué sigue. Sólo en las pausas: un proyecto cancelado
+          no se destraba. Los bloqueos viejos no lo tienen y ahí no se muestra. */}
+      {!esCancelado && (esBloqueoResponsable(p.bloqueo_responsable) || p.bloqueo_proxima_accion) ? (
+        <div className="mt-1 space-y-0.5 border-t border-amber-200/70 pt-1 text-[10px] leading-snug">
+          {esBloqueoResponsable(p.bloqueo_responsable) ? (
+            <span className="block">
+              <span className={`font-semibold ${paleta.rotulo}`}>Destraba:</span>{" "}
+              {BLOQUEO_RESPONSABLE_LABEL[p.bloqueo_responsable]}
+            </span>
+          ) : null}
+          {p.bloqueo_proxima_accion ? (
+            <span className="block">
+              <span className={`font-semibold ${paleta.rotulo}`}>Próxima acción:</span>{" "}
+              {p.bloqueo_proxima_accion}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function FechaMeta({
+  label,
+  value,
+  alerta,
+}: {
+  label: string;
+  value: string;
+  alerta?: boolean;
+}) {
+  return (
+    <div className="min-w-0">
+      <span className="text-[9px] font-bold uppercase tracking-wide text-slate-400">{label}</span>
+      <div className={`truncate tabular-nums ${alerta ? "font-semibold text-amber-600" : "text-slate-700"}`}>
+        {alerta ? "A definir" : value}
+      </div>
+    </div>
+  );
+}
+
+function fmtDate(s?: string | null): string {
+  if (!s) return "—";
+  const d = new Date(s);
+  return Number.isFinite(d.getTime()) ? d.toLocaleDateString() : "—";
+}
+
+function fmtDateTime(s?: string | null): string {
+  if (!s) return "—";
+  const d = new Date(s);
+  return Number.isFinite(d.getTime()) ? d.toLocaleString() : "—";
+}

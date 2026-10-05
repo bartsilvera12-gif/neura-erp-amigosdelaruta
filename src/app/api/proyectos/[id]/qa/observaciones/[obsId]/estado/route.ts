@@ -1,0 +1,122 @@
+import { NextResponse } from "next/server";
+import { getChatServiceClientForEmpresa } from "@/app/api/chat/_chat-service-client";
+import { errorResponse, successResponse } from "@/lib/api/response";
+import { permisoQADe } from "@/lib/proyectos/qa-permisos";
+import { requireProyectosApiAccess } from "@/lib/proyectos/proyectos-auth";
+import {
+  QA_OBSERVACION_SELECT,
+  bumpProyectoActividad,
+  enriquecerObservaciones,
+  esQAEstado,
+  fetchObservacion,
+  registrarEventoQA,
+  type QAObservacionEstado,
+  type QAObservacionRow,
+} from "@/lib/proyectos/qa-shared";
+
+/**
+ * Sellos de auditoría según el estado destino.
+ *
+ * `resuelto` lo firma quien ejecuta el ajuste; `verificado` es el visto bueno
+ * posterior y no pisa el sello de resolución. Volver a `pendiente`/`en_curso`
+ * es reabrir: se limpian ambos sellos para que no queden firmas de una
+ * resolución que ya no vale. `descartado` no firma nada.
+ */
+function sellos(
+  estado: QAObservacionEstado,
+  usuarioId: string | null,
+  ahora: string
+): Record<string, unknown> {
+  switch (estado) {
+    case "resuelto":
+      return { resuelto_por: usuarioId, resuelto_at: ahora, verificado_por: null, verificado_at: null };
+    case "verificado":
+      return { verificado_por: usuarioId, verificado_at: ahora };
+    case "pendiente":
+    case "en_curso":
+      return { resuelto_por: null, resuelto_at: null, verificado_por: null, verificado_at: null };
+    default:
+      return {};
+  }
+}
+
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ id: string; obsId: string }> }
+) {
+  const auth = await requireProyectosApiAccess(request);
+  if (!auth.ok) return NextResponse.json(errorResponse(auth.message), { status: auth.status });
+
+  const { id, obsId } = await params;
+  const pid = id?.trim() ?? "";
+  const oid = obsId?.trim() ?? "";
+  if (!pid || !oid) return NextResponse.json(errorResponse("ids obligatorios"), { status: 400 });
+
+  try {
+    const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+    const estado = typeof body?.estado === "string" ? body.estado.trim() : "";
+    if (!esQAEstado(estado)) {
+      return NextResponse.json(errorResponse("estado inválido"), { status: 400 });
+    }
+
+    const sb = await getChatServiceClientForEmpresa(auth.empresaId);
+
+    // El permiso y la observación no dependen entre sí: pedirlos en serie
+    // sumaba un viaje completo a la base por cada cambio de estado.
+    const [permiso, prev] = await Promise.all([
+      permisoQADe(sb, auth.empresaId, auth.usuarioCatalogId ?? "", pid),
+      fetchObservacion(sb, auth.empresaId, pid, oid),
+    ]);
+    if (permiso.vista == null) {
+      return NextResponse.json(errorResponse("No tenés acceso a QA en este proyecto."), { status: 403 });
+    }
+    // "Verificado" y "Descartado" son el veredicto de QA. Sin este corte, el
+    // técnico podría cerrarse sus propias observaciones mandando el estado a
+    // mano, salteándose la revisión — que es justo lo que QA existe para evitar.
+    if (permiso.vista !== "qa" && (estado === "verificado" || estado === "descartado")) {
+      return NextResponse.json(
+        errorResponse("Verificar o descartar una observación es potestad de QA."),
+        { status: 403 }
+      );
+    }
+
+    if (!prev) return NextResponse.json(errorResponse("Observación no encontrada"), { status: 404 });
+
+    if (prev.estado === estado) {
+      const [sinCambios] = await enriquecerObservaciones(sb, auth.empresaId, [prev]);
+      return NextResponse.json(successResponse(sinCambios ?? prev));
+    }
+
+    const { data, error } = await sb
+      .from("proyecto_qa_observaciones")
+      .update({ estado, ...sellos(estado, auth.usuarioCatalogId, new Date().toISOString()) })
+      .eq("empresa_id", auth.empresaId)
+      .eq("proyecto_id", pid)
+      .eq("id", oid)
+      .select(QA_OBSERVACION_SELECT);
+    if (error) return NextResponse.json(errorResponse(error.message), { status: 400 });
+
+    const row = (Array.isArray(data) ? data[0] : data) as QAObservacionRow;
+
+    // El evento de auditoría y el sello de actividad no cambian lo que se
+    // devuelve, así que corren junto al enriquecido en vez de antes: eran dos
+    // viajes secuenciales que el usuario esperaba sin recibir nada a cambio.
+    const [, , enriquecidas] = await Promise.all([
+      registrarEventoQA(sb, {
+        empresaId: auth.empresaId,
+        proyectoId: pid,
+        usuarioId: auth.usuarioCatalogId,
+        accion: "observacion_estado_cambiado",
+        observacionId: oid,
+        payload: { numero: prev.numero, antes: prev.estado, despues: estado },
+      }),
+      bumpProyectoActividad(sb, auth.empresaId, pid, auth.usuarioCatalogId),
+      enriquecerObservaciones(sb, auth.empresaId, [row]),
+    ]);
+    const enriquecida = enriquecidas[0];
+    return NextResponse.json(successResponse(enriquecida ?? row));
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Error";
+    return NextResponse.json(errorResponse(msg), { status: 500 });
+  }
+}

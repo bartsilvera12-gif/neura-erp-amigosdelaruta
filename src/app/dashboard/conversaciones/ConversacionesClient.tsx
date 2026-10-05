@@ -1,0 +1,5184 @@
+"use client";
+
+import ImagenPegada, { imagenDelPortapapeles } from "@/components/chat/ImagenPegada";
+import { textoDeMensajeDeSistema, textoDeVistaPrevia } from "@/lib/chat/message-erp-display";
+import { wamidCitado } from "@/lib/chat/message-quote";
+import { wamidDeMensaje } from "@/lib/chat/message-reactions";
+import Link from "next/link";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
+import {
+  readInboxList,
+  writeInboxList,
+  readThread,
+  writeThread,
+} from "@/lib/chat/inbox-local-cache";
+import {
+  trackInboxPollingList,
+  trackInboxPollingThread,
+  trackInboxRealtimeEvent,
+  logRealtimeChannelState,
+  logInboxFlagsBoot,
+} from "@/lib/chat/inbox-observability";
+import { getInboxFlagsSnapshot } from "@/lib/chat/inbox-feature-flags";
+import type { ComprobanteValidacionListRow } from "@/lib/chat/comprobante-validation-types";
+import {
+  approveComprobanteValidacion,
+  fetchChatChannels,
+  fetchChatConversations,
+  fetchComprobanteValidacionesForConversation,
+  hasEmpresaActiveChatFlows,
+  markConversationRead,
+  releaseConversationToBot,
+  type ChatInboxAssignmentFilter,
+  type ChatChannelRow,
+  type ChatInboxFilters,
+  type ConversacionesVista,
+  type InboxConversation,
+} from "@/lib/chat/actions";
+import {
+  assignConversationToAgent,
+  changeConversationQueue,
+  changeConversationStatus,
+  fetchTransferTargetAgents,
+  getMyAgentOperationalPresence,
+  listChatQueues,
+  listTransferQueues,
+  setMyAgentOperationalPresence,
+  touchChatAgentInboxHeartbeat,
+  type ChatAgentOperationalStatus,
+  type ChatQueueListRow,
+  type InboxCabeceraInsignia,
+  type SupervisorAgentLoadRow,
+} from "@/lib/chat/chat-ops-actions";
+import { INBOX_HEARTBEAT_INTERVAL_MS } from "@/lib/chat/agent-presence";
+import { formatWaitHuman } from "@/lib/chat/format-wait-human";
+import { friendlyWhatsappFailureReason, extractWhatsappFailureInfo } from "@/lib/chat/whatsapp-failure-reason";
+import MessageDeliveryTicks from "@/components/chat/MessageDeliveryTicks";
+import { pickRecorderMimeType, extForAudioType } from "@/lib/chat/audio-recording";
+import { listActiveQuickRepliesForChannel } from "@/lib/chat/quick-replies-actions";
+import {
+  X,
+  CheckCircle2, ArrowLeftRight, Headset, Download, FileText, Maximize2, RotateCw, ZoomIn, ZoomOut, Flame, Mic, Paperclip, Smile, Square, Trash2, UserRound, Zap } from "lucide-react";
+
+/** Emojis del composer (escritorio). Set curado, sin dependencias externas. */
+const EMOJI_GRUPOS: { grupo: string; items: string[] }[] = [
+  { grupo: "Caras", items: ["😀","😃","😄","😁","😊","🙂","😉","😍","🥰","😘","😂","🤣","😅","😎","🤩","🥳","🤔","😌","😴","😢","😭","😡","😱","🥺","🙄","😬"] },
+  { grupo: "Gestos", items: ["👍","👎","👌","🙌","👏","🙏","💪","🤝","👋","✌️","🤞","☝️","👉","👈","✋","🤙"] },
+  { grupo: "Símbolos", items: ["❤️","🧡","💚","💙","💜","🔥","⭐","✨","✅","❌","⚠️","❓","❗","💯","🎉","🎁"] },
+  { grupo: "Trabajo", items: ["📌","📎","📅","⏰","💰","💳","🧾","📞","📧","📦","🚀","📲","💻","📝","🔎","🏷️"] },
+];
+
+/** mm:ss para el contador de grabación. */
+function formatRecordTime(totalSeconds: number): string {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+import {
+  extractBodyPlaceholderKeysOrdered,
+  getBodyComponentText,
+  PLACEHOLDER_RE,
+} from "@/lib/campaigns/campaign-placeholders-shared";
+import {
+  finalizeConversationWithClosure,
+  loadFinalizeOptionsForConversation,
+  type FinalizeOptionsResult,
+} from "@/lib/chat/conversation-finalize-actions";
+import {
+  attachmentCaptionForDisplay,
+  getErpAttachmentCaption,
+  getErpAttachmentFilename,
+  getErpAttachmentPublicUrl,
+  getMetaInboundDocumentFilename,
+  getWhatsAppMediaUrlFromRawPayload,
+  isImageMimeHint,
+} from "@/lib/chat/message-erp-display";
+import { assignmentWaitBadge, assignmentWaitBadgeClass } from "@/lib/chat/inbox-assignment-labels";
+import type { OmnicanalOperatorRole } from "@/lib/chat/omnicanal-supervision-read";
+import { playInboxNotificationBeep, readInboxNotificationSoundEnabled } from "@/lib/chat/inbox-notification-preference";
+import { createBrowserClientForSchema } from "@/lib/supabase";
+import { autenticarRealtime } from "@/lib/realtime/autenticar";
+import { ChannelBadge } from "@/components/chat/ChannelBadge";
+import dynamic from "next/dynamic";
+import { puedeCargarSoporte } from "./SoporteTicketModal";
+
+// La ventana de Soporte sólo se descarga cuando alguien la abre.
+const SoporteTicketModal = dynamic(() => import("./SoporteTicketModal"), { ssr: false });
+
+// Igual que Soporte: la ficha del contacto no se descarga hasta que se abre.
+const FichaContactoDrawer = dynamic(() => import("./FichaContactoDrawer"), { ssr: false });
+
+type ChatMessage = {
+  id: string;
+  from_me: boolean;
+  message_type: string;
+  content: string | null;
+  created_at: string;
+  raw_payload?: Record<string, unknown> | null;
+  whatsapp_delivery_status?: string | null;
+  /** WAMID (id de WhatsApp) del mensaje; se usa para "Responder" (cita). */
+  wa_message_id?: string | null;
+};
+
+type InboxTemplate = {
+  id: string;
+  name: string;
+  language: string;
+  category: string | null;
+  components_json: unknown[];
+  variable_schema_json?: unknown;
+};
+
+function isHumanContactName(name: string | null | undefined, phone?: string | null): boolean {
+  const v = (name ?? "").trim();
+  if (!v) return false;
+  if (!/\p{L}/u.test(v)) return false;
+  if (phone) {
+    const dn = v.replace(/\D+/g, "");
+    const dp = String(phone).replace(/\D+/g, "");
+    if (dn && dn === dp) return false;
+  }
+  return true;
+}
+
+function contactPhoneFallback(
+  phone: string | null | undefined,
+  name: string | null | undefined
+): string {
+  const p = (phone ?? "").trim();
+  if (p) return p;
+  const n = (name ?? "").trim();
+  if (n && !/\p{L}/u.test(n)) return n;
+  return "—";
+}
+
+function formatTime(iso: string) {
+  try {
+    return new Date(iso).toLocaleString("es-PY", {
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function mapRowToMessage(row: Record<string, unknown>): ChatMessage {
+  return {
+    id: row.id as string,
+    from_me: Boolean(row.from_me),
+    message_type: String(row.message_type ?? "text"),
+    content: (row.content as string | null) ?? null,
+    created_at: String(row.created_at),
+    raw_payload:
+      typeof row.raw_payload === "object" && row.raw_payload !== null
+        ? (row.raw_payload as Record<string, unknown>)
+        : null,
+    whatsapp_delivery_status:
+      row.whatsapp_delivery_status != null ? String(row.whatsapp_delivery_status) : null,
+    wa_message_id: row.wa_message_id != null ? String(row.wa_message_id) : null,
+  };
+}
+
+function parseOutgoingImageMessage(message: ChatMessage): { url: string | null; caption: string | null } {
+  const erpUrl = getErpAttachmentPublicUrl(message.raw_payload);
+  if (erpUrl) {
+    const cap = getErpAttachmentCaption(message.raw_payload) ?? getErpAttachmentFilename(message.raw_payload);
+    return { url: erpUrl, caption: cap };
+  }
+  const waUrl = getWhatsAppMediaUrlFromRawPayload(message.raw_payload);
+  if (waUrl) {
+    const imagePayload = (message.raw_payload?.image as { caption?: string } | undefined) ?? {};
+    const cap = typeof imagePayload.caption === "string" ? imagePayload.caption.trim() : "";
+    return { url: waUrl, caption: cap || null };
+  }
+  const imagePayload = (message.raw_payload?.image as { link?: string; caption?: string } | undefined) ?? {};
+  const link = typeof imagePayload.link === "string" ? imagePayload.link.trim() : "";
+  const captionFromPayload = typeof imagePayload.caption === "string" ? imagePayload.caption.trim() : "";
+  if (link) return { url: link, caption: captionFromPayload || null };
+
+  const lines = (message.content ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const urlLine = lines.find((line) => /^https?:\/\//i.test(line)) ?? null;
+  const captionLine = lines.find((line) => !/^https?:\/\//i.test(line) && !/^Imagen enviada:?/i.test(line)) ?? null;
+  return { url: urlLine, caption: captionLine };
+}
+
+function resolveAttachmentUrl(message: ChatMessage): string | null {
+  return (
+    getErpAttachmentPublicUrl(message.raw_payload) ??
+    getWhatsAppMediaUrlFromRawPayload(message.raw_payload) ??
+    parseOutgoingImageMessage(message).url
+  );
+}
+
+function displayFilenameForAttachment(message: ChatMessage): string {
+  const erp = getErpAttachmentFilename(message.raw_payload);
+  if (erp) return erp;
+  const meta = getMetaInboundDocumentFilename(message.raw_payload);
+  if (meta) return meta;
+  const raw = (message.content ?? "").trim();
+  const m = /^\[documento\]\s*(.+)$/i.exec(raw);
+  if (m?.[1]?.trim()) return m[1].trim();
+  if (raw && !raw.startsWith("[")) return raw.slice(0, 120);
+  return message.message_type === "video" ? "Video" : "Archivo";
+}
+
+/** Texto corto para citar un mensaje al responder (estilo WhatsApp). */
+function messagePreview(m: ChatMessage): string {
+  const t = (m.content ?? "").trim();
+  if (t && !t.startsWith("[")) return t.slice(0, 90);
+  const sistema = textoDeMensajeDeSistema(m.message_type);
+  if (sistema) return sistema;
+  switch (m.message_type) {
+    case "image":
+    case "sticker":
+      return "📷 Imagen";
+    case "audio":
+      return "🎤 Audio";
+    case "video":
+      return "🎬 Video";
+    case "document":
+      return "📎 Documento";
+    default:
+      return t ? t.slice(0, 90) : "Mensaje";
+  }
+}
+
+type ContactoCompartido = {
+  name: string;
+  phones: { label: string; phone: string; waId: string }[];
+};
+
+/** Teléfonos de un vCard en base64 (fallback si el contacto no trae `phones`). */
+function telefonosDeVcard(vcardB64: unknown): { label: string; phone: string; waId: string }[] {
+  if (typeof vcardB64 !== "string" || !vcardB64) return [];
+  let txt = "";
+  try {
+    txt = decodeURIComponent(escape(atob(vcardB64)));
+  } catch {
+    return [];
+  }
+  const out: { label: string; phone: string; waId: string }[] = [];
+  for (const line of txt.split(/\r?\n/)) {
+    const m = /^TEL(?:;[^:]*)?:(.+)$/i.exec(line.trim());
+    if (!m?.[1]) continue;
+    const phone = m[1].trim();
+    const wa = /waid=(\d+)/i.exec(line);
+    out.push({ label: "", phone, waId: wa?.[1] ?? phone.replace(/\D/g, "") });
+  }
+  return out;
+}
+
+/** Extrae las tarjetas de contacto (vCard) de un mensaje tipo `contacts` de WhatsApp/YCloud. */
+function parseContactCards(raw: unknown): ContactoCompartido[] {
+  const root = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  // Salientes (echoes) → `whatsappMessage`; entrantes → `whatsappInboundMessage`.
+  let arr: unknown[] = [];
+  for (const key of ["whatsappMessage", "whatsappInboundMessage"]) {
+    const c = root[key];
+    if (c && typeof c === "object" && Array.isArray((c as Record<string, unknown>).contacts)) {
+      arr = (c as Record<string, unknown>).contacts as unknown[];
+      break;
+    }
+  }
+  if (arr.length === 0 && Array.isArray(root.contacts)) arr = root.contacts as unknown[];
+  const out: ContactoCompartido[] = [];
+  for (const c of arr) {
+    if (!c || typeof c !== "object") continue;
+    const cc = c as Record<string, unknown>;
+    const nameObj = cc.name && typeof cc.name === "object" ? (cc.name as Record<string, unknown>) : {};
+    const name =
+      String(nameObj.formatted_name ?? "").trim() ||
+      String(nameObj.first_name ?? "").trim() ||
+      "Contacto";
+    const phonesRaw = Array.isArray(cc.phones) ? (cc.phones as unknown[]) : [];
+    let phones = phonesRaw
+      .map((p) => {
+        const pp = (p && typeof p === "object" ? p : {}) as Record<string, unknown>;
+        return {
+          label: String(pp.type ?? "").trim(),
+          phone: String(pp.phone ?? "").trim(),
+          waId: String(pp.wa_id ?? "").trim(),
+        };
+      })
+      .filter((p) => p.phone || p.waId);
+    if (phones.length === 0) phones = telefonosDeVcard(cc.vcard); // fallback: leer del vCard
+    out.push({ name, phones });
+  }
+  return out;
+}
+
+/** Render de contacto(s) compartido(s): nombre + teléfono(s), con link a WhatsApp y copiar. */
+function ContactCardsView({ message, fromMe }: { message: ChatMessage; fromMe: boolean }) {
+  const contactos = parseContactCards(message.raw_payload);
+  if (contactos.length === 0) {
+    return <p className="whitespace-pre-wrap break-words">{message.content || "[contacto]"}</p>;
+  }
+  const cardCls = fromMe
+    ? "border-white/30 bg-white/15 text-white"
+    : "border-slate-200 bg-slate-50 text-slate-900";
+  const subCls = fromMe ? "text-sky-100" : "text-slate-500";
+  return (
+    <div className="space-y-2">
+      {contactos.map((c, i) => (
+        <div key={i} className={`rounded-xl border px-3 py-2.5 ${cardCls}`}>
+          <div className="flex items-center gap-2">
+            <span
+              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${
+                fromMe ? "bg-white/25" : "bg-[#4FAEB2]/15 text-[#3F8E91]"
+              }`}
+              aria-hidden
+            >
+              👤
+            </span>
+            <span className="min-w-0">
+              <span className={`block text-[10px] font-bold uppercase tracking-wide ${subCls}`}>Contacto</span>
+              <span className="block truncate text-sm font-semibold">{c.name}</span>
+            </span>
+          </div>
+          {c.phones.length > 0 ? (
+            <div className="mt-2 space-y-1">
+              {c.phones.map((p, j) => {
+                const wa = p.waId || p.phone.replace(/\D/g, "");
+                return (
+                  <div key={j} className="flex flex-wrap items-center gap-2 text-sm">
+                    <span className="tabular-nums font-medium select-all">{p.phone || `+${p.waId}`}</span>
+                    {p.label ? <span className={`text-[11px] ${subCls}`}>({p.label})</span> : null}
+                    {wa ? (
+                      <a
+                        href={`https://wa.me/${wa}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold no-underline ${
+                          fromMe ? "bg-white/20 text-white hover:bg-white/30" : "bg-[#4FAEB2]/10 text-[#3F8E91] hover:bg-[#4FAEB2]/20"
+                        }`}
+                      >
+                        ↗ WhatsApp
+                      </a>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className={`mt-1 text-[11px] ${subCls}`}>Sin número en la tarjeta.</p>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Nombre de archivo para descargar, asegurando una extensión razonable según el tipo. */
+function downloadFilenameFor(message: ChatMessage): string {
+  const base = (displayFilenameForAttachment(message) || "archivo").trim();
+  if (/\.[a-z0-9]{2,5}$/i.test(base)) return base;
+  const ext =
+    message.message_type === "image"
+      ? "jpg"
+      : message.message_type === "video"
+        ? "mp4"
+        : message.message_type === "audio"
+          ? "mp3"
+          : "";
+  return ext ? `${base}.${ext}` : base;
+}
+
+/** Dispara la descarga apuntando a `href`, sin abrir pestaña. */
+function dispararDescarga(href: string, filename: string): void {
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = filename || "archivo";
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+/**
+ * URL de Supabase Storage con `?download=<nombre>`.
+ *
+ * Storage responde ese parámetro con `Content-Disposition: attachment`, así que
+ * el navegador guarda el archivo directo desde el servidor: sin traerlo a
+ * memoria. Importa para los videos, que llegan hasta 64 MB y con el camino del
+ * blob se cargan enteros en la pestaña antes de escribirse al disco.
+ */
+function urlDeDescargaDeStorage(url: string, filename: string): string | null {
+  try {
+    const u = new URL(url);
+    if (!u.pathname.includes("/storage/v1/object/")) return null;
+    u.searchParams.set("download", filename || "archivo");
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Descarga un adjunto del chat.
+ *
+ * Los archivos no viven en nuestro dominio: están en el Storage de Supabase
+ * (`/storage/v1/object/…`) o en el CDN de YCloud. Por eso un `<a download>` a
+ * secas no alcanza —el atributo se ignora entre orígenes— y hay dos caminos:
+ *
+ *  · Storage: se pide con `?download=`, que ya devuelve el header de adjunto.
+ *  · El resto (YCloud manda `Content-Disposition: inline`): se baja con fetch y
+ *    se guarda desde un blob local, donde el `download` sí manda. Ambos hosts
+ *    responden CORS, así que el fetch pasa.
+ *
+ * Si algo falla igual, se abre en pestaña: peor que guardar solo, pero mejor
+ * que un botón que no hace nada.
+ */
+async function descargarMedia(url: string, filename: string): Promise<void> {
+  const nombre = filename || "archivo";
+
+  const directo = urlDeDescargaDeStorage(url, nombre);
+  if (directo) {
+    dispararDescarga(directo, nombre);
+    return;
+  }
+
+  try {
+    const res = await fetch(url, { credentials: "omit" });
+    if (!res.ok) throw new Error(String(res.status));
+    const blob = await res.blob();
+    const objUrl = URL.createObjectURL(blob);
+    dispararDescarga(objUrl, nombre);
+    setTimeout(() => URL.revokeObjectURL(objUrl), 60_000);
+  } catch {
+    // Fallback (p. ej. CORS): abrir en pestaña nueva para que se guarde a mano.
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+}
+
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 8;
+
+function limitar(v: number, min: number, max: number): number {
+  return v < min ? min : v > max ? max : v;
+}
+
+/**
+ * Visor de imágenes a pantalla completa.
+ *
+ * La vista ampliada era la imagen sobre un fondo negro y poco más: se cerraba
+ * clickeando en cualquier lado —si adivinabas—, y una foto de un comprobante o
+ * una captura con texto chico no se podía leer.
+ *
+ * Ahora hace lo que uno espera de un visor: rueda del mouse para acercar hacia
+ * donde está el cursor, doble clic para alternar, arrastrar para moverse cuando
+ * está acercada, y rotar para las fotos que llegan de costado (pasa seguido con
+ * lo que mandan desde el celular). El teclado también: Esc cierra, + y − acercan
+ * y alejan, 0 vuelve al tamaño original.
+ */
+function VisorImagen({
+  url,
+  nombre,
+  onCerrar,
+}: {
+  url: string;
+  nombre: string;
+  onCerrar: () => void;
+}) {
+  const [escala, setEscala] = useState(1);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [rotacion, setRotacion] = useState(0);
+  const [arrastrando, setArrastrando] = useState(false);
+
+  const areaRef = useRef<HTMLDivElement | null>(null);
+  const arrastreRef = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  /** Punteros activos: con dos se hace pinch en pantallas táctiles. */
+  const punterosRef = useRef(new Map<number, { x: number; y: number }>());
+  const pinchRef = useRef<{ dist: number; escala: number } | null>(null);
+
+  function reiniciar() {
+    setEscala(1);
+    setPos({ x: 0, y: 0 });
+    setRotacion(0);
+  }
+
+  /**
+   * Acerca manteniendo fijo el punto que está bajo el cursor.
+   *
+   * Sin esto el zoom sale del centro, y para mirar un detalle de la esquina hay
+   * que acercar y después arrastrar a mano, cada vez.
+   */
+  function zoomEnPunto(nuevaEscala: number, clienteX?: number, clienteY?: number) {
+    const destino = limitar(nuevaEscala, ZOOM_MIN, ZOOM_MAX);
+    setEscala((anterior) => {
+      if (destino === anterior) return anterior;
+      if (destino === ZOOM_MIN) {
+        setPos({ x: 0, y: 0 });
+        return destino;
+      }
+      const area = areaRef.current;
+      if (area && clienteX !== undefined && clienteY !== undefined) {
+        const caja = area.getBoundingClientRect();
+        const cx = clienteX - caja.left - caja.width / 2;
+        const cy = clienteY - caja.top - caja.height / 2;
+        const factor = destino / anterior;
+        setPos((punto) => ({
+          x: cx - (cx - punto.x) * factor,
+          y: cy - (cy - punto.y) * factor,
+        }));
+      }
+      return destino;
+    });
+  }
+
+  // La rueda se escucha a mano: React registra `wheel` como pasivo, y con
+  // preventDefault dentro de onWheel el navegador scrollea igual por detrás.
+  useEffect(() => {
+    const area = areaRef.current;
+    if (!area) return;
+    const onWheel = (ev: WheelEvent) => {
+      ev.preventDefault();
+      const paso = ev.deltaY < 0 ? 1.18 : 1 / 1.18;
+      zoomEnPunto(escala * paso, ev.clientX, ev.clientY);
+    };
+    area.addEventListener("wheel", onWheel, { passive: false });
+    return () => area.removeEventListener("wheel", onWheel);
+  }, [escala]);
+
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        onCerrar();
+      } else if (ev.key === "+" || ev.key === "=") {
+        setEscala((e) => limitar(e * 1.3, ZOOM_MIN, ZOOM_MAX));
+      } else if (ev.key === "-" || ev.key === "_") {
+        setEscala((e) => {
+          const n = limitar(e / 1.3, ZOOM_MIN, ZOOM_MAX);
+          if (n === ZOOM_MIN) setPos({ x: 0, y: 0 });
+          return n;
+        });
+      } else if (ev.key === "0") {
+        setEscala(1);
+        setPos({ x: 0, y: 0 });
+        setRotacion(0);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCerrar]);
+
+  function onPointerDown(ev: React.PointerEvent<HTMLDivElement>) {
+    punterosRef.current.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (punterosRef.current.size === 2) {
+      const [a, b] = [...punterosRef.current.values()];
+      pinchRef.current = { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, escala };
+      arrastreRef.current = null;
+      setArrastrando(false);
+      return;
+    }
+    if (escala === ZOOM_MIN) return;
+    ev.currentTarget.setPointerCapture(ev.pointerId);
+    arrastreRef.current = { x: ev.clientX, y: ev.clientY, px: pos.x, py: pos.y };
+    setArrastrando(true);
+  }
+
+  function onPointerMove(ev: React.PointerEvent<HTMLDivElement>) {
+    if (punterosRef.current.has(ev.pointerId)) {
+      punterosRef.current.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    }
+    const pinch = pinchRef.current;
+    if (pinch && punterosRef.current.size === 2) {
+      const [a, b] = [...punterosRef.current.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      zoomEnPunto(pinch.escala * (dist / pinch.dist), (a.x + b.x) / 2, (a.y + b.y) / 2);
+      return;
+    }
+    const d = arrastreRef.current;
+    if (!d) return;
+    setPos({ x: d.px + (ev.clientX - d.x), y: d.py + (ev.clientY - d.y) });
+  }
+
+  function soltar(ev: React.PointerEvent<HTMLDivElement>) {
+    punterosRef.current.delete(ev.pointerId);
+    if (punterosRef.current.size < 2) pinchRef.current = null;
+    arrastreRef.current = null;
+    setArrastrando(false);
+  }
+
+  const btn =
+    "grid h-9 w-9 place-items-center rounded-lg bg-white/10 text-white transition-colors hover:bg-white/25 disabled:opacity-35 disabled:hover:bg-white/10";
+
+  return (
+    <div className="fixed inset-0 z-[100] flex flex-col bg-black/90">
+      {/* Barra fija arriba, de borde a borde: la cruz cae en la esquina, que es
+          donde se la busca. */}
+      <div className="flex shrink-0 items-center gap-2 border-b border-white/10 bg-black/40 px-3 py-2 backdrop-blur">
+        <span className="min-w-0 flex-1 truncate text-xs font-semibold text-white/80" title={nombre}>
+          {nombre}
+        </span>
+        <button
+          type="button"
+          className={btn}
+          aria-label="Alejar"
+          title="Alejar (−)"
+          disabled={escala <= ZOOM_MIN}
+          onClick={() => {
+            const n = limitar(escala / 1.3, ZOOM_MIN, ZOOM_MAX);
+            setEscala(n);
+            if (n === ZOOM_MIN) setPos({ x: 0, y: 0 });
+          }}
+        >
+          <ZoomOut className="h-4 w-4" aria-hidden />
+        </button>
+        <span className="w-12 text-center text-[11px] font-semibold tabular-nums text-white/70">
+          {Math.round(escala * 100)}%
+        </span>
+        <button
+          type="button"
+          className={btn}
+          aria-label="Acercar"
+          title="Acercar (+)"
+          disabled={escala >= ZOOM_MAX}
+          onClick={() => setEscala((e) => limitar(e * 1.3, ZOOM_MIN, ZOOM_MAX))}
+        >
+          <ZoomIn className="h-4 w-4" aria-hidden />
+        </button>
+        <button
+          type="button"
+          className={btn}
+          aria-label="Tamaño original"
+          title="Tamaño original (0)"
+          onClick={reiniciar}
+        >
+          <Maximize2 className="h-4 w-4" aria-hidden />
+        </button>
+        <button
+          type="button"
+          className={btn}
+          aria-label="Rotar"
+          title="Rotar 90°"
+          onClick={() => setRotacion((r) => (r + 90) % 360)}
+        >
+          <RotateCw className="h-4 w-4" aria-hidden />
+        </button>
+        <span className="mx-1 h-6 w-px bg-white/15" aria-hidden />
+        <button
+          type="button"
+          className={btn}
+          aria-label="Descargar"
+          title="Descargar"
+          onClick={() => void descargarMedia(url, nombre)}
+        >
+          <Download className="h-4 w-4" aria-hidden />
+        </button>
+        <a
+          href={url}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-lg bg-white/10 px-3 py-2 text-[11px] font-semibold text-white no-underline transition-colors hover:bg-white/25"
+        >
+          Abrir
+        </a>
+        <button
+          type="button"
+          className="grid h-9 w-9 place-items-center rounded-lg bg-white/15 text-white transition-colors hover:bg-red-500/80"
+          aria-label="Cerrar vista ampliada"
+          title="Cerrar (Esc)"
+          onClick={onCerrar}
+        >
+          <X className="h-5 w-5" aria-hidden />
+        </button>
+      </div>
+
+      <div
+        ref={areaRef}
+        role="presentation"
+        className="relative flex min-h-0 flex-1 select-none items-center justify-center overflow-hidden"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={soltar}
+        onPointerCancel={soltar}
+        // Clic en el vacío cierra, como en cualquier visor; sobre la imagen no,
+        // porque ahí el clic es para arrastrar.
+        onClick={(ev) => {
+          if (ev.target === ev.currentTarget) onCerrar();
+        }}
+        onDoubleClick={(ev) => zoomEnPunto(escala > 1 ? 1 : 2.5, ev.clientX, ev.clientY)}
+        style={{
+          cursor: arrastrando ? "grabbing" : escala > 1 ? "grab" : "zoom-in",
+          touchAction: "none",
+        }}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={url}
+          alt={nombre}
+          draggable={false}
+          className="max-h-full max-w-full object-contain"
+          style={{
+            transform: `translate(${pos.x}px, ${pos.y}px) scale(${escala}) rotate(${rotacion}deg)`,
+            transition: arrastrando ? "none" : "transform 120ms ease-out",
+          }}
+        />
+      </div>
+
+      <p className="shrink-0 bg-black/40 px-3 py-1.5 text-center text-[10px] text-white/45">
+        Rueda para acercar · doble clic para alternar · arrastrá para moverte · Esc para cerrar
+      </p>
+    </div>
+  );
+}
+
+function tabClass(active: boolean) {
+  return `px-4 py-2 text-xs font-semibold rounded-xl transition-all ${
+    active
+      ? "bg-[#4FAEB2] text-white shadow-sm shadow-[#4FAEB2]/25"
+      : "text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+  }`;
+}
+
+/**
+ * Control segmentado: el modo activo = pastilla blanca con borde de color (no “todo verde”);
+ * el inactivo = gris plano (se entiende qué está elegido).
+ */
+function opPresenceToggleClass(isSelected: boolean, variant: "ready" | "offline") {
+  const base =
+    "px-3 py-1.5 text-xs font-semibold rounded-md transition-all disabled:opacity-50 min-w-[6.75rem] text-center border-2";
+  if (!isSelected) {
+    return `${base} border-transparent bg-slate-200/60 text-slate-500 hover:bg-slate-200 hover:text-slate-600`;
+  }
+  if (variant === "ready") {
+    return `${base} border-emerald-500 bg-white text-emerald-700 shadow-sm ring-1 ring-emerald-200/90 z-[1]`;
+  }
+  return `${base} border-slate-600 bg-white text-slate-800 shadow-sm ring-1 ring-slate-200/90 z-[1]`;
+}
+
+function LiveElapsedLabel({ sinceIso }: { sinceIso: string | null }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((x) => x + 1), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  if (!sinceIso) return <span className="text-slate-400">—</span>;
+  return <span className="tabular-nums font-medium">{formatWaitHuman(sinceIso)}</span>;
+}
+
+/**
+ * Ventana de 24 h de WhatsApp, calculada como la calcula WhatsApp: desde el último mensaje
+ * del CLIENTE.
+ *
+ * Existe porque el chip de al lado ("turno del contacto", con el ícono de persona) muestra
+ * el tiempo desde el último mensaje del ASESOR. Los asesores lo leían como la ventana: veían
+ * "22 h 36 min", entendían que todavía estaban adentro, y WhatsApp rechazaba el mensaje con
+ * 131047 porque el cliente había escrito hacía más de 24 h.
+ *
+ * Las reacciones del cliente se excluyen a propósito. Si reaccionar reabriera la ventana, el
+ * indicador la daría por cerrada un poco antes de tiempo (se usa una plantilla de más); si no
+ * la reabre y la contáramos, la daría por abierta y el mensaje fallaría. Se elige el error
+ * barato.
+ *
+ * Si en los mensajes cargados no hay ninguno del cliente, no se dibuja nada: no se puede
+ * saber, y un "cerrada" inventado sería peor que no decir nada.
+ */
+function VentanaWhatsApp({ messages }: { messages: ChatMessage[] }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((x) => x + 1), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  let ultimo = 0;
+  for (const m of messages) {
+    if (m.from_me || m.message_type === "reaction") continue;
+    const t = Date.parse(m.created_at);
+    if (Number.isFinite(t) && t > ultimo) ultimo = t;
+  }
+  if (!ultimo) return null;
+
+  const restante = ultimo + 24 * 60 * 60 * 1000 - Date.now();
+  if (restante <= 0) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-700"
+        title="El cliente escribió hace más de 24 h. WhatsApp solo acepta plantillas hasta que vuelva a escribir."
+      >
+        Ventana 24 h cerrada
+      </span>
+    );
+  }
+  const h = Math.floor(restante / 3_600_000);
+  const min = Math.floor((restante % 3_600_000) / 60_000);
+  const poco = restante < 2 * 3_600_000;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+        poco
+          ? "border-amber-200 bg-amber-50 text-amber-800"
+          : "border-emerald-200 bg-emerald-50 text-emerald-800"
+      }`}
+      title="Tiempo que queda para escribirle libremente. Cuenta desde el último mensaje del CLIENTE, no desde el tuyo."
+    >
+      Ventana: quedan {h > 0 ? `${h} h ` : ""}
+      {min} min
+    </span>
+  );
+}
+
+function inboxClientWaitingSince(c: InboxConversation): string | null {
+  if (c.awaiting_agent_reply_since) return null;
+  return c.awaiting_client_reply_since ?? null;
+}
+
+function InboxReplyTurnBadges({ c, dense }: { c: InboxConversation; dense?: boolean }) {
+  const agentSince = c.awaiting_agent_reply_since;
+  const clientSince = inboxClientWaitingSince(c);
+  if (!agentSince && !clientSince) return null;
+  const pad = dense ? "px-1.5 py-0.5 text-[9px]" : "px-1.5 py-0.5 text-[10px]";
+  return (
+    <>
+      {agentSince ? (
+        <span
+          className={`inline-flex items-center gap-0.5 font-semibold text-orange-950 bg-orange-50 border border-orange-200 rounded ${pad} shrink-0`}
+          title="Cliente escribió; falta respuesta humana del asesor"
+        >
+          <Flame className={`shrink-0 text-orange-600 ${dense ? "w-3 h-3" : "w-3.5 h-3.5"}`} aria-hidden />
+          <LiveElapsedLabel sinceIso={agentSince} />
+        </span>
+      ) : null}
+      {clientSince ? (
+        <span
+          className={`inline-flex items-center gap-0.5 font-semibold text-sky-950 bg-sky-50 border border-sky-200 rounded ${pad} shrink-0`}
+          title="Tiempo desde TU último mensaje (turno del contacto). No es la ventana de 24 h de WhatsApp: esa cuenta desde el último mensaje del cliente."
+        >
+          <UserRound className={`shrink-0 text-sky-600 ${dense ? "w-3 h-3" : "w-3.5 h-3.5"}`} aria-hidden />
+          <LiveElapsedLabel sinceIso={clientSince} />
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+function parseInboxFilters(sp: URLSearchParams): ChatInboxFilters | undefined {
+  const rawA = sp.get("asignacion");
+  const assignment: ChatInboxAssignmentFilter =
+    rawA === "mios" ? "mine" : rawA === "sin_asignar" ? "unassigned" : "all";
+  const queue_id = sp.get("cola")?.trim() || null;
+  const channel_id = sp.get("canal")?.trim() || null;
+  const assigned_agent_id = sp.get("asesor")?.trim() || null;
+  const statusRaw = sp.get("estado")?.trim().toLowerCase() || null;
+  const priorityRaw = sp.get("prioridad")?.trim().toLowerCase() || null;
+  const status =
+    statusRaw && ["open", "pending", "closed"].includes(statusRaw) ? statusRaw : null;
+  const priority =
+    priorityRaw && ["low", "medium", "high"].includes(priorityRaw) ? priorityRaw : null;
+  const has =
+    assignment !== "all" ||
+    (queue_id && queue_id.length > 0) ||
+    (assigned_agent_id && assigned_agent_id.length > 0) ||
+    status !== null ||
+    priority !== null ||
+    (channel_id && channel_id.length > 0);
+  if (!has) return undefined;
+  return {
+    assignment,
+    queue_id: queue_id && queue_id.length > 0 ? queue_id : null,
+    assigned_agent_id: assigned_agent_id && assigned_agent_id.length > 0 ? assigned_agent_id : null,
+    status,
+    priority,
+    channel_id: channel_id && channel_id.length > 0 ? channel_id : null,
+  };
+}
+
+function formatChannelOptionLabel(c: ChatChannelRow): string {
+  const name = (c.nombre ?? "").trim() || "Canal";
+  const kind = [c.type, c.provider].filter(Boolean).join(" / ");
+  const mp = c.meta_phone_number_id?.trim();
+  const tail =
+    mp && mp.length > 0
+      ? ` · ${mp.length > 18 ? `${mp.slice(0, 16)}…` : mp}`
+      : "";
+  return `${name} · ${kind}${tail}`;
+}
+
+function labelEstado(s: string) {
+  if (s === "open") return "Abierta";
+  if (s === "pending") return "Pendiente";
+  if (s === "closed") return "Cerrada";
+  return s;
+}
+
+function badgeEstadoClass(s: string) {
+  if (s === "open") return "text-sky-800 bg-sky-50 border-sky-200";
+  if (s === "pending") return "text-amber-800 bg-amber-50 border-amber-200";
+  if (s === "closed") return "text-slate-600 bg-slate-100 border-slate-200";
+  return "text-slate-600 bg-slate-50 border-slate-200";
+}
+
+const CHAT_LIST_DEBUG = process.env.NEXT_PUBLIC_CHAT_LIST_DEBUG === "true";
+function chatListUiLog(
+  sub: "initial-data" | "refetch-start" | "refetch-result" | "set-conversations" | "filters-applied" | "tab-split" | "refetch-preserve",
+  payload: Record<string, unknown>
+) {
+  if (!CHAT_LIST_DEBUG) return;
+  console.info(`[chat-ui][${sub}]`, { ...payload, timestamp: new Date().toISOString() });
+}
+
+export type ConversacionesClientMode = "inbox" | "historial";
+
+/** Presencia operativa precargada en el servidor (evita parpadeo y fallos solo-cliente). */
+export type ConversacionesInitialOperationalPresence =
+  | { in_queues: false; status: null; status_changed_at?: null }
+  | { in_queues: true; status: ChatAgentOperationalStatus; status_changed_at: string | null };
+
+export function ConversacionesClient({
+  mode,
+  chatDataSchema,
+  agentDisplayName,
+  initialOperationalPresence,
+  initialCabeceraInsignia = null,
+  initialOmnicanalRole = null,
+}: {
+  mode: ConversacionesClientMode;
+  /** Esquema Postgres de tablas chat_* (zentra_erp o `er_…`). */
+  chatDataSchema: string;
+  /** Nombre visible del agente logueado (resuelto en servidor). */
+  agentDisplayName: string;
+  /** Si viene del RSC, el toggle de presencia puede mostrarse sin esperar la primera server action. */
+  initialOperationalPresence?: ConversacionesInitialOperationalPresence;
+  /** Admin/supervisor sin cola (incluye admin ERP por `usuarios.rol`). */
+  initialCabeceraInsignia?: InboxCabeceraInsignia;
+  /** Rol operativo omnicanal (precargado para mensajes UX de alcance). */
+  initialOmnicanalRole?: OmnicanalOperatorRole | null;
+}) {
+  // Vista de asesor "puro" (agente, no admin/supervisor): tarjetas de chat más compactas
+  // (sin la fila de badges estado/cola/agente, que para él son redundantes) y el tiempo de
+  // turno junto al nombre. Admin y supervisor conservan la fila completa.
+  //
+  // Nota: además del rol explícito "agente" en `chat_empresa_operator_roles`, contemplamos
+  // el caso "asesor implícito" — sin fila de rol pero con fila en `chat_agents` (getOmnicanalScope
+  // devuelve role=null y presence.in_queues=true). Así un asesor dado de alta sin fila de rol
+  // (bug de flujo de alta) también ve la vista compacta.
+  const esAsesor =
+    initialCabeceraInsignia !== "admin" &&
+    initialCabeceraInsignia !== "supervisor" &&
+    initialOmnicanalRole !== "admin" &&
+    initialOmnicanalRole !== "supervisor" &&
+    Boolean(initialOperationalPresence?.in_queues);
+  // Admin: en vez del filtro "Asignación" (que no le aporta) mostramos un selector de asesores
+  // para ver los chats de un agente puntual.
+  const esAdmin = initialCabeceraInsignia === "admin" || initialOmnicanalRole === "admin";
+  const supabaseChat = useMemo(
+    () => createBrowserClientForSchema(chatDataSchema),
+    [chatDataSchema]
+  );
+
+  /**
+   * Las suscripciones esperan a que el socket tenga el token.
+   *
+   * `postgres_changes` sobre tablas con RLS se evalúa con el token que el
+   * socket tiene AL UNIRSE al canal. `supabase-js` lo pone cuando cambia el
+   * estado de la sesión, pero al entrar a una pantalla la sesión ya venía
+   * restaurada de la cookie: no cambia nada, el canal se une como anónimo y RLS
+   * no deja pasar un solo evento. La suscripción dice "SUBSCRIBED" y no llega
+   * nada nunca — que es exactamente lo que estaba pasando acá.
+   */
+  const [realtimeListo, setRealtimeListo] = useState(false);
+  useEffect(() => {
+    let vivo = true;
+    void autenticarRealtime(supabaseChat).then(() => {
+      if (vivo) setRealtimeListo(true);
+    });
+    return () => {
+      vivo = false;
+    };
+  }, [supabaseChat]);
+
+  /**
+   * El alto disponible se MIDE.
+   *
+   * Antes era `100dvh - 4.75rem`, una constante que suponía cuánto ocupa la
+   * barra de arriba. Cuando no coincide, el módulo se pasa de largo y lo que
+   * queda cortado es lo último: la caja de escribir.
+   */
+  const contenedorRef = useRef<HTMLDivElement>(null);
+  const [alto, setAlto] = useState<number | null>(null);
+  useEffect(() => {
+    const medir = () => {
+      const el = contenedorRef.current;
+      if (!el) return;
+      const top = el.getBoundingClientRect().top;
+      setAlto(Math.max(420, Math.round(window.innerHeight - top - 12)));
+    };
+    medir();
+    window.addEventListener("resize", medir);
+    return () => window.removeEventListener("resize", medir);
+  }, []);
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const vistaParam = searchParams?.get("vista") ?? "";
+  const vista: ConversacionesVista =
+    mode === "historial" ? "historial" : vistaParam === "bot" ? "bot" : "inbox";
+
+  const [conversations, setConversations] = useState<InboxConversation[]>([]);
+  const conversationsRef = useRef<InboxConversation[]>([]);
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
+
+  /** Boot log: snapshot de flags de Inbox. No-op si CHAT_INBOX_OBSERVABILITY=false. */
+  useEffect(() => {
+    logInboxFlagsBoot(getInboxFlagsSnapshot());
+  }, []);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  /**
+   * `?c=` viene de la campanita: se entra a LA conversación del aviso.
+   *
+   * Se limpia la URL apenas se usa: al recargar más tarde, esa conversación ya
+   * no es "la del aviso" y volver a abrirla sería una sorpresa.
+   */
+  const abrioDelAvisoRef = useRef(false);
+  useEffect(() => {
+    if (abrioDelAvisoRef.current) return;
+    const pedida = new URLSearchParams(window.location.search).get("c");
+    if (!pedida) return;
+    abrioDelAvisoRef.current = true;
+    setSelectedId(pedida);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("c");
+    window.history.replaceState({}, "", url.pathname + url.search);
+  }, []);
+  const [selectedAttribution, setSelectedAttribution] = useState<{
+    source_url: string;
+    headline: string | null;
+    red: "instagram" | "facebook" | "no_identificado";
+  } | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  /** Mensajes de texto en vuelo (envío optimista): aparecen al instante como "enviando…" y se
+   * reconcilian con el server. Array separado para que loadMessages (que reemplaza `messages`)
+   * no los pise. `convId` para no mostrarlos si el operador cambió de conversación. */
+  const [pendingSends, setPendingSends] = useState<
+    { tempId: string; convId: string; text: string; status: "sending" | "error" }[]
+  >([]);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  // Recontacto con plantilla aprobada (sobre todo fuera de la ventana de 24h).
+  const [tplPanelOpen, setTplPanelOpen] = useState(false);
+  const [tplList, setTplList] = useState<InboxTemplate[]>([]);
+  const [tplLoading, setTplLoading] = useState(false);
+  const [tplSelectedId, setTplSelectedId] = useState<string | null>(null);
+  const [tplVars, setTplVars] = useState<Record<string, string>>({});
+  const [tplSending, setTplSending] = useState(false);
+  const [tplError, setTplError] = useState<string | null>(null);
+  const tplPanelRef = useRef<HTMLDivElement | null>(null);
+  const [loadingList, setLoadingList] = useState(true);
+  // "Actualizando": true mientras corre el refresco en 2º plano al ENTRAR (la lista se pinta al
+  // instante desde cache local, que puede estar viejo, y el fetch fresco tarda ~3-4s). Sirve para
+  // avisar al operador que el estado que ve todavía no es el definitivo (evita actuar sobre data vieja).
+  const [listRefreshing, setListRefreshing] = useState(false);
+  const [loadingMsg, setLoadingMsg] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  /** Imagen pegada con Ctrl/Cmd+V, esperando confirmación antes de enviarse. */
+  const [imagenPegada, setImagenPegada] = useState<File | null>(null);
+  const [uploadHint, setUploadHint] = useState<string | null>(null);
+  /** Grabación de nota de voz (MediaRecorder) antes de subir a /api/chat/send-media. */
+  const [recordingVoice, setRecordingVoice] = useState(false);
+  /** Segundos transcurridos de la grabación en curso (para el contador tipo WhatsApp). */
+  const [recordSeconds, setRecordSeconds] = useState(0);
+  /**
+   * Nota de voz YA grabada y esperando confirmación del usuario. Antes el audio se
+   * enviaba solo al detener la grabación; ahora queda en preview (se puede escuchar,
+   * descartar o enviar con Enter / botón Enviar), como en WhatsApp.
+   */
+  const [pendingVoice, setPendingVoice] = useState<{ file: File; url: string } | null>(null);
+  /** Panel de emojis del composer (escritorio). */
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [releasingBot, setReleasingBot] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+  const [messagesError, setMessagesError] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [hasActiveChannel, setHasActiveChannel] = useState<boolean | null>(null);
+  /** Canales activos de la empresa (selector de filtro inbox/historial). */
+  const [inboxChannels, setInboxChannels] = useState<ChatChannelRow[]>([]);
+  const [compVals, setCompVals] = useState<ComprobanteValidacionListRow[]>([]);
+  const [compLoading, setCompLoading] = useState(false);
+  const [compActionId, setCompActionId] = useState<string | null>(null);
+  const [compApproveConfirmId, setCompApproveConfirmId] = useState<string | null>(null);
+  const [compApprovalInfo, setCompApprovalInfo] = useState<string | null>(null);
+  // El visor guarda también el nombre: sin él no se puede ofrecer "Descargar".
+  const [lightbox, setLightbox] = useState<{ url: string; nombre: string } | null>(null);
+  const [msgMenu, setMsgMenu] = useState<string | null>(null); // id del mensaje con el menú (3 puntitos) abierto
+  const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null); // mensaje que se está respondiendo (cita)
+
+  /**
+   * WAMID → mensaje, para resolver a qué responde un mensaje del cliente. WhatsApp manda
+   * sólo el id del mensaje citado; el texto hay que buscarlo entre los que ya tenemos.
+   */
+  const mensajePorWamid = useMemo(() => {
+    const m = new Map<string, ChatMessage>();
+    for (const msg of messages) {
+      const w = wamidDeMensaje(msg);
+      if (w) m.set(w, msg);
+    }
+    return m;
+  }, [messages]);
+  const [opsQueues, setOpsQueues] = useState<ChatQueueListRow[]>([]);
+  /**
+   * A dónde se PUEDE transferir: todas las colas activas.
+   *
+   * Es una lista distinta de `opsQueues`, que responde "¿de qué colas veo las
+   * conversaciones?" y por eso se limita a las propias. Transferir es mandar la
+   * conversación a una cola en la que uno no está — con la lista acotada, un
+   * comercial no podía pasarle nada a Project Manager.
+   */
+  const [transferQueues, setTransferQueues] = useState<ChatQueueListRow[]>([]);
+  const [opsAgentLoads, setOpsAgentLoads] = useState<SupervisorAgentLoadRow[]>([]);
+  const [opsBusy, setOpsBusy] = useState(false);
+  const [transferModalOpen, setTransferModalOpen] = useState(false);
+  // Soporte desde el chat: PM o quien usa Soporte. Se consulta una vez al entrar.
+  const [puedeSoporte, setPuedeSoporte] = useState(false);
+  const [soporteModalOpen, setSoporteModalOpen] = useState(false);
+  /** Ficha lateral del contacto (cliente, proyectos, tipificación y recorrido). */
+  const [fichaAbierta, setFichaAbierta] = useState(false);
+  /**
+   * Las PM no usan el CRM: en la cabecera del chat ven sólo "Cliente →", que
+   * abre la ficha en Gestión de clientes. `clienteDeChat` guarda, por
+   * conversación, el cliente hallado para contactos que no estaban asociados.
+   */
+  const [esPm, setEsPm] = useState(false);
+  const [clienteDeChat, setClienteDeChat] = useState<Record<string, string | null>>({});
+  useEffect(() => {
+    let vivo = true;
+    fetchWithSupabaseSession("/api/usuarios/me", { cache: "no-store" })
+      .then((r) => r.json())
+      // Esta ruta responde `{ usuario: {...} }`, no el sobre `{ data }` del resto.
+      .then((j: { usuario?: { es_project_manager?: boolean } }) => {
+        if (vivo) setEsPm(j?.usuario?.es_project_manager === true);
+      })
+      .catch(() => {});
+    return () => {
+      vivo = false;
+    };
+  }, []);
+  useEffect(() => {
+    let vivo = true;
+    void puedeCargarSoporte().then((p) => vivo && setPuedeSoporte(p));
+    return () => {
+      vivo = false;
+    };
+  }, []);
+  /** Cola elegida: transferencia a cola y filtro de agentes en el modal. */
+  const [transferQueueTarget, setTransferQueueTarget] = useState("");
+  const [transferAgentSearch, setTransferAgentSearch] = useState("");
+  const [transferLoadsRefreshing, setTransferLoadsRefreshing] = useState(false);
+  const [channelQuickReplies, setChannelQuickReplies] = useState<
+    Array<{ id: string; title: string; body: string }>
+  >([]);
+  const [quickRepliesLoading, setQuickRepliesLoading] = useState(false);
+  const [quickReplyOpen, setQuickReplyOpen] = useState(false);
+  const [quickReplySearch, setQuickReplySearch] = useState("");
+  const quickReplyPanelRef = useRef<HTMLDivElement | null>(null);
+  const [hasActiveBotFlows, setHasActiveBotFlows] = useState(false);
+  const [botFlowsChecked, setBotFlowsChecked] = useState(false);
+  const [compValidacionesOpen, setCompValidacionesOpen] = useState(false);
+  const [listColumnHidden, setListColumnHidden] = useState(false);
+  /**
+   * Collapsa el encabezado del módulo (eyebrow + nombre + insignia + tabs +
+   * filtros) para maximizar el espacio del chat. Persiste en localStorage.
+   */
+  const [headerCollapsed, setHeaderCollapsed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem("conversaciones:headerCollapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        "conversaciones:headerCollapsed",
+        headerCollapsed ? "1" : "0",
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [headerCollapsed]);
+  /** Texto del buscador (input). Se debouncea a `debouncedQ` y se envía al backend (búsqueda global).
+   *  Se puede prellenar con `?buscar=` (deep-link desde otros módulos, p. ej. teléfono del CRM). */
+  const [listSearch, setListSearch] = useState(() => searchParams?.get("buscar")?.trim() ?? "");
+  /** Término de búsqueda server-side (debounced 300ms). */
+  const [debouncedQ, setDebouncedQ] = useState(() => searchParams?.get("buscar")?.trim() ?? "");
+  /** Ventana creciente: cuántas conversaciones pedir (50, +50 con "Cargar más"). */
+  const [listLimit, setListLimit] = useState(50);
+  const debouncedQRef = useRef("");
+  const listLimitRef = useRef(50);
+  debouncedQRef.current = debouncedQ;
+  listLimitRef.current = listLimit;
+  /** Feedback "Buscando…" mientras una búsqueda por término está en curso (fetch en vuelo). */
+  const [searching, setSearching] = useState(false);
+  const [finalizeOpen, setFinalizeOpen] = useState(false);
+  const [finalizeLoading, setFinalizeLoading] = useState(false);
+  const [opPresenceLoaded, setOpPresenceLoaded] = useState(
+    mode !== "inbox" || initialOperationalPresence !== undefined
+  );
+  const [opInQueues, setOpInQueues] = useState(
+    mode !== "inbox" ? false : (initialOperationalPresence?.in_queues ?? false)
+  );
+  const [opStatus, setOpStatus] = useState<ChatAgentOperationalStatus | null>(
+    mode !== "inbox"
+      ? null
+      : initialOperationalPresence?.in_queues
+        ? initialOperationalPresence.status
+        : null
+  );
+  const [opPresenceBusy, setOpPresenceBusy] = useState(false);
+  const [opPresenceErr, setOpPresenceErr] = useState<string | null>(null);
+  const [opPresenceOkMsg, setOpPresenceOkMsg] = useState<string | null>(null);
+  const [opSince, setOpSince] = useState<string | null>(() =>
+    mode === "inbox" && initialOperationalPresence?.in_queues
+      ? initialOperationalPresence.status_changed_at ?? null
+      : null
+  );
+  /** Ancla de sesión en esta pestaña inbox (tiempo de uso del módulo). */
+  const [sessionSinceIso, setSessionSinceIso] = useState<string | null>(null);
+  const [finalizeSaving, setFinalizeSaving] = useState(false);
+  const [finalizeOptions, setFinalizeOptions] = useState<FinalizeOptionsResult | null>(null);
+  /** Cache de opciones de cierre por conversación (se precargan al seleccionar → modal instantáneo). */
+  /**
+   * Tipificaciones de cierre, cacheadas por COLA y no por conversación.
+   *
+   * La taxonomía es de la cola: todas las conversaciones de "ventas neura"
+   * cierran con las mismas opciones. Con la clave por conversación, abrir el
+   * modal en la siguiente volvía a pedir exactamente lo mismo — y eso es todo
+   * lo que se sentía como demora.
+   */
+  const finalizeOptionsCacheRef = useRef<Map<string, FinalizeOptionsResult>>(new Map());
+
+  /** La cola de una conversación, que es la clave real de su tipificación. */
+  const claveTipificacion = useCallback((conversationId: string): string => {
+    const c = conversationsRef.current.find((x) => x.id === conversationId);
+    return `cola:${(c?.queue_id as string | null | undefined) ?? "sin-cola"}`;
+  }, []);
+  const [finalizeStateId, setFinalizeStateId] = useState("");
+  const [finalizeSubstateId, setFinalizeSubstateId] = useState("");
+  const [finalizeComment, setFinalizeComment] = useState("");
+  const [finalizeModalError, setFinalizeModalError] = useState<string | null>(null);
+
+  const inboxFilterKey = searchParams?.toString() ?? "";
+
+  /** Lectura siempre actual para sondeos silenciosos / realtime (evita filtros obsoletos en closure). */
+  const searchParamsRef = useRef(searchParams);
+  searchParamsRef.current = searchParams;
+
+  /** Optimista: `router.replace` actualiza la URL un tick después; sin esto el select vuelve al valor anterior. */
+  const [pendingCanal, setPendingCanal] = useState<string | null>(null);
+  const [pendingCola, setPendingCola] = useState<string | null>(null);
+  const [pendingAsignacion, setPendingAsignacion] = useState<string | null>(null);
+  const [pendingAsesor, setPendingAsesor] = useState<string | null>(null);
+  /** Lista de asesores para el filtro del admin (id = chat_agent id = assigned_agent_id). */
+  const [inboxAgents, setInboxAgents] = useState<{ id: string; nombre: string }[]>([]);
+
+  const urlCanal = searchParams?.get("canal")?.trim() ?? "";
+  const urlCola = searchParams?.get("cola")?.trim() ?? "";
+  const urlAsesor = searchParams?.get("asesor")?.trim() ?? "";
+  const urlAsignacionRaw = searchParams?.get("asignacion")?.trim();
+  const urlAsignacion =
+    urlAsignacionRaw === "mios" ? "mios" : urlAsignacionRaw === "sin_asignar" ? "sin_asignar" : "";
+
+  const displayCanal = pendingCanal !== null ? pendingCanal : urlCanal;
+  const displayCola = pendingCola !== null ? pendingCola : urlCola;
+  const displayAsignacion = pendingAsignacion !== null ? pendingAsignacion : urlAsignacion;
+  const displayAsesor = pendingAsesor !== null ? pendingAsesor : urlAsesor;
+
+  useEffect(() => {
+    if (pendingCanal !== null && pendingCanal === urlCanal) setPendingCanal(null);
+  }, [pendingCanal, urlCanal]);
+  useEffect(() => {
+    if (pendingCola !== null && pendingCola === urlCola) setPendingCola(null);
+  }, [pendingCola, urlCola]);
+  useEffect(() => {
+    if (pendingAsignacion !== null && pendingAsignacion === urlAsignacion) setPendingAsignacion(null);
+  }, [pendingAsignacion, urlAsignacion]);
+  useEffect(() => {
+    if (pendingAsesor !== null && pendingAsesor === urlAsesor) setPendingAsesor(null);
+  }, [pendingAsesor, urlAsesor]);
+
+  // Admin: cargar la lista de asesores (agentes) para el filtro. Reusa la misma fuente que el
+  // modal de Transferir (id = chat_agent id = assigned_agent_id), deduplicada por agente.
+  useEffect(() => {
+    if (!esAdmin) return;
+    let cancelled = false;
+    void fetchTransferTargetAgents()
+      .then((rows) => {
+        if (cancelled) return;
+        const seen = new Set<string>();
+        const uniq: { id: string; nombre: string }[] = [];
+        for (const r of rows) {
+          const id = String((r as { id?: string }).id ?? "").trim();
+          if (!id || seen.has(id)) continue;
+          seen.add(id);
+          const nombre = String((r as { nombre?: string }).nombre ?? "").trim();
+          uniq.push({ id, nombre: nombre || id.slice(0, 8) });
+        }
+        uniq.sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+        setInboxAgents(uniq);
+      })
+      .catch(() => {
+        if (!cancelled) setInboxAgents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [esAdmin]);
+
+  /** Si la URL corrige un canal inválido (p. ej. ya no existe), alinear UI optimista. */
+  useEffect(() => {
+    if (pendingCanal === null || inboxChannels.length === 0) return;
+    if (urlCanal !== "") return;
+    const stillValid = inboxChannels.some((c) => c.id === pendingCanal);
+    if (!stillValid) setPendingCanal(null);
+  }, [pendingCanal, urlCanal, inboxChannels]);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const selectedIdRef = useRef<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const recordChunksRef = useRef<Blob[]>([]);
+  /** Interval del contador de segundos mientras se graba. */
+  const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** true = el stop() vino de "Cancelar": se descarta el audio en vez de dejarlo en preview. */
+  const discardRecordingRef = useRef(false);
+  const emojiPanelRef = useRef<HTMLDivElement>(null);
+  const messagesScrollRef = useRef<HTMLDivElement>(null);
+  /** ResizeObserver del alto del contenido de mensajes (re-ancla al fondo). Se ata por callback-ref. */
+  const contentRoRef = useRef<ResizeObserver | null>(null);
+  /** Ventana "recién abrí este chat": fuerza anclar al fondo aunque stickBottom aún no esté fijado. */
+  const openUntilRef = useRef(0);
+  /** Si el usuario está cerca del final, los mensajes nuevos hacen scroll; si subió a leer historial, no. */
+  const stickBottomRef = useRef(true);
+  const lastMessageIdRef = useRef<string | null>(null);
+  const loadConversationsRef = useRef<(opts?: { silent?: boolean }) => Promise<void>>(async () => {});
+  /** Tras la primera carga visible del inbox, se permite el beep (evita sonido en hidratar inicial). */
+  const inboxSoundPrimedRef = useRef(false);
+  /** Dedupe de ids de mensaje entrante ya notificados con sonido. */
+  const inboundSoundMsgIdsRef = useRef<Set<string>>(new Set());
+
+  /** Evita aplicar respuestas viejas si el usuario cambió de chat rápido. */
+  const messagesLoadGenRef = useRef(0);
+  /** Cache en memoria por sesión: reabrir conversación muestra historial al instante y refresca después. */
+  const messagesSessionCacheRef = useRef<Map<string, ChatMessage[]>>(new Map());
+  /** Prefetch al hover: conversaciones ya precargadas (dedupe) + timer del delay. */
+  const prefetchedRef = useRef<Set<string>>(new Set());
+  const prefetchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const loadConversations = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      const silent = opts?.silent ?? false;
+      const sp = new URLSearchParams(searchParamsRef.current?.toString() ?? "");
+      const baseFilters = parseInboxFilters(sp) ?? {};
+      const qNow = debouncedQRef.current.trim();
+      const filters = {
+        ...baseFilters,
+        limit: listLimitRef.current,
+        q: qNow ? qNow : null,
+        // Deep-link "Nuevo mensaje" desde Finalizadas (?cerradas=1): incluir cerradas en el resultado,
+        // pero SOLO junto a un término de búsqueda (así el inbox normal no muestra finalizadas).
+        include_closed: sp.get("cerradas") === "1" && Boolean(qNow),
+      };
+      const previousCount = conversationsRef.current.length;
+      if (silent) {
+        chatListUiLog("refetch-start", {
+          activeTab: vista,
+          previous_count: previousCount,
+          source: "loadConversations",
+          reason: "silent",
+          filters: filters ?? null,
+        });
+      }
+      try {
+        const {
+          conversations: rows,
+          base_row_count: baseRowCount,
+          transient_list_error: transientListError,
+        } = await fetchChatConversations(vista, filters);
+        if (silent) {
+          chatListUiLog("refetch-result", {
+            activeTab: vista,
+            previous_count: previousCount,
+            next_count: rows.length,
+            base_row_count: baseRowCount,
+            source: "fetchChatConversations",
+            reason: "ok",
+            filters: filters ?? null,
+          });
+        }
+        const preserveSilentEmpty =
+          silent &&
+          rows.length === 0 &&
+          previousCount > 0 &&
+          (baseRowCount === 0 || Boolean(transientListError));
+        if (preserveSilentEmpty) {
+          chatListUiLog("refetch-preserve", {
+            activeTab: vista,
+            previous_count: previousCount,
+            next_count: 0,
+            base_row_count: baseRowCount,
+            source: "fetchChatConversations",
+            reason: "silent_empty_keeps_previous",
+            filters: filters ?? null,
+          });
+        } else {
+          chatListUiLog("set-conversations", {
+            activeTab: vista,
+            previous_count: previousCount,
+            next_count: rows.length,
+            base_row_count: baseRowCount,
+            source: "fetchChatConversations",
+            reason: silent ? "silent_replace" : "load",
+            filters: filters ?? null,
+          });
+          setConversations(rows);
+          // Cache local del inbox por defecto (sin búsqueda) → apertura instantánea al volver.
+          if (!qNow) writeInboxList(vista, rows);
+        }
+        if (!silent && previousCount === 0) {
+          chatListUiLog("initial-data", {
+            activeTab: vista,
+            previous_count: 0,
+            next_count: rows.length,
+            base_row_count: baseRowCount,
+            source: "first_fetch",
+            reason: "hydrated",
+            filters: filters ?? null,
+          });
+        }
+        setListError(null);
+        if (transientListError && !silent && rows.length === 0) {
+          setListError(
+            "No pudimos refrescar el listado (base de datos ocupada). La vista anterior se mantiene si ya tenías datos."
+          );
+        }
+      } catch (e) {
+        chatListUiLog("refetch-result", {
+          activeTab: vista,
+          previous_count: previousCount,
+          source: "fetchChatConversations",
+          reason: "error",
+          error: e instanceof Error ? e.message : String(e),
+          filters: filters ?? null,
+        });
+        setListError(e instanceof Error ? e.message : "Error al cargar conversaciones");
+      } finally {
+        if (!silent) {
+          setLoadingList(false);
+          inboxSoundPrimedRef.current = true;
+        }
+      }
+    },
+    [vista]
+  );
+
+  const loadMessages = useCallback(async (conversationId: string, opts?: { silent?: boolean }) => {
+    const silent = opts?.silent ?? false;
+    const ticket = silent ? -1 : ++messagesLoadGenRef.current;
+
+    if (!silent) {
+      setMessagesError(null);
+      let cached = messagesSessionCacheRef.current.get(conversationId);
+      // Fallback al cache local persistente (sobrevive recargas) → chat instantáneo al reabrir.
+      if (!cached || cached.length === 0) {
+        const persisted = readThread<ChatMessage>(conversationId);
+        if (persisted && persisted.length > 0) {
+          cached = persisted;
+          messagesSessionCacheRef.current.set(conversationId, persisted);
+        }
+      }
+      if (cached && cached.length > 0) {
+        setMessages(cached);
+        setLoadingMsg(false);
+      } else {
+        setMessages([]);
+        setLoadingMsg(true);
+      }
+    } else {
+      setMessagesError(null);
+    }
+
+    try {
+      const qs = new URLSearchParams({ conversation_id: conversationId });
+      const res = await fetchWithSupabaseSession(`/api/chat/messages?${qs.toString()}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        let detail = "";
+        try {
+          const j = (await res.json()) as { error?: string; message?: string };
+          detail = (j.error || j.message || "").trim();
+        } catch {
+          detail = (await res.text().catch(() => "")).trim();
+        }
+        throw new Error(detail || `Error ${res.status} al cargar mensajes`);
+      }
+      const json = (await res.json()) as { success?: boolean; data?: Record<string, unknown>[] };
+      if (!json.success || !Array.isArray(json.data)) {
+        if (
+          !silent &&
+          ticket === messagesLoadGenRef.current &&
+          selectedIdRef.current === conversationId
+        ) {
+          setMessages([]);
+          messagesSessionCacheRef.current.delete(conversationId);
+        }
+        return;
+      }
+      const mapped = json.data.map(mapRowToMessage);
+      messagesSessionCacheRef.current.set(conversationId, mapped);
+      writeThread(conversationId, mapped); // persistir → reapertura instantánea tras recarga
+
+      if (silent) {
+        if (selectedIdRef.current !== conversationId) return;
+        setMessages(mapped);
+        return;
+      }
+
+      if (ticket !== messagesLoadGenRef.current || selectedIdRef.current !== conversationId) {
+        return;
+      }
+      setMessages(mapped);
+    } catch (e) {
+      if (silent) return;
+      if (ticket !== messagesLoadGenRef.current) return;
+      if (selectedIdRef.current !== conversationId) return;
+      const cachedFallback = messagesSessionCacheRef.current.get(conversationId);
+      if (!cachedFallback?.length) {
+        setMessages([]);
+      }
+      setMessagesError(e instanceof Error ? e.message : "Error al cargar mensajes");
+    } finally {
+      if (!silent && ticket === messagesLoadGenRef.current && selectedIdRef.current === conversationId) {
+        setLoadingMsg(false);
+      }
+    }
+  }, []);
+
+  const loadMessagesRef = useRef(loadMessages);
+  loadMessagesRef.current = loadMessages;
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
+
+  // Atribución Meta (Click-to-WhatsApp) de la conversación abierta → chip "Pauta ↗".
+  useEffect(() => {
+    setSelectedAttribution(null);
+    const cid = selectedId;
+    if (!cid) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetchWithSupabaseSession(
+          `/api/chat/conversation-attribution?conversation_id=${encodeURIComponent(cid)}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return;
+        const json = (await res.json()) as { success?: boolean; data?: unknown };
+        if (cancelled || selectedIdRef.current !== cid) return;
+        const d = json?.data as
+          | { source_url?: string; headline?: string | null; red?: "instagram" | "facebook" | "no_identificado" }
+          | null;
+        if (d?.source_url) {
+          setSelectedAttribution({
+            source_url: d.source_url,
+            headline: d.headline ?? null,
+            red: d.red ?? "no_identificado",
+          });
+        }
+      } catch {
+        /* sin chip si falla */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId]);
+
+  const sendMediaFile = useCallback(async (file: File) => {
+    const cid = selectedIdRef.current;
+    if (!cid || file.size < 1) return;
+    const isVideo = file.type.startsWith("video/");
+    // Videos hasta 50 MB: el servidor los comprime a <16 MB (720p) antes de mandar. Más grande
+    // que eso, mejor un enlace (la subida + compresión se vuelve poco confiable).
+    if (isVideo && file.size > 50 * 1024 * 1024) {
+      setSendError("El video es demasiado grande (máx 50 MB). Recortalo o compartí un enlace.");
+      return;
+    }
+    setSendError(null);
+    // Si supera el límite de WhatsApp, el server lo comprime antes de enviar → avisamos que tarda.
+    setUploadHint(
+      isVideo && file.size > 16 * 1024 * 1024
+        ? "Comprimiendo y enviando el video… puede tardar unos segundos."
+        : null
+    );
+    stickBottomRef.current = true;
+    setUploadingFile(true);
+    try {
+      const fd = new FormData();
+      fd.set("conversation_id", cid);
+      fd.set("file", file);
+      const res = await fetchWithSupabaseSession("/api/chat/send-media", {
+        method: "POST",
+        body: fd,
+        credentials: "same-origin",
+      });
+      const json = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!res.ok || !json.ok) {
+        throw new Error(typeof json.error === "string" ? json.error : `Error HTTP ${res.status}`);
+      }
+      await loadMessagesRef.current(cid, { silent: true });
+      await loadConversationsRef.current?.({ silent: true });
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : "Error al enviar archivo");
+    } finally {
+      setUploadingFile(false);
+      setUploadHint(null);
+    }
+  }, []);
+
+  function stopRecordTimer() {
+    if (recordTimerRef.current) {
+      clearInterval(recordTimerRef.current);
+      recordTimerRef.current = null;
+    }
+  }
+
+  /** Descarta la nota de voz ya grabada que estaba esperando confirmación. */
+  function discardPendingVoice() {
+    setPendingVoice((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url);
+      return null;
+    });
+  }
+
+  /** Detiene la grabación: el audio queda en PREVIEW (no se envía hasta confirmar). */
+  function stopVoiceRecording() {
+    const mr = mediaRecorderRef.current;
+    if (mr && mr.state === "recording") {
+      discardRecordingRef.current = false;
+      mr.stop();
+    }
+  }
+
+  /** Cancela la grabación en curso y descarta el audio. */
+  function cancelVoiceRecording() {
+    const mr = mediaRecorderRef.current;
+    if (mr && mr.state === "recording") {
+      discardRecordingRef.current = true;
+      mr.stop();
+    }
+  }
+
+  async function startVoiceRecording() {
+    const cid = selectedIdRef.current;
+    if (!cid || uploadingFile || recordingVoice) return;
+    discardPendingVoice();
+    setSendError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      recordChunksRef.current = [];
+      discardRecordingRef.current = false;
+      const mime = pickRecorderMimeType();
+      const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      mediaRecorderRef.current = rec;
+      rec.ondataavailable = (ev) => {
+        if (ev.data.size > 0) recordChunksRef.current.push(ev.data);
+      };
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        mediaRecorderRef.current = null;
+        streamRef.current = null;
+        stopRecordTimer();
+        const blob = new Blob(recordChunksRef.current, { type: rec.mimeType || "audio/webm" });
+        recordChunksRef.current = [];
+        setRecordingVoice(false);
+        const descartada = discardRecordingRef.current;
+        discardRecordingRef.current = false;
+        // Cancelada por el usuario o demasiado corta → no queda nada.
+        if (descartada || blob.size < 300) return;
+        const ext = extForAudioType(blob.type);
+        const voiceFile = new File([blob], `nota-voz.${ext}`, { type: blob.type || "audio/webm" });
+        // NO se envía acá: queda en preview y el usuario confirma con Enter / botón Enviar.
+        setPendingVoice({ file: voiceFile, url: URL.createObjectURL(voiceFile) });
+      };
+      setRecordSeconds(0);
+      setRecordingVoice(true);
+      stopRecordTimer();
+      recordTimerRef.current = setInterval(() => setRecordSeconds((s) => s + 1), 1000);
+      // SIN timeslice: MediaRecorder acumula todo y emite UN solo blob completo al stop().
+      // Con timeslice (start(400)) el WebView de Android arma un webm con header roto / cluster
+      // final truncado → ffmpeg falla ("EBML header parsing failed") o el audio sale cortado.
+      rec.start();
+    } catch (e) {
+      setSendError(e instanceof Error ? e.message : "No se pudo acceder al micrófono");
+      setRecordingVoice(false);
+      stopRecordTimer();
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      try {
+        mediaRecorderRef.current?.stop();
+      } catch {
+        /* noop */
+      }
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      if (recordTimerRef.current) clearInterval(recordTimerRef.current);
+      if (prefetchTimerRef.current) clearTimeout(prefetchTimerRef.current);
+    };
+  }, []);
+
+  loadConversationsRef.current = loadConversations;
+
+  useEffect(() => {
+    setSelectedId(null);
+    setMessages([]);
+  }, [vista]);
+
+  useEffect(() => {
+    // Apertura instantánea: si hay cache local del inbox por defecto (sin búsqueda), lo
+    // pintamos YA y refrescamos en segundo plano (silent). Si no, carga normal con spinner.
+    const noQuery = !debouncedQRef.current.trim();
+    const cached = noQuery ? readInboxList<InboxConversation>(vista) : null;
+    if (cached && cached.length > 0) {
+      setConversations(cached);
+      setLoadingList(false);
+      // Pintamos el cache (viejo) al instante pero avisamos que estamos trayendo lo último.
+      setListRefreshing(true);
+      void loadConversations({ silent: true }).finally(() => setListRefreshing(false));
+    } else {
+      setLoadingList(true);
+      void loadConversations();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadConversations, inboxFilterKey]);
+
+  // Debounce del buscador (300ms) → término server-side. Resetea la ventana a la primera página.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedQ(listSearch.trim());
+      setListLimit(50);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [listSearch]);
+
+  // Al cambiar filtros de URL (canal/cola/asignación/vista) volver a la primera página.
+  useEffect(() => {
+    setListLimit(50);
+  }, [inboxFilterKey]);
+
+  // Recarga cuando cambia el término server-side o la ventana ("Cargar más").
+  // Se omite la primera ejecución: el effect de [inboxFilterKey] ya hace la carga inicial.
+  const qWindowMountRef = useRef(true);
+  useEffect(() => {
+    if (qWindowMountRef.current) {
+      qWindowMountRef.current = false;
+      return;
+    }
+    let active = true;
+    setSearching(true);
+    void (async () => {
+      try {
+        await loadConversationsRef.current?.();
+      } finally {
+        if (active) setSearching(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [debouncedQ, listLimit]);
+
+  useEffect(() => {
+    listChatQueues()
+      .then(setOpsQueues)
+      .catch(() => setOpsQueues([]));
+    listTransferQueues()
+      .then(setTransferQueues)
+      .catch(() => setTransferQueues([]));
+    fetchTransferTargetAgents()
+      .then(setOpsAgentLoads)
+      .catch(() => setOpsAgentLoads([]));
+  }, []);
+
+  const patchInboxQuery = useCallback(
+    (patch: Record<string, string | null | undefined>) => {
+      const next = new URLSearchParams(searchParams?.toString() ?? "");
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === null || v === undefined || v === "") next.delete(k);
+        else next.set(k, v);
+      }
+      const qs = next.toString();
+      const basePath =
+        pathname ??
+        (mode === "historial" ? "/dashboard/historial-omnicanal" : "/dashboard/conversaciones");
+      router.replace(qs ? `${basePath}?${qs}` : basePath);
+    },
+    [searchParams, router, pathname, mode]
+  );
+
+  useEffect(() => {
+    const cola = searchParams?.get("cola")?.trim() ?? "";
+    if (!cola || opsQueues.length === 0) return;
+    const ok = opsQueues.some((q) => q.id === cola);
+    if (!ok) patchInboxQuery({ cola: null });
+  }, [opsQueues, searchParams, patchInboxQuery]);
+
+  useEffect(() => {
+    const canal = searchParams?.get("canal")?.trim() ?? "";
+    if (!canal || inboxChannels.length === 0) return;
+    const ok = inboxChannels.some((c) => c.id === canal);
+    if (!ok) patchInboxQuery({ canal: null });
+  }, [inboxChannels, searchParams, patchInboxQuery]);
+
+  useEffect(() => {
+    if (!transferModalOpen) return;
+    let cancelled = false;
+    setTransferLoadsRefreshing(true);
+    void fetchTransferTargetAgents()
+      .then((rows) => {
+        if (!cancelled) setOpsAgentLoads(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setOpsAgentLoads([]);
+      })
+      .finally(() => {
+        if (!cancelled) setTransferLoadsRefreshing(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [transferModalOpen]);
+
+  const filteredTransferAgents = useMemo(() => {
+    const q = transferAgentSearch.trim().toLowerCase();
+    const rows = opsAgentLoads.filter((a) =>
+      transferQueueTarget === "" ? true : a.queue_id === transferQueueTarget
+    );
+    if (!q) return rows;
+    return rows.filter(
+      (a) =>
+        a.nombre.toLowerCase().includes(q) ||
+        (a.email && a.email.toLowerCase().includes(q)) ||
+        a.queue_nombre.toLowerCase().includes(q)
+    );
+  }, [opsAgentLoads, transferAgentSearch, transferQueueTarget]);
+
+  function setVista(next: ConversacionesVista) {
+    if (mode === "historial") {
+      if (next === "inbox") router.push("/dashboard/conversaciones");
+      if (next === "bot" && hasActiveBotFlows) router.push("/dashboard/conversaciones?vista=bot");
+      return;
+    }
+    const params = new URLSearchParams(searchParams?.toString() ?? "");
+    if (next === "inbox") params.delete("vista");
+    else if (next === "bot" && hasActiveBotFlows) params.set("vista", "bot");
+    else if (next === "historial") {
+      router.push("/dashboard/historial-omnicanal");
+      return;
+    }
+    const qs = params.toString();
+    const base = "/dashboard/conversaciones";
+    router.push(qs ? `${base}?${qs}` : base);
+  }
+
+  useEffect(() => {
+    fetchChatChannels()
+      .then((ch) => {
+        setHasActiveChannel(ch.some((c) => c.activo));
+        setInboxChannels(ch.filter((c) => c.activo));
+      })
+      .catch(() => {
+        setHasActiveChannel(null);
+        setInboxChannels([]);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (mode !== "inbox") {
+      setBotFlowsChecked(true);
+      return;
+    }
+    void hasEmpresaActiveChatFlows().then((v) => {
+      setHasActiveBotFlows(v);
+      setBotFlowsChecked(true);
+    });
+  }, [mode]);
+
+  useEffect(() => {
+    if (mode !== "inbox") {
+      setOpPresenceLoaded(true);
+      setOpInQueues(false);
+      setOpStatus(null);
+      setOpPresenceErr(null);
+      return;
+    }
+    let cancelled = false;
+    if (initialOperationalPresence === undefined) {
+      setOpPresenceLoaded(false);
+    }
+    setOpPresenceErr(null);
+    void getMyAgentOperationalPresence()
+      .then((p) => {
+        if (cancelled) return;
+        if (p.in_queues) {
+          setOpInQueues(true);
+          setOpStatus(p.status);
+          setOpSince(p.status_changed_at);
+        } else {
+          setOpInQueues(false);
+          setOpStatus(null);
+          setOpSince(null);
+        }
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        if (initialOperationalPresence === undefined) {
+          setOpInQueues(false);
+          setOpStatus(null);
+          setOpSince(null);
+        }
+        setOpPresenceErr(e instanceof Error ? e.message : "No se pudo cargar estado operativo");
+      })
+      .finally(() => {
+        if (!cancelled) setOpPresenceLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, initialOperationalPresence]);
+
+  useEffect(() => {
+    if (mode !== "inbox") return;
+    setSessionSinceIso((prev) => prev ?? new Date().toISOString());
+  }, [mode]);
+
+  useEffect(() => {
+    if (mode !== "inbox" || !opInQueues) return;
+    void touchChatAgentInboxHeartbeat();
+    const id = window.setInterval(() => void touchChatAgentInboxHeartbeat(), INBOX_HEARTBEAT_INTERVAL_MS);
+    const onVis = () => {
+      if (document.visibilityState === "visible") void touchChatAgentInboxHeartbeat();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [mode, opInQueues]);
+
+  const applyOperationalStatus = useCallback(async (next: ChatAgentOperationalStatus) => {
+    setOpPresenceErr(null);
+    setOpPresenceOkMsg(null);
+    setOpPresenceBusy(true);
+    try {
+      const res = await setMyAgentOperationalPresence(next);
+      if (!res.applied) {
+        if (res.reason === "missing_operational_status_column") {
+          setOpPresenceErr(
+            "Presencia no disponible en base de datos (falta columna). Ejecutá la migración operational_status en Supabase o contactá soporte."
+          );
+        } else {
+          setOpPresenceErr(res.reason?.trim() || "No se pudo guardar el estado.");
+        }
+        return;
+      }
+      const refreshed = await getMyAgentOperationalPresence();
+      if (refreshed.in_queues) {
+        setOpInQueues(true);
+        setOpStatus(refreshed.status);
+        setOpSince(refreshed.status_changed_at ?? new Date().toISOString());
+      } else {
+        setOpInQueues(false);
+        setOpStatus(null);
+        setOpSince(null);
+      }
+      setOpPresenceOkMsg(next === "ready" ? "Disponible · guardado" : "En pausa · guardado");
+      window.setTimeout(() => setOpPresenceOkMsg(null), 3500);
+    } catch (e) {
+      setOpPresenceErr(e instanceof Error ? e.message : "No se pudo guardar el estado");
+    } finally {
+      setOpPresenceBusy(false);
+    }
+  }, []);
+
+  /** URL legacy: ?vista=historial en inbox → ruta dedicada */
+  useEffect(() => {
+    if (mode !== "inbox") return;
+    if (searchParams?.get("vista") === "historial") {
+      router.replace("/dashboard/historial-omnicanal");
+    }
+  }, [mode, router, searchParams]);
+
+  /** Sin flujos activos, no forzar vista bot */
+  useEffect(() => {
+    if (mode !== "inbox" || !botFlowsChecked || hasActiveBotFlows) return;
+    if (searchParams?.get("vista") !== "bot") return;
+    router.replace("/dashboard/conversaciones");
+  }, [mode, botFlowsChecked, hasActiveBotFlows, router, searchParams]);
+
+  /**
+   * PERF-2A: refetch debounced de respaldo cuando Realtime trae cambios que no
+   * podemos parchar incrementalmente (ej. conversación nueva que no está en la
+   * lista local o status que la saca del filtro vigente). Coalesce eventos
+   * rapidos en una sola llamada y respeta visibilidad.
+   */
+  const debouncedRefetchTimerRef = useRef<number | null>(null);
+  const scheduleListRefetch = useCallback((delayMs = 1500) => {
+    if (debouncedRefetchTimerRef.current != null) return;
+    debouncedRefetchTimerRef.current = window.setTimeout(() => {
+      debouncedRefetchTimerRef.current = null;
+      if (document.visibilityState !== "visible") return;
+      void loadConversationsRef.current?.({ silent: true });
+    }, delayMs);
+  }, []);
+
+  /**
+   * PERF-2A: aplica un cambio de chat_conversations Realtime sobre la lista local
+   * sin recargar todo el inbox. Si la conversación ya no es elegible (status closed
+   * o hidden_by_tag=true), se quita. Si llegó un INSERT/UPDATE para una conversación
+   * que no está en la lista, se programa un refetch debounced.
+   */
+  const patchConversationFromRealtime = useCallback(
+    (row: Record<string, unknown> | null | undefined) => {
+      if (!row || typeof row.id !== "string") return;
+      const id = row.id;
+      const status = typeof row.status === "string" ? row.status : null;
+      const hiddenByTag = row.hidden_by_tag === true;
+      const stillInScope = status === "open" || status === "pending";
+      setConversations((prev) => {
+        const idx = prev.findIndex((c) => c.id === id);
+        if (idx < 0) {
+          // Conversación no presente en la lista local. Solo si entra al universo
+          // visible (open/pending, no oculta) vale la pena reconciliar.
+          if (stillInScope && !hiddenByTag) scheduleListRefetch(1500);
+          return prev;
+        }
+        // Si sale del universo visible, quitarla.
+        if (!stillInScope || hiddenByTag) {
+          return prev.filter((c) => c.id !== id);
+        }
+        const cur = prev[idx];
+        const next = [...prev];
+        const lastMessageAt =
+          typeof row.last_message_at === "string" ? row.last_message_at : cur.last_message_at;
+        const lastMessagePreview =
+          typeof row.last_message_preview === "string" ? row.last_message_preview : cur.last_message_preview;
+        const unreadCount =
+          typeof row.unread_count === "number" ? row.unread_count : cur.unread_count;
+        next[idx] = {
+          ...cur,
+          status: stillInScope ? status ?? cur.status : cur.status,
+          priority: typeof row.priority === "string" ? row.priority : cur.priority,
+          queue_id: (row.queue_id as string | null) ?? cur.queue_id,
+          assigned_agent_id: (row.assigned_agent_id as string | null) ?? cur.assigned_agent_id,
+          last_message_at: lastMessageAt,
+          last_message_preview: lastMessagePreview,
+          unread_count: unreadCount,
+          flow_status: typeof row.flow_status === "string" ? row.flow_status : cur.flow_status,
+          human_taken_over: row.human_taken_over === true ? true : row.human_taken_over === false ? false : cur.human_taken_over,
+          flow_code: typeof row.flow_code === "string" ? row.flow_code : cur.flow_code,
+          flow_current_node:
+            typeof row.flow_current_node === "string" ? row.flow_current_node : cur.flow_current_node,
+        };
+        next.sort((a, b) => {
+          const ta = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+          const tb = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+          return tb - ta;
+        });
+        return next;
+      });
+    },
+    [scheduleListRefetch]
+  );
+
+  /**
+   * PERF-2A: ante un INSERT en chat_messages, actualiza last_message_at/preview y
+   * unread de la conversación en la lista local sin recargar el inbox. Si la
+   * conversación no está en la lista (nueva o fuera del filtro actual), se programa
+   * un refetch debounced.
+   */
+  const patchConversationOnMessageInsert = useCallback(
+    (row: Record<string, unknown> | null | undefined) => {
+      if (!row || typeof row.conversation_id !== "string") return;
+      const convId = row.conversation_id;
+      const fromMe = row.from_me === true;
+      const createdAt = typeof row.created_at === "string" ? row.created_at : new Date().toISOString();
+      const previewRaw = typeof row.content === "string" ? row.content : null;
+      const preview = previewRaw ? previewRaw.slice(0, 280) : null;
+      setConversations((prev) => {
+        const idx = prev.findIndex((c) => c.id === convId);
+        if (idx < 0) {
+          scheduleListRefetch(1500);
+          return prev;
+        }
+        const cur = prev[idx];
+        const next = [...prev];
+        const bumpUnread = !fromMe && convId !== selectedIdRef.current;
+        next[idx] = {
+          ...cur,
+          last_message_at: createdAt,
+          last_message_preview: preview ?? cur.last_message_preview,
+          unread_count: bumpUnread ? (cur.unread_count ?? 0) + 1 : cur.unread_count,
+        };
+        next.sort((a, b) => {
+          const ta = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+          const tb = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+          return tb - ta;
+        });
+        return next;
+      });
+    },
+    [scheduleListRefetch]
+  );
+
+  /** Lista: Realtime sobre conversaciones (PERF-2A: merge incremental, sin full refetch). */
+  useEffect(() => {
+    if (!realtimeListo) return;
+    const channel = supabaseChat
+      .channel("conversaciones-inbox-list")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: chatDataSchema, table: "chat_conversations" },
+        (payload) => {
+          trackInboxRealtimeEvent("conversation", { event: payload.eventType });
+          // PERF-2A: parchar en local en vez de full refetch.
+          const newRow = payload.new as Record<string, unknown> | null;
+          const oldRow = payload.old as Record<string, unknown> | null;
+          patchConversationFromRealtime(newRow ?? oldRow);
+        }
+      )
+      .subscribe((status, err) => {
+        logRealtimeChannelState({
+          channel_name: "conversaciones-inbox-list",
+          schema: chatDataSchema,
+          table: "chat_conversations",
+          status,
+          error_message: err instanceof Error ? err.message : err ? String(err) : null,
+        });
+      });
+
+    return () => {
+      void supabaseChat.removeChannel(channel);
+    };
+  }, [chatDataSchema, supabaseChat, patchConversationFromRealtime, realtimeListo]);
+
+  /** Mensajes entrantes: PERF-2A patch local + beep si corresponde (sin full refetch). */
+  useEffect(() => {
+    if (!realtimeListo) return;
+    const channel = supabaseChat
+      .channel("conversaciones-inbox-inbound-messages")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: chatDataSchema, table: "chat_messages" },
+        (payload) => {
+          trackInboxRealtimeEvent("message_list", { event: payload.eventType });
+          const row = payload.new as Record<string, unknown>;
+          // PERF-2A: actualizar preview/unread/last_message_at en local.
+          patchConversationOnMessageInsert(row);
+          // Si el hilo está abierto, el canal por-hilo (más abajo) ya lo agrega via mergeRow.
+          // Solo si no hay canal de hilo activo (race), refrescamos puntualmente.
+          const convId = typeof row?.conversation_id === "string" ? row.conversation_id : "";
+          if (convId && convId === selectedIdRef.current) {
+            // El canal por-hilo lo manejará via mergeRow. No disparamos fetch redundante.
+          }
+          const mid = typeof row?.id === "string" ? row.id : "";
+          if (!mid || row.from_me === true) return;
+          if (inboundSoundMsgIdsRef.current.has(mid)) return;
+          inboundSoundMsgIdsRef.current.add(mid);
+          if (inboundSoundMsgIdsRef.current.size > 600) {
+            inboundSoundMsgIdsRef.current.clear();
+          }
+          if (!inboxSoundPrimedRef.current) return;
+          if (readInboxNotificationSoundEnabled()) {
+            playInboxNotificationBeep();
+          }
+        }
+      )
+      .subscribe((status, err) => {
+        logRealtimeChannelState({
+          channel_name: "conversaciones-inbox-inbound-messages",
+          schema: chatDataSchema,
+          table: "chat_messages",
+          status,
+          error_message: err instanceof Error ? err.message : err ? String(err) : null,
+        });
+      });
+
+    return () => {
+      void supabaseChat.removeChannel(channel);
+    };
+  }, [chatDataSchema, supabaseChat, patchConversationOnMessageInsert, realtimeListo]);
+
+  /**
+   * PERF-2A: red de seguridad si Realtime falla (publicación RLS, websocket caído).
+   * Antes corría cada 2.8s con full refetch — eso saturaba el pool.
+   * Ahora 60s, solo cuando la pestaña está visible. Realtime sigue siendo el motor principal.
+   */
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      trackInboxPollingList({ visibility: "visible" });
+      void loadConversationsRef.current?.({ silent: true });
+    }, 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  /** Al volver a la pestaña, sincronizar de inmediato (evita depender solo del intervalo). */
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      void loadConversationsRef.current?.({ silent: true });
+      const sid = selectedIdRef.current;
+      if (sid) void loadMessagesRef.current(sid, { silent: true });
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
+
+  /**
+   * PERF-2A: con hilo abierto, el canal por-hilo ya hace merge incremental
+   * (mergeRow en INSERT y UPDATE). Antes corría además un setInterval(2.8s)
+   * con full refetch del hilo — eso era el doble de tráfico que el inbox.
+   * Ahora 30s, solo como red de seguridad si Realtime de mensajes falla.
+   */
+  useEffect(() => {
+    if (!selectedId) return;
+    const id = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      trackInboxPollingThread({ has_selected: true });
+      void loadMessagesRef.current(selectedId, { silent: true });
+    }, 30_000);
+    return () => window.clearInterval(id);
+  }, [selectedId]);
+
+  /** Mensajes del hilo abierto: INSERT/UPDATE en tiempo real (UPDATE cubre enrich de media YCloud). */
+  useEffect(() => {
+    if (!selectedId) return;
+
+    const mergeRow = (row: Record<string, unknown>) => {
+      if (!row?.id) return;
+      const msg = mapRowToMessage(row);
+      setMessages((prev) => {
+        const i = prev.findIndex((m) => m.id === msg.id);
+        let next: ChatMessage[];
+        if (i >= 0) {
+          next = [...prev];
+          next[i] = msg;
+        } else {
+          next = [...prev, msg].sort(
+            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          );
+        }
+        messagesSessionCacheRef.current.set(selectedId, next);
+        return next;
+      });
+    };
+
+    const channel = supabaseChat
+      .channel(`conversaciones-msg-${selectedId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: chatDataSchema,
+          table: "chat_messages",
+          filter: `conversation_id=eq.${selectedId}`,
+        },
+        (payload) => {
+          trackInboxRealtimeEvent("message_thread", { event: "INSERT" });
+          mergeRow(payload.new as Record<string, unknown>);
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: chatDataSchema,
+          table: "chat_messages",
+          filter: `conversation_id=eq.${selectedId}`,
+        },
+        (payload) => {
+          trackInboxRealtimeEvent("message_thread", { event: "UPDATE" });
+          mergeRow(payload.new as Record<string, unknown>);
+        }
+      )
+      .subscribe((status, err) => {
+        logRealtimeChannelState({
+          channel_name: `conversaciones-msg-${selectedId}`,
+          schema: chatDataSchema,
+          table: "chat_messages",
+          status,
+          error_message: err instanceof Error ? err.message : err ? String(err) : null,
+        });
+      });
+
+    return () => {
+      void supabaseChat.removeChannel(channel);
+    };
+  }, [selectedId, chatDataSchema, supabaseChat, realtimeListo]);
+
+  const onMessagesScroll = useCallback(() => {
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    const threshold = 100;
+    stickBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!selectedId || messages.length === 0) return;
+    const last = messages[messages.length - 1]?.id;
+    const prev = lastMessageIdRef.current;
+    lastMessageIdRef.current = last;
+
+    if (last === prev) return;
+
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    if (!stickBottomRef.current && prev !== null) return;
+
+    const abrirChat = prev === null; // primera carga del hilo → siempre abrir al fondo
+    el.scrollTop = el.scrollHeight;
+    // Re-scroll en el siguiente frame: cubre layout tardío (imágenes que cargan, hidratación
+    // desde cache) para que SIEMPRE quede al fondo al abrir. En mensajes nuevos solo si sigue pegado.
+    requestAnimationFrame(() => {
+      const el2 = messagesScrollRef.current;
+      if (el2 && (abrirChat || stickBottomRef.current)) el2.scrollTop = el2.scrollHeight;
+    });
+    // Al ABRIR un hilo, insistimos con un par de re-scrolls diferidos: media/citas/fuentes pueden
+    // cambiar el alto unos ms después del primer frame y dejarte viendo mensajes viejos. Solo
+    // mientras sigas pegado al fondo (si scrolleás hacia arriba, no te tironea).
+    if (abrirChat) {
+      for (const delay of [80, 250, 500]) {
+        setTimeout(() => {
+          const el3 = messagesScrollRef.current;
+          if (el3 && stickBottomRef.current) el3.scrollTop = el3.scrollHeight;
+        }, delay);
+      }
+    }
+  }, [messages, selectedId]);
+
+  // Ancla-al-fondo A PRUEBA DE BALAS: callback-ref que ata un ResizeObserver al wrapper del
+  // contenido EN EL MOMENTO en que monta (no depende del timing de effects, que se enganchaban
+  // tarde en el primer chat sin cache). Ante cualquier cambio de alto (imágenes async, fase
+  // cache→fresco, audio, citas) re-ancla al fondo si el usuario sigue pegado abajo, O si acabás de
+  // abrir el chat (ventana openUntilRef), aunque stickBottom todavía no esté fijado. Si subís a
+  // leer historial, no te tironea (pasada la ventana y con stickBottom=false).
+  const setMessagesContentNode = useCallback((node: HTMLDivElement | null) => {
+    contentRoRef.current?.disconnect();
+    contentRoRef.current = null;
+    if (node && typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(() => {
+        if (stickBottomRef.current || Date.now() < openUntilRef.current) {
+          const s = messagesScrollRef.current;
+          if (s) s.scrollTop = s.scrollHeight;
+        }
+      });
+      ro.observe(node);
+      contentRoRef.current = ro;
+    }
+  }, []);
+
+  // Auto-alto del composer (tipo WhatsApp): crece con el texto hasta ~6 líneas y luego hace
+  // scroll interno, manteniendo el contexto de lo que se escribe. Se recalcula en cada cambio
+  // (incluye el reset a 1 línea cuando se limpia tras enviar).
+  useLayoutEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+  }, [input]);
+
+  // Al encolar un envío optimista, pegamos el scroll al fondo para que se vea "enviando…".
+  useLayoutEffect(() => {
+    if (!stickBottomRef.current) return;
+    const el = messagesScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [pendingSends.length]);
+
+  /**
+   * Prefetch al pasar el mouse: precarga (silencioso) los mensajes de la conversación al
+   * cache, para que al hacer clic abra INSTANTÁNEO. Silent + no seleccionada = puebla el
+   * cache sin tocar la UI. Dedupe por conversación y salteo si ya está cacheada.
+   */
+  const prefetchConversation = useCallback((id: string) => {
+    const cid = id.trim();
+    if (!cid || cid === selectedIdRef.current) return;
+    if (prefetchedRef.current.has(cid)) return;
+    if ((messagesSessionCacheRef.current.get(cid)?.length ?? 0) > 0) return;
+    prefetchedRef.current.add(cid);
+    void loadMessagesRef.current(cid, { silent: true });
+  }, []);
+
+  const onHoverConversation = useCallback(
+    (id: string) => {
+      if (prefetchTimerRef.current) clearTimeout(prefetchTimerRef.current);
+      // pequeño delay: evita precargar en pasadas rápidas del cursor.
+      prefetchTimerRef.current = setTimeout(() => prefetchConversation(id), 120);
+    },
+    [prefetchConversation]
+  );
+
+  const onLeaveConversation = useCallback(() => {
+    if (prefetchTimerRef.current) {
+      clearTimeout(prefetchTimerRef.current);
+      prefetchTimerRef.current = null;
+    }
+  }, []);
+
+  const handleSelect = useCallback(
+    async (id: string) => {
+      stickBottomRef.current = true;
+      // Ventana de gracia: durante ~1s tras abrir, el observer fuerza el fondo aunque las imágenes
+      // carguen tarde o stickBottom aún no esté fijado (arregla que el primer chat abría arriba).
+      openUntilRef.current = Date.now() + 1000;
+      lastMessageIdRef.current = null;
+      setMessagesError(null);
+      setSelectedId(id);
+      await loadMessages(id);
+      const compOn = conversations.some(
+        (c) => c.id === id && c.channel.comprobante_validation_enabled === true
+      );
+      if (compOn) {
+        setCompLoading(true);
+        try {
+          const rows = await fetchComprobanteValidacionesForConversation(id);
+          setCompVals(rows);
+        } catch {
+          setCompVals([]);
+        } finally {
+          setCompLoading(false);
+        }
+      } else {
+        setCompVals([]);
+        setCompLoading(false);
+      }
+      try {
+        await markConversationRead(id);
+        setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, unread_count: 0 } : c)));
+      } catch {
+        /* no bloquear UI */
+      }
+    },
+    [loadMessages, conversations]
+  );
+
+  async function handleSendFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !selectedId || uploadingFile) return;
+    await sendMediaFile(file);
+  }
+
+  async function handleReleaseToBot() {
+    if (!selectedId || releasingBot) return;
+    setReleasingBot(true);
+    setSendError(null);
+    try {
+      await releaseConversationToBot(selectedId);
+      await loadConversations({ silent: true });
+      if (vista === "inbox") {
+        setSelectedId(null);
+        setMessages([]);
+      }
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : "No se pudo devolver al bot");
+    } finally {
+      setReleasingBot(false);
+    }
+  }
+
+  async function runConversationOp(fn: () => Promise<void>) {
+    if (!selectedId || opsBusy) return;
+    setOpsBusy(true);
+    setSendError(null);
+    try {
+      await fn();
+      await loadConversations({ silent: true });
+    } catch (e) {
+      setSendError(e instanceof Error ? e.message : "Error en la acción");
+    } finally {
+      setOpsBusy(false);
+    }
+  }
+
+  // Precarga (y cachea) las opciones de cierre al seleccionar una conversación abierta, para que
+  // el modal de Finalizar aparezca al instante (antes tardaba ~3s al abrirlo).
+  useEffect(() => {
+    if (mode !== "inbox" || !selectedId) return;
+    const clave = claveTipificacion(selectedId);
+    if (finalizeOptionsCacheRef.current.has(clave)) return;
+    const sel = conversationsRef.current.find((c) => c.id === selectedId);
+    if (!sel || sel.status === "closed") return;
+    let cancelled = false;
+    void loadFinalizeOptionsForConversation(selectedId)
+      .then((opts) => {
+        if (!cancelled) finalizeOptionsCacheRef.current.set(clave, opts);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, mode, claveTipificacion]);
+
+  function applyFinalizeOptions(opts: FinalizeOptionsResult) {
+    setFinalizeOptions(opts);
+    const first = opts.states[0];
+    if (first) {
+      setFinalizeStateId(first.id);
+      setFinalizeSubstateId(first.substates[0]?.id ?? "");
+    }
+  }
+
+  async function openFinalizeModal() {
+    const sel = selectedId ? conversations.find((c) => c.id === selectedId) : null;
+    if (!selectedId || !sel || sel.status === "closed") return;
+    setFinalizeModalError(null);
+    setFinalizeOpen(true);
+    setFinalizeStateId("");
+    setFinalizeSubstateId("");
+    setFinalizeComment("");
+
+    // Si ya lo tenemos —de esta conversación o de otra de la misma cola— el
+    // modal aparece INSTANTÁNEO.
+    const clave = claveTipificacion(selectedId);
+    const cached = finalizeOptionsCacheRef.current.get(clave);
+    if (cached) {
+      applyFinalizeOptions(cached);
+      setFinalizeLoading(false);
+      return;
+    }
+
+    setFinalizeLoading(true);
+    setFinalizeOptions(null);
+    try {
+      const opts = await loadFinalizeOptionsForConversation(selectedId);
+      finalizeOptionsCacheRef.current.set(clave, opts);
+      applyFinalizeOptions(opts);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "No se pudieron cargar las opciones de cierre";
+      setFinalizeModalError(msg);
+      if (msg.includes("finalizada")) {
+        setFinalizeOpen(false);
+      }
+    } finally {
+      setFinalizeLoading(false);
+    }
+  }
+
+  function closeFinalizeModal() {
+    if (finalizeSaving) return;
+    setFinalizeOpen(false);
+    setFinalizeModalError(null);
+  }
+
+  async function confirmFinalize() {
+    if (!selectedId || !finalizeOptions) return;
+    setFinalizeModalError(null);
+    const st = finalizeOptions.states.find((x) => x.id === finalizeStateId);
+    if (!st) {
+      setFinalizeModalError("Elegí un estado.");
+      return;
+    }
+    if (st.substates.length > 0 && !finalizeSubstateId) {
+      setFinalizeModalError("Elegí un subestado.");
+      return;
+    }
+    const comment = finalizeComment.trim();
+    if (comment.length < 3) {
+      setFinalizeModalError("El comentario es obligatorio (al menos 3 caracteres).");
+      return;
+    }
+    const sub = st.substates.find((x) => x.id === finalizeSubstateId);
+    setFinalizeSaving(true);
+    try {
+      await finalizeConversationWithClosure({
+        conversationId: selectedId,
+        closureStateId: st.id,
+        closureSubstateId: st.substates.length > 0 ? finalizeSubstateId : null,
+        closureStateLabel: st.label,
+        closureSubstateLabel: sub?.label ?? (st.substates.length > 0 ? "" : "—"),
+        comment,
+      });
+      setFinalizeOpen(false);
+      setFinalizeOptions(null);
+      const closedId = selectedId;
+      // La tipificación NO se invalida: es de la cola, no de la conversación, y
+      // no cambió porque este chat se haya cerrado. Borrarla obligaría a
+      // pedirla de nuevo en el próximo cierre de la misma cola.
+      if (mode === "inbox") {
+        // Optimista: la conversación sale de la vista YA, sin esperar el refresco. Como el inbox
+        // solo trae abiertas/pendientes, el refresco tampoco la devuelve.
+        setConversations((prev) => prev.filter((c) => c.id !== closedId));
+        setSelectedId(null);
+        setMessages([]);
+      }
+      void loadConversations({ silent: true }); // reconciliar en 2º plano (no bloquea la UI)
+    } catch (e) {
+      setFinalizeModalError(e instanceof Error ? e.message : "No se pudo finalizar la conversación");
+    } finally {
+      setFinalizeSaving(false);
+    }
+  }
+
+  // Envío de texto en 2º plano: NO bloquea el composer. El mensaje ya se ve como "enviando…"
+  // (pendingSends); acá se confirma y se reconcilia con el server. Traemos el mensaje real
+  // ANTES de quitar el optimista para que no parpadee (React 18 batchea ambos setState).
+  async function doSendText(text: string, tempId: string, cid: string, reply?: ChatMessage | null) {
+    try {
+      const bodyObj: Record<string, unknown> = { conversation_id: cid, message: text };
+      if (reply) {
+        // reply_to_wamid → cita real en WhatsApp; reply_context → snapshot para nuestra UI.
+        if (reply.wa_message_id) bodyObj.reply_to_wamid = reply.wa_message_id;
+        bodyObj.reply_context = {
+          wa_message_id: reply.wa_message_id ?? null,
+          from_me: reply.from_me,
+          preview: messagePreview(reply),
+          message_type: reply.message_type,
+        };
+      }
+      const res = await fetchWithSupabaseSession("/api/chat/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(bodyObj),
+      });
+      const json = (await res.json().catch(() => ({}))) as { error?: string; meta?: unknown };
+      if (!res.ok) {
+        const base =
+          typeof json.error === "string"
+            ? json.error
+            : res.status === 401
+              ? "Sesión expirada o no autenticado"
+              : `Error al enviar (HTTP ${res.status})`;
+        throw new Error(base);
+      }
+      if (selectedIdRef.current === cid) {
+        await loadMessagesRef.current?.(cid, { silent: true });
+      }
+      setPendingSends((prev) => prev.filter((p) => p.tempId !== tempId));
+      setSendError(null);
+      void loadConversationsRef.current?.({ silent: true });
+    } catch (err) {
+      setPendingSends((prev) =>
+        prev.map((p) => (p.tempId === tempId ? { ...p, status: "error" as const } : p))
+      );
+      setSendError(err instanceof Error ? err.message : "Error al enviar");
+    }
+  }
+
+  function submitCurrentText() {
+    const cid = selectedId;
+    if (!cid) return;
+    // Si hay una nota de voz grabada esperando confirmación, ESA es la que se envía.
+    if (pendingVoice) {
+      const file = pendingVoice.file;
+      URL.revokeObjectURL(pendingVoice.url);
+      setPendingVoice(null);
+      setSendError(null);
+      stickBottomRef.current = true;
+      void sendMediaFile(file);
+      return;
+    }
+    const text = input.trim();
+    if (!text) return;
+    const reply = replyingTo; // capturar la cita ANTES de limpiar el composer
+    const tempId = `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    setInput(""); // el textarea se limpia YA (el auto-size lo vuelve a 1 línea)
+    setReplyingTo(null); // la cita se consume al enviar
+    setSendError(null);
+    stickBottomRef.current = true;
+    setPendingSends((prev) => [...prev, { tempId, convId: cid, text, status: "sending" as const }]);
+    composerRef.current?.focus(); // seguir escribiendo sin re-clic (sobre todo al usar el botón)
+    void doSendText(text, tempId, cid, reply);
+  }
+
+  function handleSend(e: React.FormEvent) {
+    e.preventDefault();
+    submitCurrentText();
+  }
+
+  function retryPendingSend(tempId: string) {
+    const p = pendingSends.find((x) => x.tempId === tempId);
+    if (!p) return;
+    setPendingSends((prev) => prev.map((x) => (x.tempId === tempId ? { ...x, status: "sending" as const } : x)));
+    void doSendText(p.text, p.tempId, p.convId);
+  }
+
+  function handleComposerKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // Enter envía; Shift+Enter hace salto de línea (default del textarea). Ignoramos Enter
+    // mientras se compone con IME (acentos/teclados) para no cortar la escritura.
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      submitCurrentText();
+    }
+  }
+
+  // ---- Recontacto con plantilla ----
+  async function openTemplatePanel() {
+    if (!selectedId) return;
+    setTplPanelOpen(true);
+    setTplError(null);
+    setTplSelectedId(null);
+    setTplVars({});
+    setTplLoading(true);
+    try {
+      const res = await fetchWithSupabaseSession(
+        `/api/chat/templates?conversation_id=${encodeURIComponent(selectedId)}`,
+        { cache: "no-store" }
+      );
+      const json = (await res.json().catch(() => ({}))) as { data?: InboxTemplate[] };
+      setTplList(Array.isArray(json.data) ? json.data : []);
+    } catch {
+      setTplList([]);
+      setTplError("No se pudieron cargar las plantillas.");
+    } finally {
+      setTplLoading(false);
+    }
+  }
+
+  function selectTemplate(t: InboxTemplate) {
+    setTplSelectedId(t.id);
+    setTplError(null);
+    const slots = extractBodyPlaceholderKeysOrdered(t.components_json ?? []);
+    const contactName = isHumanContactName(selected?.contact.name, selected?.contact.phone_number)
+      ? (selected?.contact.name ?? "").trim()
+      : "";
+    const init: Record<string, string> = {};
+    for (const s of slots) {
+      const low = s.toLowerCase();
+      init[s] = low === "nombre" || low === "1" || low.includes("nombre") ? contactName : "";
+    }
+    setTplVars(init);
+  }
+
+  async function sendTemplate() {
+    const cid = selectedId;
+    const t = tplList.find((x) => x.id === tplSelectedId);
+    if (!cid || !t || tplSending) return;
+    const slots = extractBodyPlaceholderKeysOrdered(t.components_json ?? []);
+    const missing = slots.filter((s) => !(tplVars[s] ?? "").trim());
+    if (missing.length > 0) {
+      setTplError(`Completá: ${missing.join(", ")}`);
+      return;
+    }
+    setTplSending(true);
+    setTplError(null);
+    try {
+      const res = await fetchWithSupabaseSession("/api/chat/send-template", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ conversation_id: cid, template_id: t.id, variables: tplVars }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+      if (!res.ok || json.ok === false) throw new Error(json.error || `Error ${res.status}`);
+      setTplPanelOpen(false);
+      setTplSelectedId(null);
+      setTplVars({});
+      stickBottomRef.current = true;
+      await loadMessages(cid, { silent: true });
+      await loadConversations({ silent: true });
+    } catch (e) {
+      setTplError(e instanceof Error ? e.message : "No se pudo enviar la plantilla");
+    } finally {
+      setTplSending(false);
+    }
+  }
+
+  // La búsqueda es server-side (debouncedQ → backend). El inbox trae SOLO abiertas/pendientes
+  // (el backend ya no devuelve finalizadas ni buscando), así que no hace falta filtrar localmente.
+  const visibleConversations = conversations;
+
+  const selected = conversations.find((c) => c.id === selectedId);
+
+  // Chat cuyo contacto no está asociado a un cliente: se busca por teléfono
+  // (ficha o contactos secundarios) y, si hay uno solo, el servidor lo deja
+  // vinculado. Una vez por conversación. Deps por valor: `selected` cambia de
+  // identidad en cada refresco del inbox y eso cancelaría el pedido.
+  const sinClienteId = selected && !selected.contact.cliente_id ? selected.id : null;
+  const yaBuscado = sinClienteId ? sinClienteId in clienteDeChat : true;
+  useEffect(() => {
+    if (!sinClienteId || yaBuscado) return;
+    let vivo = true;
+    fetchWithSupabaseSession("/api/chat/contactos/vincular-cliente", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversation_id: sinClienteId }),
+    })
+      .then((r) => r.json())
+      .then((j: { data?: { cliente_id?: string | null } }) => {
+        if (vivo) setClienteDeChat((m) => ({ ...m, [sinClienteId]: j?.data?.cliente_id ?? null }));
+      })
+      .catch(() => {});
+    return () => {
+      vivo = false;
+    };
+  }, [sinClienteId, yaBuscado]);
+
+  // Ventana de servicio 24h: abierta si el contacto escribió hace < 24h. Fuera de ella, un
+  // mensaje libre rebota (131047) → hay que recontactar con plantilla. Se calcula desde los
+  // mensajes cargados (último inbound).
+  const windowOpen = useMemo(() => {
+    let lastInbound = 0;
+    for (const m of messages) {
+      if (m.from_me) continue;
+      const t = new Date(m.created_at).getTime();
+      if (Number.isFinite(t) && t > lastInbound) lastInbound = t;
+    }
+    if (!lastInbound) return false;
+    return Date.now() - lastInbound < 24 * 60 * 60 * 1000;
+  }, [messages]);
+
+  const tplSelected = tplList.find((t) => t.id === tplSelectedId) ?? null;
+  const tplSlots = tplSelected ? extractBodyPlaceholderKeysOrdered(tplSelected.components_json ?? []) : [];
+  const tplPreview = tplSelected
+    ? getBodyComponentText(tplSelected.components_json ?? []).replace(PLACEHOLDER_RE, (_m, rawKey: string) => {
+        const k = String(rawKey).trim();
+        const v = (tplVars[k] ?? "").trim();
+        return v || `{{${k}}}`;
+      })
+    : "";
+
+  const isHumanActive =
+    !!selected && (selected.human_taken_over || selected.flow_status === "human");
+  const requestedConversationId = searchParams?.get("conversationId") ?? null;
+
+  useEffect(() => {
+    const chId = selected?.channel?.id?.trim();
+    if (!chId || vista === "bot") {
+      setChannelQuickReplies([]);
+      setQuickReplyOpen(false);
+      setQuickReplySearch("");
+      return;
+    }
+    let cancelled = false;
+    setQuickRepliesLoading(true);
+    void listActiveQuickRepliesForChannel(chId)
+      .then((rows) => {
+        if (!cancelled) {
+          setChannelQuickReplies(rows.map((r) => ({ id: r.id, title: r.title, body: r.body })));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setChannelQuickReplies([]);
+      })
+      .finally(() => {
+        if (!cancelled) setQuickRepliesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected?.channel?.id, vista]);
+
+  useEffect(() => {
+    if (selected?.channel.quick_replies_inbox_enabled === false) {
+      setQuickReplyOpen(false);
+    }
+  }, [selected?.channel.quick_replies_inbox_enabled]);
+
+  useEffect(() => {
+    if (!quickReplyOpen) return;
+    function onKey(ev: KeyboardEvent) {
+      if (ev.key === "Escape") setQuickReplyOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [quickReplyOpen]);
+
+  useEffect(() => {
+    if (!quickReplyOpen) return;
+    function onDoc(ev: MouseEvent) {
+      const el = quickReplyPanelRef.current;
+      if (!el) return;
+      const t = ev.target;
+      if (t instanceof Node && el.contains(t)) return;
+      setQuickReplyOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [quickReplyOpen]);
+
+  useEffect(() => {
+    if (!emojiOpen) return;
+    function onDoc(ev: MouseEvent) {
+      const el = emojiPanelRef.current;
+      if (!el) return;
+      const t = ev.target;
+      if (t instanceof Node && el.contains(t)) return;
+      setEmojiOpen(false);
+    }
+    function onKey(ev: KeyboardEvent) {
+      if (ev.key === "Escape") setEmojiOpen(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [emojiOpen]);
+
+  const filteredQuickReplies = useMemo(() => {
+    const q = quickReplySearch.trim().toLowerCase();
+    if (!q) return channelQuickReplies;
+    return channelQuickReplies.filter(
+      (r) =>
+        r.title.toLowerCase().includes(q) ||
+        r.body.toLowerCase().includes(q)
+    );
+  }, [channelQuickReplies, quickReplySearch]);
+
+  /** Inserta un emoji en la posición del cursor del composer (o al final si no hay foco). */
+  function insertEmoji(emoji: string) {
+    const el = composerRef.current;
+    if (!el) {
+      setInput((prev) => prev + emoji);
+      return;
+    }
+    const start = el.selectionStart ?? input.length;
+    const end = el.selectionEnd ?? input.length;
+    setInput(input.slice(0, start) + emoji + input.slice(end));
+    requestAnimationFrame(() => {
+      el.focus();
+      const pos = start + emoji.length;
+      el.setSelectionRange(pos, pos);
+    });
+  }
+
+  function insertQuickReplyBody(text: string) {
+    const t = text.trim();
+    if (!t) return;
+    setInput((prev) => {
+      if (!prev.trim()) return t;
+      return `${prev.trimEnd()}\n\n${t}`;
+    });
+    setQuickReplyOpen(false);
+    setQuickReplySearch("");
+  }
+
+  useEffect(() => {
+    if (!requestedConversationId || !conversations.length) return;
+    if (selectedId === requestedConversationId) return;
+    const exists = conversations.some((c) => c.id === requestedConversationId);
+    if (!exists) return;
+    void handleSelect(requestedConversationId);
+  }, [requestedConversationId, conversations, selectedId, handleSelect]);
+
+  const transferFromUrl = searchParams?.get("transferir") === "1";
+  const transferUrlConsumed = useRef(false);
+  useEffect(() => {
+    transferUrlConsumed.current = false;
+  }, [transferFromUrl, requestedConversationId]);
+
+  useEffect(() => {
+    if (!transferFromUrl || !requestedConversationId) return;
+    if (selectedId !== requestedConversationId) return;
+    if (transferUrlConsumed.current) return;
+    transferUrlConsumed.current = true;
+    setTransferModalOpen(true);
+    patchInboxQuery({ transferir: null });
+  }, [transferFromUrl, requestedConversationId, selectedId, patchInboxQuery]);
+
+  useEffect(() => {
+    if (selectedId && !conversations.some((c) => c.id === selectedId)) {
+      setSelectedId(null);
+      setMessages([]);
+    }
+  }, [conversations, selectedId]);
+
+  useEffect(() => {
+    setCompValidacionesOpen(false);
+    setCompApprovalInfo(null);
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (!finalizeOptions || !finalizeStateId) return;
+    const st = finalizeOptions.states.find((s) => s.id === finalizeStateId);
+    if (!st) return;
+    setFinalizeSubstateId((prev) =>
+      st.substates.some((sub) => sub.id === prev) ? prev : st.substates[0]?.id ?? ""
+    );
+  }, [finalizeStateId, finalizeOptions]);
+
+  return (
+    <div
+      ref={contenedorRef}
+      style={alto ? { height: `${alto}px`, maxHeight: `${alto}px` } : undefined}
+      className="flex min-h-0 flex-1 flex-col gap-1 overflow-hidden"
+    >
+      {lightbox ? (
+        <VisorImagen
+          url={lightbox.url}
+          nombre={lightbox.nombre}
+          onCerrar={() => setLightbox(null)}
+        />
+      ) : null}
+
+      {compApproveConfirmId ? (
+        <div
+          className="fixed inset-0 z-[105] flex items-center justify-center bg-black/40 p-4"
+          role="presentation"
+          onClick={() => setCompApproveConfirmId(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-md rounded-2xl border border-slate-200 bg-white shadow-xl p-5"
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <p className="text-sm text-slate-800 font-medium">Confirmar aprobación</p>
+            <p className="mt-2 text-xs text-slate-600 leading-relaxed">
+              ¿Confirmás aprobar este comprobante y cerrar la compra? Esto generará cupones y enviará el resumen al
+              cliente por WhatsApp (y el ticket PNG si el sorteo lo tiene configurado).
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                onClick={() => setCompApproveConfirmId(null)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(compActionId)}
+                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                onClick={() => {
+                  const vid = compApproveConfirmId;
+                  const convId = selectedId;
+                  if (!vid || !convId) return;
+                  setCompApproveConfirmId(null);
+                  void (async () => {
+                    setCompActionId(vid);
+                    setSendError(null);
+                    setCompApprovalInfo(null);
+                    try {
+                      const res = await approveComprobanteValidacion(vid);
+                      if (!res.ok) {
+                        setSendError(res.message);
+                      } else if (res.mode === "pending_participant_data") {
+                        const parts = [
+                          "Comprobante aprobado. Faltan datos del participante; el bot continuará la carga por WhatsApp.",
+                          res.nextNodeCode ? `(Siguiente paso: ${res.nextNodeCode})` : "",
+                          res.missingFields?.length
+                            ? `Pendiente: ${res.missingFields.join(", ")}.`
+                            : "",
+                        ].filter(Boolean);
+                        if (res.whatsappWarning) parts.push(`WhatsApp: ${res.whatsappWarning}`);
+                        setCompApprovalInfo(parts.join(" "));
+                      } else if (res.mode === "pending_final_confirmation") {
+                        const parts = [
+                          "Comprobante aprobado. El cliente debe confirmar en el resumen del chat para crear la orden.",
+                          res.nextNodeCode ? `(Paso: ${res.nextNodeCode})` : "",
+                        ].filter(Boolean);
+                        if (res.whatsappWarning) parts.push(`WhatsApp: ${res.whatsappWarning}`);
+                        setCompApprovalInfo(parts.join(" "));
+                      } else if (res.mode === "order_closed") {
+                        const parts = [
+                          res.reused ? "Orden ya existente (reutilizada)." : "Compra cerrada.",
+                          `Orden Nº ${res.numeroOrden}.`,
+                          `${res.cuponesCount} cupón(es).`,
+                        ];
+                        if (res.whatsappWarning) parts.push(`WhatsApp: ${res.whatsappWarning}`);
+                        if (res.ticketWarning) parts.push(`Ticket: ${res.ticketWarning}`);
+                        setCompApprovalInfo(parts.join(" "));
+                      }
+                      const rows = await fetchComprobanteValidacionesForConversation(convId);
+                      setCompVals(rows);
+                    } catch (e) {
+                      setSendError(e instanceof Error ? e.message : "No se pudo aprobar el comprobante");
+                    } finally {
+                      setCompActionId(null);
+                    }
+                  })();
+                }}
+              >
+                Aprobar y cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {finalizeOpen ? (
+        <div
+          className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[2px]"
+          role="presentation"
+          onClick={() => closeFinalizeModal()}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="finalize-chat-title"
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-[#4FAEB2]/25 bg-white shadow-2xl shadow-[#2F6E71]/15"
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            {/* Cabecera con el color de marca: separa el "qué estoy haciendo"
+                del formulario, sin robarle atención a los campos. */}
+            <div className="flex items-start gap-3 border-b border-[#4FAEB2]/20 bg-gradient-to-r from-[#4FAEB2]/14 via-[#4FAEB2]/6 to-transparent px-5 py-4">
+              <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#4FAEB2]/15 text-[#2F6E71]">
+                <CheckCircle2 className="h-5 w-5" />
+              </span>
+              <div className="min-w-0">
+                <h2 id="finalize-chat-title" className="text-[17px] font-semibold text-slate-900">
+                  Finalizar conversación
+                </h2>
+                <p className="mt-0.5 text-[13px] leading-relaxed text-slate-600">
+                  El resultado queda en el historial. Todos los campos son obligatorios.
+                </p>
+              </div>
+            </div>
+            <div className="px-5 pb-5 pt-4">
+            {finalizeLoading ? (
+              // Esqueleto en vez de una frase: dice "acá van tres campos" y el
+              // modal no cambia de tamaño cuando llegan.
+              <div className="space-y-3">
+                {[0, 1].map((i) => (
+                  <div key={i}>
+                    <span className="mb-1.5 block h-2.5 w-20 animate-pulse rounded bg-slate-100" />
+                    <span className="block h-10 animate-pulse rounded-xl bg-slate-100" />
+                  </div>
+                ))}
+                <div>
+                  <span className="mb-1.5 block h-2.5 w-24 animate-pulse rounded bg-slate-100" />
+                  <span className="block h-20 animate-pulse rounded-xl bg-slate-100" />
+                </div>
+              </div>
+            ) : finalizeOptions && finalizeOptions.states.length > 0 ? (
+              <div className="mt-4 space-y-3">
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-[#2F6E71]">Estado</label>
+                  <select
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm transition-colors focus:border-[#4FAEB2] focus:outline-none focus:ring-2 focus:ring-[#4FAEB2]/20"
+                    value={finalizeStateId}
+                    onChange={(e) => setFinalizeStateId(e.target.value)}
+                  >
+                    {finalizeOptions.states.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {(() => {
+                  const st = finalizeOptions.states.find((s) => s.id === finalizeStateId);
+                  if (!st || st.substates.length === 0) return null;
+                  return (
+                    <div>
+                      <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-[#2F6E71]">Subestado</label>
+                      <select
+                        className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                        value={finalizeSubstateId}
+                        onChange={(e) => setFinalizeSubstateId(e.target.value)}
+                      >
+                        <option value="">Elegir…</option>
+                        {st.substates.map((sub) => (
+                          <option key={sub.id} value={sub.id}>
+                            {sub.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                })()}
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-[#2F6E71]">Comentario</label>
+                  <textarea
+                    className="w-full min-h-[88px] resize-y rounded-xl border border-slate-200 px-3 py-2.5 text-sm transition-colors focus:border-[#4FAEB2] focus:outline-none focus:ring-2 focus:ring-[#4FAEB2]/20"
+                    value={finalizeComment}
+                    onChange={(e) => setFinalizeComment(e.target.value)}
+                    placeholder="Resumí el resultado o próximos pasos para el equipo."
+                  />
+                </div>
+                {finalizeOptions.source === "fallback" ? (
+                  <p className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1.5">
+                    Esta cola no tiene estados propios configurados. Se muestran opciones por defecto hasta que un
+                    administrador los defina en la configuración de la cola.
+                  </p>
+                ) : null}
+              </div>
+            ) : (
+              <p className="mt-4 text-sm text-red-700">No hay estados de cierre disponibles.</p>
+            )}
+            {finalizeModalError ? (
+              <p className="mt-3 text-sm text-red-700 bg-red-50 border border-red-100 rounded-lg px-2 py-1.5">
+                {finalizeModalError}
+              </p>
+            ) : null}
+            <div className="mt-5 flex flex-wrap justify-end gap-2 border-t border-slate-100 pt-4">
+              <button
+                type="button"
+                disabled={finalizeSaving}
+                onClick={() => closeFinalizeModal()}
+                className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={finalizeSaving || finalizeLoading || !finalizeOptions || finalizeOptions.states.length === 0}
+                onClick={() => void confirmFinalize()}
+                className="rounded-xl bg-[#4FAEB2] px-5 py-2.5 text-sm font-semibold text-white shadow-sm shadow-[#4FAEB2]/25 transition-colors hover:bg-[#3F8E91] disabled:opacity-50"
+              >
+                {finalizeSaving ? "Guardando…" : "Confirmar finalización"}
+              </button>
+            </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {transferModalOpen && selected && vista !== "bot" ? (
+        <div
+          className="fixed inset-0 z-[115] flex items-center justify-center bg-black/40 p-4"
+          role="presentation"
+          onClick={() => setTransferModalOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="transfer-chat-title"
+            className="flex max-h-[min(92vh,720px)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[#4FAEB2]/25 bg-white shadow-2xl shadow-[#2F6E71]/15"
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <div className="flex shrink-0 items-start gap-3 border-b border-[#4FAEB2]/20 bg-gradient-to-r from-[#4FAEB2]/14 via-[#4FAEB2]/6 to-transparent px-5 py-4">
+              <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#4FAEB2]/15 text-[#2F6E71]">
+                <ArrowLeftRight className="h-5 w-5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h2 id="transfer-chat-title" className="text-[17px] font-semibold text-slate-900">
+                  Transferir conversación
+                </h2>
+                <p className="mt-0.5 text-[13px] leading-relaxed text-slate-600">
+                  Elegí cola y/o agente. Los números reflejan chats abiertos asignados al agente.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="shrink-0 rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white/70 hover:text-slate-700"
+                onClick={() => setTransferModalOpen(false)}
+                aria-label="Cerrar"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="px-5 py-4 space-y-5 overflow-y-auto overscroll-contain flex-1 min-h-0">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-2">
+                  Colas
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <select
+                    disabled={opsBusy}
+                    className="min-w-[12rem] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm transition-colors focus:border-[#4FAEB2] focus:outline-none focus:ring-2 focus:ring-[#4FAEB2]/20"
+                    value={transferQueueTarget}
+                    onChange={(e) => setTransferQueueTarget(e.target.value)}
+                    aria-label="Cola destino y filtro de agentes"
+                  >
+                    <option value="">Todas las colas (tu alcance)</option>
+                    {transferQueues.map((q) => (
+                      <option key={q.id} value={q.id}>
+                        {q.nombre}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={opsBusy || !transferQueueTarget}
+                    onClick={() =>
+                      void runConversationOp(async () => {
+                        await changeConversationQueue(selected.id, transferQueueTarget);
+                        setTransferModalOpen(false);
+                      })
+                    }
+                    className="shrink-0 rounded-xl bg-[#4FAEB2] px-5 py-2.5 text-sm font-semibold text-white shadow-sm shadow-[#4FAEB2]/20 hover:bg-[#3F8E91] disabled:opacity-50 disabled:pointer-events-none"
+                  >
+                    Transferir
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                  <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wide">
+                    Agentes
+                  </label>
+                  <input
+                    type="search"
+                    value={transferAgentSearch}
+                    onChange={(e) => setTransferAgentSearch(e.target.value)}
+                    placeholder="Buscar"
+                    className="w-full max-w-[14rem] border border-slate-200 rounded-xl px-3 py-2 text-sm bg-white placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-[#4FAEB2]/20 focus:border-[#4FAEB2]"
+                    aria-label="Buscar agente"
+                  />
+                </div>
+                {transferLoadsRefreshing ? (
+                  <p className="text-sm text-slate-500 py-6 text-center">Actualizando agentes…</p>
+                ) : (
+                  <div className="rounded-xl border border-slate-200 divide-y divide-slate-100 max-h-[min(42vh,320px)] overflow-y-auto overscroll-contain bg-slate-50/40">
+                    {filteredTransferAgents.length === 0 ? (
+                      <p className="text-sm text-slate-500 px-4 py-6 text-center">
+                        No hay agentes para mostrar con estos filtros.
+                      </p>
+                    ) : (
+                      filteredTransferAgents.map((a) => {
+                        const isCurrent = a.id === selected.assigned_agent_id;
+                        return (
+                          <div
+                            key={a.id}
+                            className={`px-4 py-3 transition-colors ${isCurrent ? "bg-emerald-50/80" : ""}`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="font-semibold text-slate-900 text-sm leading-snug min-w-0">{a.nombre}</span>
+                              <button
+                                type="button"
+                                disabled={opsBusy || isCurrent}
+                                onClick={() =>
+                                  void runConversationOp(async () => {
+                                    await assignConversationToAgent(selected.id, a.id);
+                                    setTransferModalOpen(false);
+                                  })
+                                }
+                                className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold shadow-sm transition-colors disabled:opacity-50 disabled:pointer-events-none ${
+                                  isCurrent
+                                    ? "bg-emerald-100 text-emerald-700"
+                                    : "bg-[#4FAEB2] text-white hover:bg-[#3F8E91]"
+                                }`}
+                              >
+                                {isCurrent ? "Asignado" : "Transferir"}
+                              </button>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-white text-slate-700 border border-slate-200">
+                                {a.queue_nombre}
+                              </span>
+                              <span className="text-[11px] text-slate-500">
+                                {a.operational_status === "offline" ? "En pausa" : "Disponible"}
+                                {!a.is_online ? " · sin sesión" : ""}
+                                {" · "}
+                                <span className="tabular-nums font-medium text-slate-600">
+                                  {a.active_conversations} activos
+                                </span>
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Toggle "Mostrar barra" standalone — solo cuando está colapsada (al expandir va en la línea del nombre). */}
+      {headerCollapsed ? (
+        <div className="flex shrink-0 items-center justify-end">
+          <button
+            type="button"
+            onClick={() => setHeaderCollapsed(false)}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold text-slate-600 shadow-sm transition-colors hover:border-[#4FAEB2]/60 hover:bg-[#4FAEB2]/5 hover:text-[#3F8E91]"
+            title="Mostrar barra superior"
+            aria-pressed={true}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5" aria-hidden="true">
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+            Mostrar barra
+          </button>
+        </div>
+      ) : null}
+
+      {!headerCollapsed ? (
+      <>
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 shrink-0">
+        <div className="min-w-0 flex flex-1 items-center gap-2 flex-wrap pt-1">
+          <span
+            aria-hidden="true"
+            className="inline-block h-2 w-2 shrink-0 rounded-full bg-[#4FAEB2] shadow-[0_0_0_3px_rgba(79,174,178,0.18)]"
+          />
+          <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#4FAEB2] hidden sm:inline">
+            Omnicanal
+          </span>
+          <h1 className="text-base font-semibold tracking-tight text-slate-900 leading-tight truncate">
+            {agentDisplayName}
+          </h1>
+          <span className="text-xs text-slate-500 leading-snug">
+            {"· "}
+            {mode === "historial"
+              ? "Historial omnicanal"
+              : vista === "inbox"
+                ? "Inbox"
+                : "Bot"}
+            {mode === "historial" ? (
+              <>
+                {" · "}
+                <Link href="/dashboard/conversaciones" className="text-[#4FAEB2] hover:underline font-medium">
+                  Inbox
+                </Link>
+              </>
+            ) : null}
+          </span>
+        </div>
+        {mode === "inbox" && opPresenceLoaded && !opInQueues ? (
+          initialCabeceraInsignia === "admin" ? (
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="inline-flex items-center rounded-full bg-slate-800 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+                Administrador
+              </span>
+              <span className="text-[10px] text-slate-600 leading-snug">
+                Sin puesto en colas ·{" "}
+                <Link href="/configuracion/colas" className="font-semibold text-[#4FAEB2] hover:underline">
+                  Colas
+                </Link>
+              </span>
+            </div>
+          ) : initialCabeceraInsignia === "supervisor" ? (
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="inline-flex items-center rounded-full bg-indigo-800 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+                Supervisor
+              </span>
+              <span className="text-[10px] text-slate-600 leading-snug">
+                Sin fila de agente en colas ·{" "}
+                <Link href="/configuracion/colas" className="font-semibold text-[#4FAEB2] hover:underline">
+                  Colas
+                </Link>
+              </span>
+            </div>
+          ) : (
+            <div className="text-[10px] text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5 max-w-[18rem] text-right leading-snug shrink-0">
+              No figurás como agente en ninguna cola: no se muestra el turno Disponible/Pausa. Pedí asignación en{" "}
+              <Link href="/configuracion/colas" className="font-semibold text-amber-950 underline-offset-2 hover:underline">
+                Configuración → Colas
+              </Link>
+              .
+            </div>
+          )
+        ) : null}
+        {mode === "inbox" && opPresenceLoaded && opInQueues && opStatus !== null ? (
+          <div
+            className="flex flex-col items-end gap-0.5 shrink-0"
+            role="group"
+            aria-label="Disponible u en pausa para recibir chats nuevos por autoasignación"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Tu turno</span>
+              {opPresenceBusy ? (
+                <span className="text-[10px] font-medium text-[#4FAEB2] animate-pulse">Guardando…</span>
+              ) : null}
+              <div className="flex items-center gap-0.5 rounded-lg border border-slate-300 bg-slate-100 p-0.5 shadow-inner">
+                <button
+                  type="button"
+                  disabled={opPresenceBusy}
+                  className={opPresenceToggleClass(opStatus === "ready", "ready")}
+                  aria-pressed={opStatus === "ready"}
+                  aria-label="Marcar disponible para autoasignación (ready)"
+                  onClick={() => void applyOperationalStatus("ready")}
+                >
+                  Disponible
+                </button>
+                <button
+                  type="button"
+                  disabled={opPresenceBusy}
+                  className={opPresenceToggleClass(opStatus === "offline", "offline")}
+                  aria-pressed={opStatus === "offline"}
+                  aria-label="Pausar recepción de chats nuevos por autoasignación (offline)"
+                  onClick={() => void applyOperationalStatus("offline")}
+                >
+                  En pausa
+                </button>
+              </div>
+            </div>
+            <div className="text-[10px] text-slate-600 text-right leading-tight w-full">
+              <span className="text-slate-500">
+                {opStatus === "ready" ? "Tiempo en Disponible" : "Tiempo en pausa"}:{" "}
+              </span>
+              {opSince ? (
+                <LiveElapsedLabel sinceIso={opSince} />
+              ) : (
+                <span className="text-slate-400 italic">—</span>
+              )}
+              {sessionSinceIso ? (
+                <>
+                  <span className="text-slate-300" aria-hidden="true">
+                    {" · "}
+                  </span>
+                  <span className="text-slate-500">Sesión:</span>{" "}
+                  <LiveElapsedLabel sinceIso={sessionSinceIso} />
+                </>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => setHeaderCollapsed(true)}
+          className="ml-auto inline-flex h-7 w-7 shrink-0 items-center justify-center self-start rounded-lg border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-[#4FAEB2]/60 hover:bg-[#4FAEB2]/5 hover:text-[#3F8E91]"
+          title="Ocultar barra superior"
+          aria-label="Ocultar barra superior"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4" aria-hidden="true">
+            <polyline points="18 15 12 9 6 15" />
+          </svg>
+        </button>
+      </div>
+      {mode === "inbox" && sessionSinceIso && !opInQueues ? (
+        <div className="flex justify-end w-full shrink-0 -mt-1">
+          <p className="text-[10px] text-slate-500 tabular-nums">
+            Sesión en inbox: <LiveElapsedLabel sinceIso={sessionSinceIso} />
+          </p>
+        </div>
+      ) : null}
+      {mode === "inbox" && opPresenceErr ? (
+        <div className="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg px-2 py-1.5 shrink-0">
+          {opPresenceErr}
+        </div>
+      ) : null}
+      {mode === "inbox" && opPresenceOkMsg ? (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs rounded-lg px-2 py-1.5 shrink-0 font-medium">
+          {opPresenceOkMsg}
+        </div>
+      ) : null}
+
+      {mode === "inbox" || mode === "historial" ? (
+        <div className="flex flex-wrap items-center gap-2 shrink-0 min-w-0">
+          {mode === "inbox" ? (
+            <div className="flex flex-wrap gap-1 rounded-lg border border-slate-200 bg-slate-100/80 p-1 w-fit shrink-0">
+              <button type="button" className={tabClass(vista === "inbox")} onClick={() => setVista("inbox")}>
+                Inbox
+              </button>
+              {hasActiveBotFlows ? (
+                <button type="button" className={tabClass(vista === "bot")} onClick={() => setVista("bot")}>
+                  Bot
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="relative flex-1 min-w-[10rem]">
+            <input
+              type="search"
+              value={listSearch}
+              onChange={(e) => setListSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  // Búsqueda inmediata (sin esperar el debounce de 300ms).
+                  setDebouncedQ(listSearch.trim());
+                  setListLimit(50);
+                }
+              }}
+              placeholder="Buscar por nombre o número"
+              className="w-full border border-slate-200 rounded-lg px-3 py-2 pr-24 text-xs text-slate-800 bg-white placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-[#4FAEB2]/20 focus:border-[#4FAEB2]"
+              aria-label="Buscar por nombre o número"
+            />
+            {listSearch.trim() && (searching || listSearch.trim() !== debouncedQ) ? (
+              <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 inline-flex items-center gap-1 text-[11px] font-medium text-[#3F8E91]">
+                <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" opacity="0.25" />
+                  <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                </svg>
+                Buscando…
+              </span>
+            ) : null}
+          </div>
+          {mode === "historial" || vista === "inbox" ? (
+            <>
+              <select
+                className="appearance-none rounded-lg border border-slate-200 bg-white bg-[length:13px_13px] bg-[right_0.55rem_center] bg-no-repeat px-2.5 py-2 pr-7 text-xs font-medium text-slate-700 shadow-sm outline-none transition-colors hover:border-[#4FAEB2]/60 focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/20 min-w-[8.5rem] max-w-[min(16rem,60vw)] shrink-0"
+                style={{
+                  backgroundImage:
+                    "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%234FAEB2' stroke-width='2.5'><path stroke-linecap='round' stroke-linejoin='round' d='M6 9l6 6 6-6'/></svg>\")",
+                }}
+                value={displayCanal}
+                onChange={(e) => {
+                  const v = e.target.value.trim();
+                  setPendingCanal(v.length > 0 ? v : "");
+                  patchInboxQuery({ canal: v.length > 0 ? v : null });
+                }}
+                aria-label="Filtrar por canal"
+                title="Canal"
+              >
+                <option value="">Todos los canales</option>
+                {inboxChannels.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {formatChannelOptionLabel(c)}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="appearance-none rounded-lg border border-slate-200 bg-white bg-[length:13px_13px] bg-[right_0.55rem_center] bg-no-repeat px-2.5 py-2 pr-7 text-xs font-medium text-slate-700 shadow-sm outline-none transition-colors hover:border-[#4FAEB2]/60 focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/20 min-w-[8.5rem] shrink-0"
+                style={{
+                  backgroundImage:
+                    "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%234FAEB2' stroke-width='2.5'><path stroke-linecap='round' stroke-linejoin='round' d='M6 9l6 6 6-6'/></svg>\")",
+                }}
+                value={displayCola}
+                onChange={(e) => {
+                  const v = e.target.value.trim();
+                  setPendingCola(v.length > 0 ? v : "");
+                  patchInboxQuery({ cola: v.length > 0 ? v : null });
+                }}
+                aria-label="Filtrar por cola"
+                title="Cola"
+              >
+                <option value="">Todas las colas</option>
+                {opsQueues
+                  .filter((q) => q.is_active)
+                  .map((q) => (
+                    <option key={q.id} value={q.id}>
+                      {q.nombre}
+                    </option>
+                  ))}
+              </select>
+              <select
+                className="appearance-none rounded-lg border border-slate-200 bg-white bg-[length:13px_13px] bg-[right_0.55rem_center] bg-no-repeat px-2.5 py-2 pr-7 text-xs font-medium text-slate-700 shadow-sm outline-none transition-colors hover:border-[#4FAEB2]/60 focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/20 min-w-[8rem] shrink-0"
+                style={{
+                  backgroundImage:
+                    "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%234FAEB2' stroke-width='2.5'><path stroke-linecap='round' stroke-linejoin='round' d='M6 9l6 6 6-6'/></svg>\")",
+                }}
+                value={esAdmin ? displayAsesor : displayAsignacion}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (esAdmin) {
+                    setPendingAsesor(v === "" ? "" : v);
+                    patchInboxQuery({ asesor: v === "" ? null : v });
+                  } else {
+                    setPendingAsignacion(v === "" ? "" : v);
+                    patchInboxQuery({ asignacion: v === "" ? null : v });
+                  }
+                }}
+                aria-label={esAdmin ? "Filtrar por asesor" : "Filtrar por asignación"}
+                title={esAdmin ? "Asesor" : "Asignación"}
+              >
+                {esAdmin ? (
+                  <>
+                    <option value="">Todos los asesores</option>
+                    {inboxAgents.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.nombre}
+                      </option>
+                    ))}
+                  </>
+                ) : (
+                  <>
+                    <option value="">Asignación: todas</option>
+                    {opInQueues ? <option value="mios">Asignadas a mí</option> : null}
+                    <option value="sin_asignar">Sin asignar</option>
+                  </>
+                )}
+              </select>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
+      {initialOmnicanalRole === "supervisor" && (mode === "historial" || vista === "inbox") ? (
+        <p className="text-[11px] text-slate-500 leading-snug shrink-0 -mt-1">
+          Colas y vistas acotadas a tu equipo supervisado (mismo criterio que inbox y monitoreo).
+        </p>
+      ) : null}
+      </>
+      ) : null}
+
+      {hasActiveChannel === false && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg px-2 py-2 shrink-0">
+          No hay un canal de conversación activo para tu empresa. Los mensajes no se registrarán hasta configurarlo.
+        </div>
+      )}
+
+      {listError && (
+        <div className="bg-red-50 border border-red-200 text-red-800 text-xs rounded-lg px-2 py-1.5 shrink-0">
+          {listError}
+        </div>
+      )}
+      {messagesError && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-950 text-xs rounded-lg px-2 py-1.5 shrink-0">
+          {messagesError}
+        </div>
+      )}
+
+      <div className="relative flex flex-1 min-h-0 border border-slate-200 rounded-lg overflow-hidden bg-white shadow-sm">
+        {fichaAbierta && selectedId ? (
+          <FichaContactoDrawer
+            conversationId={selectedId}
+            abierto={fichaAbierta}
+            alCerrar={() => setFichaAbierta(false)}
+          />
+        ) : null}
+        {/* Lista */}
+        {!listColumnHidden ? (
+        <div
+          className={`w-full shrink-0 border-r border-slate-200 flex-col min-h-0 bg-slate-50/80 lg:w-[300px] lg:max-w-[320px] xl:w-[340px] xl:max-w-[360px] lg:flex ${
+            selectedId ? "hidden" : "flex"
+          }`}
+        >
+          <div className="px-2 py-1.5 border-b border-slate-200 flex items-center justify-between gap-2 shrink-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Chats</span>
+              {listRefreshing ? (
+                <span className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-600" title="Trayendo el estado más reciente…">
+                  <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Actualizando…
+                </span>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              onClick={() => setListColumnHidden(true)}
+              className="text-[10px] font-medium text-slate-500 hover:text-slate-800 px-1.5 py-0.5 rounded border border-transparent hover:border-slate-200 hover:bg-white"
+              title="Ocultar lista de chats"
+            >
+              Ocultar
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+            {loadingList ? (
+              <div className="p-4 text-xs text-slate-400 text-center animate-pulse">Cargando…</div>
+            ) : conversations.length === 0 ? (
+              <div className="p-4 text-xs text-slate-500 text-center space-y-1">
+                <p>No hay conversaciones aún</p>
+              </div>
+            ) : visibleConversations.length === 0 ? (
+              <div className="p-4 text-xs text-slate-500 text-center space-y-1">
+                <p>Ningún chat coincide con la búsqueda</p>
+              </div>
+            ) : (
+              visibleConversations.map((c) => {
+                const hasNameInCard = isHumanContactName(c.contact.name, c.contact.phone_number);
+                const cardName = hasNameInCard ? c.contact.name!.trim() : "Sin nombre";
+                const cardInitial = (() => {
+                  const cleaned = cardName.replace(/^[^A-Za-z0-9]+/, "");
+                  const m = cleaned.match(/[A-Za-z0-9]/);
+                  return (m?.[0] ?? "?").toUpperCase();
+                })();
+                const isSelected = selectedId === c.id;
+                return (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => handleSelect(c.id)}
+                  onMouseEnter={() => onHoverConversation(c.id)}
+                  onMouseLeave={onLeaveConversation}
+                  onFocus={() => prefetchConversation(c.id)}
+                  className={`w-full text-left px-3 py-2 border-b border-slate-100 transition-colors [content-visibility:auto] [contain-intrinsic-size:auto_76px] ${
+                    isSelected ? "bg-white border-l-[3px] border-l-[#4FAEB2]" : "hover:bg-white"
+                  }`}
+                >
+                  <div className="flex items-start gap-2.5">
+                    <span
+                      aria-hidden="true"
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[12px] font-semibold ${
+                        hasNameInCard
+                          ? "bg-[#4FAEB2]/12 text-[#3F8E91] border border-[#4FAEB2]/30"
+                          : "bg-slate-100 text-slate-500 border border-slate-200"
+                      }`}
+                    >
+                      {cardInitial}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-slate-900 truncate">
+                            {cardName}
+                          </div>
+                          <div className="text-[11px] text-slate-500 font-mono truncate tabular-nums">
+                            {contactPhoneFallback(c.contact.phone_number, c.contact.name)}
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1">
+                          {esAsesor && vista !== "bot" ? <InboxReplyTurnBadges c={c} dense /> : null}
+                          {vista === "bot" ? (
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-violet-700 bg-violet-50 border border-violet-200 px-1.5 py-0.5 rounded">
+                              Bot
+                            </span>
+                          ) : c.human_taken_over || c.flow_status === "human" ? (
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
+                              Humano
+                            </span>
+                          ) : null}
+                          {c.unread_count > 0 && (
+                            <span className="inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-[#4FAEB2] px-1.5 py-0.5 text-[11px] font-bold text-white">
+                              {c.unread_count}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <p className="mt-1 text-[12px] text-slate-500 truncate leading-snug">
+                        {c.last_message_from_me ? (
+                          <MessageDeliveryTicks
+                            status={c.last_message_status}
+                            className={`mr-1 inline-block align-[-2px] ${
+                              (c.last_message_status ?? "") === "read" ? "text-sky-500" : "text-slate-400"
+                            }`}
+                          />
+                        ) : null}
+                        {textoDeVistaPrevia(c.last_message_preview) ?? (attachmentCaptionForDisplay(c.last_message_preview) || "—")}
+                      </p>
+                    </div>
+                  </div>
+                  {!esAsesor ? (
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    <span
+                      className={`text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border ${badgeEstadoClass(c.status)}`}
+                    >
+                      {labelEstado(c.status)}
+                    </span>
+                    {c.queue_name ? (
+                      <span
+                        className="text-[9px] font-medium text-indigo-800 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded truncate max-w-full"
+                        title={`Cola: ${c.queue_name}`}
+                      >
+                        Cola · {c.queue_name}
+                      </span>
+                    ) : null}
+                    {vista !== "bot" ? <InboxReplyTurnBadges c={c} dense /> : null}
+                    {c.assigned_agent_name ? (
+                      <span
+                        className="text-[9px] font-semibold text-emerald-900 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded truncate max-w-full"
+                        title={`Agente asignado: ${c.assigned_agent_name}`}
+                      >
+                        Agente · {c.assigned_agent_name}
+                      </span>
+                    ) : (
+                      (() => {
+                        const w = assignmentWaitBadge(c.assignment_wait_code, Boolean(c.queue_id));
+                        return (
+                          <span
+                            className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border truncate max-w-full ${assignmentWaitBadgeClass(w.tone)}`}
+                            title="Sin agente asignado"
+                          >
+                            {w.label}
+                          </span>
+                        );
+                      })()
+                    )}
+                  </div>
+                  ) : null}
+                </button>
+                );
+              })
+            )}
+            {!loadingList && conversations.length >= listLimit ? (
+              <button
+                type="button"
+                onClick={() => setListLimit((l) => l + 50)}
+                className="w-full px-3 py-2.5 text-center text-xs font-semibold text-[#3F8E91] hover:bg-white border-b border-slate-100 transition-colors"
+              >
+                Cargar más
+              </button>
+            ) : null}
+          </div>
+        </div>
+        ) : null}
+
+        {/* Panel mensajes */}
+        <div
+          className={`flex-1 flex-col min-w-0 min-h-0 overflow-hidden lg:flex ${
+            selectedId || listColumnHidden ? "flex" : "hidden"
+          }`}
+        >
+          {!selectedId ? (
+            <div className="flex-1 flex flex-col items-center justify-center gap-2 text-slate-400 text-sm min-h-0 px-2">
+              <span>Seleccioná una conversación</span>
+              {listColumnHidden ? (
+                <button
+                  type="button"
+                  onClick={() => setListColumnHidden(false)}
+                  className="text-xs font-medium text-[#4FAEB2] hover:underline"
+                >
+                  Mostrar lista de chats
+                </button>
+              ) : null}
+            </div>
+          ) : (
+            <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+              <div className="px-4 py-3 border-b border-slate-200 bg-white shrink-0">
+                {selected ? (
+                  (() => {
+                    const hasName = isHumanContactName(selected.contact.name, selected.contact.phone_number);
+                    const contactDisplayName = hasName ? selected.contact.name!.trim() : "Sin nombre";
+                    const contactInitial = (() => {
+                      const n = contactDisplayName.replace(/^[^A-Za-z0-9]+/, "");
+                      const first = n.match(/[A-Za-z0-9]/);
+                      return (first?.[0] ?? "?").toUpperCase();
+                    })();
+                    return (
+                      <div className="flex flex-col gap-2.5 min-w-0 w-full">
+                        {/* Row 1: identidad + acciones primarias */}
+                        <div className="flex flex-wrap items-center justify-between gap-3 min-w-0">
+                          <div className="flex min-w-0 items-center gap-2.5">
+                            {/* Back-to-list visible solo en mobile cuando la lista no esta oculta manualmente */}
+                            {!listColumnHidden ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedId(null);
+                                  setMessages([]);
+                                }}
+                                aria-label="Volver a la lista de chats"
+                                title="Volver a la lista"
+                                className="lg:hidden inline-flex shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white p-1.5 text-slate-600 shadow-sm transition-colors hover:border-[#4FAEB2]/60 hover:text-[#4FAEB2]"
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2.2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  className="h-4 w-4"
+                                  aria-hidden="true"
+                                >
+                                  <polyline points="15 18 9 12 15 6" />
+                                </svg>
+                              </button>
+                            ) : null}
+                            <span
+                              aria-hidden="true"
+                              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold ring-2 ring-white shadow-sm ${
+                                hasName
+                                  ? "bg-[#4FAEB2]/12 text-[#3F8E91] border border-[#4FAEB2]/30"
+                                  : "bg-slate-100 text-slate-500 border border-slate-200"
+                              }`}
+                            >
+                              {contactInitial}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setFichaAbierta(true)}
+                              title="Ver la ficha del contacto"
+                              className="min-w-0 rounded-lg px-1 py-0.5 text-left leading-tight transition-colors hover:bg-slate-100"
+                            >
+                              <p className="truncate text-sm font-semibold text-slate-900 max-w-[min(100%,18rem)]">
+                                {contactDisplayName}
+                              </p>
+                              <p className="mt-0.5 truncate font-mono text-[11px] tabular-nums text-slate-500">
+                                {contactPhoneFallback(selected.contact.phone_number, selected.contact.name)}
+                              </p>
+                            </button>
+                          </div>
+
+                          <div className="flex flex-wrap items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setFichaAbierta((v) => !v)}
+                              title="Ficha del contacto: cliente, proyectos y recorrido"
+                              aria-expanded={fichaAbierta}
+                              className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[11px] font-semibold shadow-sm transition-colors ${
+                                fichaAbierta
+                                  ? "border-[#4FAEB2] bg-[#4FAEB2]/10 text-[#3F8E91]"
+                                  : "border-slate-200 bg-white text-slate-700 hover:border-[#4FAEB2]/60 hover:text-[#3F8E91]"
+                              }`}
+                            >
+                              <UserRound className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                              Ficha
+                            </button>
+                            {vista !== "bot" ? (
+                              <button
+                                type="button"
+                                disabled={opsBusy}
+                                onClick={() => {
+                                  setTransferAgentSearch("");
+                                  setTransferQueueTarget(selected.queue_id?.trim() ? selected.queue_id : "");
+                                  setTransferModalOpen(true);
+                                }}
+                                className="inline-flex items-center gap-1.5 rounded-xl bg-[#4FAEB2] px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm shadow-[#4FAEB2]/25 transition-colors hover:bg-[#3F8E91] disabled:opacity-50"
+                              >
+                                <ArrowLeftRight className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                                Transferir
+                              </button>
+                            ) : null}
+                            {puedeSoporte ? (
+                              <button
+                                type="button"
+                                onClick={() => setSoporteModalOpen(true)}
+                                title="Cargar un ticket de soporte para este cliente"
+                                className="inline-flex items-center gap-1.5 rounded-xl border border-violet-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-violet-700 shadow-sm transition-colors hover:border-violet-300 hover:bg-violet-50"
+                              >
+                                <Headset className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                                Soporte
+                              </button>
+                            ) : null}
+                            {soporteModalOpen ? (
+                              <SoporteTicketModal
+                                key={selected.id}
+                                conversationId={selected.id}
+                                clienteId={selected.contact.cliente_id ?? null}
+                                contacto={contactDisplayName}
+                                telefono={selected.contact.phone_number ?? null}
+                                alCerrar={() => setSoporteModalOpen(false)}
+                              />
+                            ) : null}
+                            {selected.status !== "closed" && mode === "inbox" ? (
+                              <button
+                                type="button"
+                                disabled={opsBusy || finalizeSaving}
+                                onClick={() => void openFinalizeModal()}
+                                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 shadow-sm transition-colors hover:border-[#4FAEB2]/60 hover:bg-[#4FAEB2]/5 hover:text-[#3F8E91] disabled:opacity-50"
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  className="h-3.5 w-3.5 shrink-0"
+                                  aria-hidden="true"
+                                >
+                                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                                  <polyline points="22 4 12 14.01 9 11.01" />
+                                </svg>
+                                Finalizar
+                              </button>
+                            ) : selected.status === "closed" ? (
+                              <button
+                                type="button"
+                                disabled={opsBusy}
+                                onClick={() =>
+                                  void runConversationOp(() =>
+                                    changeConversationStatus(selected.id, "open")
+                                  )
+                                }
+                                className="inline-flex items-center rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-[11px] font-semibold text-emerald-800 shadow-sm transition-colors hover:bg-emerald-100 disabled:opacity-50"
+                              >
+                                Reabrir
+                              </button>
+                            ) : null}
+                            {isHumanActive ? (
+                              <button
+                                type="button"
+                                disabled={releasingBot}
+                                onClick={() => void handleReleaseToBot()}
+                                className="inline-flex items-center rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 shadow-sm transition-colors hover:border-[#4FAEB2]/60 hover:text-[#3F8E91] disabled:opacity-50"
+                              >
+                                {releasingBot ? "…" : "Modo bot"}
+                              </button>
+                            ) : null}
+                            {listColumnHidden ? (
+                              <button
+                                type="button"
+                                onClick={() => setListColumnHidden(false)}
+                                title="Mostrar lista de chats"
+                                className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 shadow-sm transition-colors hover:border-[#4FAEB2]/60 hover:text-[#3F8E91]"
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  className="h-3.5 w-3.5"
+                                  aria-hidden="true"
+                                >
+                                  <line x1="8" y1="6" x2="21" y2="6" />
+                                  <line x1="8" y1="12" x2="21" y2="12" />
+                                  <line x1="8" y1="18" x2="21" y2="18" />
+                                  <line x1="3" y1="6" x2="3.01" y2="6" />
+                                  <line x1="3" y1="12" x2="3.01" y2="12" />
+                                  <line x1="3" y1="18" x2="3.01" y2="18" />
+                                </svg>
+                                Chats
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+
+                        {/* Row 2: meta chips uniformes */}
+                        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                          <ChannelBadge type={selected.channel.type} nombre={selected.channel.nombre} />
+                          {vista === "bot" ? (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-800">
+                              <span aria-hidden="true" className="h-1 w-1 rounded-full bg-violet-500" />
+                              Bot
+                            </span>
+                          ) : isHumanActive ? (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                              <span aria-hidden="true" className="h-1 w-1 rounded-full bg-emerald-500" />
+                              Humano
+                            </span>
+                          ) : null}
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${badgeEstadoClass(selected.status)}`}
+                          >
+                            {labelEstado(selected.status)}
+                          </span>
+
+                          {vista !== "bot" ? (
+                            <>
+                              <span aria-hidden="true" className="mx-0.5 h-3.5 w-px bg-slate-200" />
+                              {selected.queue_name ? (
+                                <span
+                                  className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-700 truncate max-w-[12rem]"
+                                  title="Cola de enrutamiento"
+                                >
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    className="h-3 w-3 shrink-0 text-slate-400"
+                                    aria-hidden="true"
+                                  >
+                                    <rect x="3" y="6" width="18" height="12" rx="2" />
+                                    <path d="M7 10h10M7 14h6" />
+                                  </svg>
+                                  {selected.queue_name}
+                                </span>
+                              ) : mode === "inbox" ? (
+                                <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+                                  Sin cola
+                                </span>
+                              ) : null}
+                              <VentanaWhatsApp messages={messages} />
+                              <InboxReplyTurnBadges c={selected} dense />
+                              {selected.assigned_agent_name ? (
+                                <span
+                                  className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-800 truncate max-w-[11rem]"
+                                  title="Agente asignado"
+                                >
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    className="h-3 w-3 shrink-0"
+                                    aria-hidden="true"
+                                  >
+                                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                                    <circle cx="12" cy="7" r="4" />
+                                  </svg>
+                                  {selected.assigned_agent_name}
+                                </span>
+                              ) : mode === "inbox" ? (
+                                (() => {
+                                  const w = assignmentWaitBadge(
+                                    selected.assignment_wait_code,
+                                    Boolean(selected.queue_id)
+                                  );
+                                  return (
+                                    <span
+                                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${assignmentWaitBadgeClass(w.tone)}`}
+                                      title="Aún sin agente asignado"
+                                    >
+                                      <UserRound className="h-3 w-3 shrink-0" aria-hidden />
+                                      Sin agente · {w.label}
+                                    </span>
+                                  );
+                                })()
+                              ) : null}
+                            </>
+                          ) : null}
+
+                          {esPm ? (
+                            (() => {
+                              const cid = selected.contact.cliente_id ?? clienteDeChat[selected.id] ?? null;
+                              return cid ? (
+                                <>
+                                  <span aria-hidden="true" className="mx-0.5 h-3.5 w-px bg-slate-200" />
+                                  <Link
+                                    href={`/gestion-clientes?cliente=${cid}`}
+                                    title="Abrir la ficha en Gestión de clientes"
+                                    className="inline-flex items-center gap-1 rounded-full border border-[#4FAEB2]/30 bg-[#4FAEB2]/8 px-2 py-0.5 text-[10px] font-semibold text-[#3F8E91] transition-colors hover:bg-[#4FAEB2]/12"
+                                  >
+                                    Cliente →
+                                  </Link>
+                                </>
+                              ) : null;
+                            })()
+                          ) : (selected.contact.cliente_id ?? clienteDeChat[selected.id]) || selected.contact.crm_prospecto_id ? (
+                            <>
+                              <span aria-hidden="true" className="mx-0.5 h-3.5 w-px bg-slate-200" />
+                              {(selected.contact.cliente_id ?? clienteDeChat[selected.id]) ? (
+                                <Link
+                                  href={`/clientes/${selected.contact.cliente_id ?? clienteDeChat[selected.id]}`}
+                                  className="inline-flex items-center gap-1 rounded-full border border-[#4FAEB2]/30 bg-[#4FAEB2]/8 px-2 py-0.5 text-[10px] font-semibold text-[#3F8E91] transition-colors hover:bg-[#4FAEB2]/12"
+                                >
+                                  Cliente →
+                                </Link>
+                              ) : null}
+                              {selected.contact.crm_prospecto_id ? (
+                                <Link
+                                  href={`/crm/${selected.contact.crm_prospecto_id}`}
+                                  className="inline-flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-700 transition-colors hover:bg-violet-100"
+                                >
+                                  CRM →
+                                </Link>
+                              ) : null}
+                            </>
+                          ) : null}
+                          {selectedAttribution?.source_url ? (
+                            <>
+                              <span aria-hidden="true" className="mx-0.5 h-3.5 w-px bg-slate-200" />
+                              <a
+                                href={selectedAttribution.source_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={
+                                  (selectedAttribution.red === "instagram"
+                                    ? "Vino de Instagram"
+                                    : selectedAttribution.red === "facebook"
+                                      ? "Vino de Facebook"
+                                      : "Vino de un anuncio") +
+                                  (selectedAttribution.headline ? ` · "${selectedAttribution.headline}"` : "") +
+                                  " — abrir la pauta"
+                                }
+                                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold transition-colors ${
+                                  selectedAttribution.red === "instagram"
+                                    ? "border-pink-200 bg-pink-50 text-pink-700 hover:bg-pink-100"
+                                    : selectedAttribution.red === "facebook"
+                                      ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                                      : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100"
+                                }`}
+                              >
+                                {selectedAttribution.red === "instagram"
+                                  ? "Pauta IG ↗"
+                                  : selectedAttribution.red === "facebook"
+                                    ? "Pauta FB ↗"
+                                    : "Pauta ↗"}
+                              </a>
+                            </>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })()
+                ) : null}
+              </div>
+
+              {selected?.channel.comprobante_validation_enabled ? (
+                <div className="border-b border-amber-100/90 bg-amber-50/30 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setCompValidacionesOpen((o) => !o)}
+                    aria-expanded={compValidacionesOpen}
+                    className="w-full text-left px-2 py-1 text-xs font-medium text-amber-900 flex items-center justify-between gap-2 hover:bg-amber-50/80"
+                  >
+                    <span>
+                      ⚠️ Validaciones ({compLoading ? "…" : compVals.length})
+                    </span>
+                    <span className="text-slate-500 tabular-nums shrink-0" aria-hidden>
+                      {compValidacionesOpen ? "▲" : "▼"}
+                    </span>
+                  </button>
+                  {compValidacionesOpen ? (
+                    <div className="px-2 pb-2 max-h-48 overflow-y-auto overscroll-contain border-t border-amber-100/80">
+                      {compApprovalInfo ? (
+                        <p className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-100 rounded px-1.5 py-1 mb-1">
+                          {compApprovalInfo}
+                        </p>
+                      ) : null}
+                      {compLoading ? (
+                        <p className="text-xs text-slate-500 pt-1">Cargando…</p>
+                      ) : compVals.length === 0 ? (
+                        <p className="text-xs text-slate-500 pt-1">
+                          No hay comprobantes registrados en esta conversación.
+                        </p>
+                      ) : (
+                        <ul className="space-y-1.5 pt-1">
+                          {compVals.map((v) => (
+                            <li
+                              key={v.id}
+                              className="flex flex-wrap items-center gap-1.5 text-[11px] bg-white border border-slate-200 rounded-md px-1.5 py-1"
+                            >
+                              <span className="font-mono text-slate-600">{v.estado_validacion}</span>
+                              {v.monto_validacion_status != null && v.monto_validacion_status !== "" ? (
+                                <span
+                                  className="text-[10px] text-slate-500 max-w-[200px] truncate"
+                                  title={v.motivo_validacion ?? ""}
+                                >
+                                  monto: {v.monto_validacion_status}
+                                  {v.monto_validacion_esperado_gs != null
+                                    ? ` · esp ${v.monto_validacion_esperado_gs}`
+                                    : ""}
+                                  {v.monto_validacion_ocr_gs != null ? ` · ocr ${v.monto_validacion_ocr_gs}` : ""}
+                                  {v.monto_validacion_diferencia_gs != null
+                                    ? ` · Δ ${v.monto_validacion_diferencia_gs}`
+                                    : ""}
+                                </span>
+                              ) : null}
+                              {v.bank_val_status != null && v.bank_val_status !== "" ? (
+                                <span
+                                  className="text-[10px] text-slate-500 max-w-[220px] truncate"
+                                  title={v.motivo_validacion ?? ""}
+                                >
+                                  banco: {v.bank_val_status}
+                                  {v.bank_val_coincidencias != null && v.bank_val_min_requeridas != null
+                                    ? ` · ${v.bank_val_coincidencias}/${v.bank_val_min_requeridas}`
+                                    : ""}
+                                </span>
+                              ) : null}
+                              {v.comprobante_url ? (
+                                <a
+                                  href={v.comprobante_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-[#4FAEB2] hover:underline"
+                                >
+                                  Ver archivo
+                                </a>
+                              ) : null}
+                              {v.estado_validacion === "aprobado_manual" ? (
+                                <span className="text-emerald-700 font-medium">
+                                  Aprobado manualmente · Compra cerrada
+                                  {v.sorteo_entrada_id ? " ✓" : ""}
+                                </span>
+                              ) : null}
+                              {v.sorteo_entrada_id && v.estado_validacion !== "aprobado_manual" ? (
+                                <span className="text-sky-700 font-medium">Compra cerrada (entrada existente)</span>
+                              ) : null}
+                              {!v.sorteo_entrada_id && v.estado_validacion !== "aprobado_manual" ? (
+                                <button
+                                  type="button"
+                                  disabled={compActionId === v.id}
+                                  onClick={() => {
+                                    setCompApproveConfirmId(v.id);
+                                    setCompApprovalInfo(null);
+                                  }}
+                                  className="text-emerald-700 font-medium hover:underline disabled:opacity-50"
+                                >
+                                  Aprobar (cerrar compra)
+                                </button>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <div
+                ref={messagesScrollRef}
+                onScroll={onMessagesScroll}
+                className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 py-1 space-y-0 bg-gradient-to-b from-slate-100/90 to-slate-50/40"
+              >
+                {loadingMsg ? (
+                  <div className="text-center text-slate-400 text-sm py-8">Cargando mensajes…</div>
+                ) : messages.length === 0 ? (
+                  <div className="text-center text-slate-500 text-sm py-8 px-3">
+                    {messagesError
+                      ? "No se pudieron cargar los mensajes. Reintentá o revisá la barra de avisos arriba."
+                      : "No hay mensajes para esta conversación."}
+                  </div>
+                ) : (
+                  <div ref={setMessagesContentNode}>
+                  {messages.map((m, idx) => {
+                    const attachUrl = resolveAttachmentUrl(m);
+                    const metaDocName = getMetaInboundDocumentFilename(m.raw_payload);
+                    const erpName = getErpAttachmentFilename(m.raw_payload);
+                    const showAsImage =
+                      m.message_type === "image" ||
+                      m.message_type === "sticker" ||
+                      (m.message_type === "document" && isImageMimeHint(m.raw_payload, m.message_type));
+
+                    return (
+                      <div
+                        key={m.id}
+                        // Nota: NO usar content-visibility acá. El hilo abre con scroll-al-fondo
+                        // (scrollTop = scrollHeight) y content-visibility hace que scrollHeight
+                        // se calcule con alturas ESTIMADAS de los mensajes fuera de pantalla →
+                        // el scroll no llegaba al final. Se mantiene solo en la LISTA (segura).
+                        className={`flex ${m.from_me ? "justify-end" : "justify-start"} py-1.5 ${
+                          idx > 0 ? "border-t border-slate-200/55" : ""
+                        }`}
+                      >
+                        <div
+                          className={`group relative max-w-[92%] sm:max-w-[88%] md:max-w-[78%] lg:max-w-[72%] rounded-2xl px-3 py-2 text-[13px] sm:text-sm leading-relaxed ${
+                            m.from_me
+                              ? "bg-[#4FAEB2] text-white rounded-br-md shadow-md shadow-[#4FAEB2]/25 ring-1 ring-white/15"
+                              : "bg-white text-slate-800 rounded-bl-md border border-slate-200 shadow-sm border-l-[3px] border-l-[#4FAEB2]/55"
+                          }`}
+                        >
+                          {/* Acciones del mensaje (aparecen al pasar el mouse). */}
+                          <div className="absolute right-1 top-1 z-10 flex items-center gap-1">
+                            {/* La descarga estaba solo dentro del menú de los tres
+                                puntitos y no la encontraba nadie. Acá queda a un clic
+                                para todo lo que tenga archivo. */}
+                            {attachUrl ? (
+                              <button
+                                type="button"
+                                aria-label="Descargar archivo"
+                                title="Descargar"
+                                onClick={() => void descargarMedia(attachUrl, downloadFilenameFor(m))}
+                                className={`grid h-6 w-6 place-items-center rounded-full opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100 ${
+                                  m.from_me
+                                    ? "bg-black/20 text-white hover:bg-black/35"
+                                    : "bg-slate-900/10 text-slate-700 hover:bg-slate-900/20"
+                                }`}
+                              >
+                                <Download className="h-3.5 w-3.5" aria-hidden />
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              aria-label="Opciones del mensaje"
+                              onClick={() => setMsgMenu(msgMenu === m.id ? null : m.id)}
+                              className={`grid h-6 w-6 place-items-center rounded-full text-base leading-none opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100 ${
+                                m.from_me
+                                  ? "bg-black/20 text-white hover:bg-black/35"
+                                  : "bg-slate-900/10 text-slate-700 hover:bg-slate-900/20"
+                              }`}
+                            >
+                              ⋮
+                            </button>
+                            {msgMenu === m.id ? (
+                              <>
+                                <div className="fixed inset-0 z-40" onClick={() => setMsgMenu(null)} />
+                                <div className="absolute right-0 top-7 z-50 min-w-[150px] overflow-hidden rounded-lg border border-slate-200 bg-white py-1 text-slate-700 shadow-lg">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setReplyingTo(m);
+                                      setMsgMenu(null);
+                                      composerRef.current?.focus();
+                                    }}
+                                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-slate-50"
+                                  >
+                                    <span aria-hidden>↩️</span> Responder
+                                  </button>
+                                  {attachUrl ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        void descargarMedia(attachUrl, downloadFilenameFor(m));
+                                        setMsgMenu(null);
+                                      }}
+                                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-slate-50"
+                                    >
+                                      <span aria-hidden>⬇️</span> Descargar
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </>
+                            ) : null}
+                          </div>
+                          {/* Cita del mensaje respondido (si este mensaje es una respuesta). */}
+                          {(() => {
+                            // Dos orígenes para lo mismo: `reply_context` es el resumen que
+                            // dejamos al responder nosotros; los mensajes del cliente sólo
+                            // traen el WAMID citado y hay que ir a buscar el mensaje.
+                            let rc = m.raw_payload?.reply_context as
+                              | { preview?: string; from_me?: boolean }
+                              | undefined;
+                            if (!rc || typeof rc !== "object") {
+                              const citado = wamidCitado(m.raw_payload);
+                              if (!citado) return null;
+                              const original = mensajePorWamid.get(citado);
+                              // El mensaje citado puede ser más viejo que lo que está
+                              // cargado. Se avisa igual que hay una cita: mejor eso que una
+                              // respuesta suelta que no se entiende.
+                              rc = original
+                                ? { preview: messagePreview(original), from_me: original.from_me }
+                                : { preview: "Mensaje anterior", from_me: undefined };
+                            }
+                            return (
+                              <div
+                                className={`mb-1.5 rounded-lg border-l-[3px] px-2 py-1 text-[12px] ${
+                                  m.from_me
+                                    ? "border-white/60 bg-white/15 text-white/90"
+                                    : "border-[#4FAEB2] bg-slate-50 text-slate-600"
+                                }`}
+                              >
+                                {rc.from_me === undefined ? null : (
+                                  <span className="block text-[10px] font-semibold uppercase tracking-wide opacity-80">
+                                    {rc.from_me ? "Vos" : "Cliente"}
+                                  </span>
+                                )}
+                                <span className="line-clamp-2 break-words">{rc.preview ?? "Mensaje"}</span>
+                              </div>
+                            );
+                          })()}
+                          {showAsImage && attachUrl ? (
+                            <div className="space-y-2">
+                              <div
+                                className={`text-xs font-medium ${m.from_me ? "text-white/85" : "text-slate-500"}`}
+                              >
+                                Imagen
+                              </div>
+                              <button
+                                type="button"
+                                className="p-0 border-0 bg-transparent cursor-zoom-in text-left"
+                                onClick={() => setLightbox({ url: attachUrl, nombre: downloadFilenameFor(m) })}
+                              >
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={attachUrl}
+                                  alt="Imagen del chat"
+                                  // La imagen carga async y crece (hasta max-h-52) DESPUÉS del scroll-al-fondo
+                                  // inicial → empujaba el hilo y te dejaba viendo mensajes viejos. Al terminar
+                                  // de cargar, si seguimos "pegados al fondo", re-scrolleamos al final.
+                                  onLoad={() => {
+                                    if (stickBottomRef.current) {
+                                      const el = messagesScrollRef.current;
+                                      if (el) el.scrollTop = el.scrollHeight;
+                                    }
+                                  }}
+                                  className="max-h-52 min-h-[3rem] rounded-lg border border-white/30 bg-white object-contain"
+                                />
+                              </button>
+                              {(() => {
+                                const cap = attachmentCaptionForDisplay(m.content);
+                                return cap && cap !== "[imagen]" ? (
+                                  <p className="whitespace-pre-wrap break-words text-sm opacity-95">{cap}</p>
+                                ) : null;
+                              })()}
+                            </div>
+                          ) : m.message_type === "audio" ? (
+                            <div className="space-y-2">
+                              <div
+                                className={`text-xs font-medium ${m.from_me ? "text-white/85" : "text-slate-500"}`}
+                              >
+                                Audio
+                              </div>
+                              {attachUrl ? (
+                                <>
+                                  <audio
+                                    controls
+                                    src={attachUrl}
+                                    className="w-full max-w-[280px] h-9"
+                                    preload="metadata"
+                                  />
+                                  {/* El reproductor del navegador esconde su propia
+                                      descarga (y en varios la deshabilita), así que
+                                      va una explícita. */}
+                                  <button
+                                    type="button"
+                                    onClick={() => void descargarMedia(attachUrl, downloadFilenameFor(m))}
+                                    className={`flex items-center gap-1 text-[11px] font-semibold underline-offset-2 hover:underline ${
+                                      m.from_me ? "text-white/90" : "text-[#2F6E71]"
+                                    }`}
+                                  >
+                                    <Download className="h-3 w-3" aria-hidden /> Descargar audio
+                                  </button>
+                                </>
+                              ) : (
+                                <p className="whitespace-pre-wrap break-words text-sm opacity-90">
+                                  {attachmentCaptionForDisplay(m.content) || "[audio]"}
+                                </p>
+                              )}
+                            </div>
+                          ) : m.message_type === "document" || m.message_type === "video" ? (
+                            <div className="space-y-2">
+                              {attachUrl ? (
+                                <div
+                                  className={`rounded-xl border px-3 py-2.5 ${
+                                    m.from_me
+                                      ? "border-white/30 bg-white/20 text-white"
+                                      : "border-slate-200 bg-slate-50 text-slate-900"
+                                  }`}
+                                >
+                                  <div className="flex items-start gap-3">
+                                    <span className="text-2xl leading-none shrink-0 select-none" aria-hidden>
+                                      {m.message_type === "video" ? "▶️" : "📎"}
+                                    </span>
+                                    <span className="min-w-0 flex-1">
+                                      <span
+                                        className={`block text-[10px] font-bold uppercase tracking-wide ${
+                                          m.from_me ? "text-sky-100" : "text-slate-500"
+                                        }`}
+                                      >
+                                        {m.message_type === "video" ? "Video" : "Documento"}
+                                      </span>
+                                      <span className="block text-sm font-semibold break-words mt-0.5">
+                                        {displayFilenameForAttachment(m)}
+                                      </span>
+                                    </span>
+                                  </div>
+                                  {/* Antes toda la tarjeta era un enlace a la pestaña
+                                      nueva, y el navegador mostraba el PDF o el video
+                                      en vez de guardarlo: "descargar" quedaba en manos
+                                      del visor de turno. Ahora son dos acciones
+                                      separadas y explícitas. */}
+                                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => void descargarMedia(attachUrl, downloadFilenameFor(m))}
+                                      className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                                        m.from_me
+                                          ? "bg-white/25 text-white hover:bg-white/35"
+                                          : "bg-[#4FAEB2] text-white hover:bg-[#3F8E91]"
+                                      }`}
+                                    >
+                                      <Download className="h-3.5 w-3.5" aria-hidden /> Descargar
+                                    </button>
+                                    <a
+                                      href={attachUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold no-underline transition-colors ${
+                                        m.from_me
+                                          ? "bg-white/15 text-white hover:bg-white/25"
+                                          : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
+                                      }`}
+                                    >
+                                      Abrir
+                                    </a>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div>
+                                  <div
+                                    className={`text-xs font-medium ${m.from_me ? "text-white/85" : "text-slate-500"}`}
+                                  >
+                                    {m.message_type === "video" ? "Video" : "Documento"}
+                                  </div>
+                                  <p className="whitespace-pre-wrap break-words mt-1">
+                                    {(() => {
+                                      const cap = attachmentCaptionForDisplay(m.content);
+                                      const name = erpName || metaDocName;
+                                      if (name) {
+                                        return (
+                                          <>
+                                            <span className="font-medium">{name}</span>
+                                            {cap ? (
+                                              <>
+                                                <br />
+                                                {cap}
+                                              </>
+                                            ) : null}
+                                          </>
+                                        );
+                                      }
+                                      return cap;
+                                    })()}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          ) : m.message_type === "image" ? (
+                            (() => {
+                              const parsed = parseOutgoingImageMessage(m);
+                              return (
+                                <div className="space-y-2">
+                                  <div
+                                    className={`text-xs font-medium ${m.from_me ? "text-white/85" : "text-slate-500"}`}
+                                  >
+                                    Mensaje con imagen
+                                  </div>
+                                  {parsed.url ? (
+                                    <button
+                                      type="button"
+                                      className="p-0 border-0 bg-transparent cursor-zoom-in text-left"
+                                      onClick={() => setLightbox({ url: parsed.url!, nombre: downloadFilenameFor(m) })}
+                                    >
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                                      <img
+                                        src={parsed.url}
+                                        alt="Imagen enviada"
+                                        className="max-h-52 rounded-lg border border-white/30 bg-white object-contain"
+                                      />
+                                    </button>
+                                  ) : null}
+                                  {parsed.caption ? (
+                                    <p className="whitespace-pre-wrap break-words">{parsed.caption}</p>
+                                  ) : null}
+                                  {!parsed.url && !parsed.caption ? (
+                                    <p className="whitespace-pre-wrap break-words">
+                                      {attachmentCaptionForDisplay(m.content)}
+                                    </p>
+                                  ) : null}
+                                </div>
+                              );
+                            })()
+                          ) : m.message_type === "contacts" ? (
+                            <ContactCardsView message={m} fromMe={m.from_me} />
+                          ) : (
+                            // "[reaction]" y "[revoke]" son rótulos internos del ERP; al
+                            // asesor hay que decirle qué pasó, no mostrarle el código.
+                            <p className="whitespace-pre-wrap break-words">
+                              {textoDeMensajeDeSistema(m.message_type) ??
+                                textoDeVistaPrevia(m.content) ??
+                                m.content}
+                            </p>
+                          )}
+                          <p
+                            className={`text-[10px] mt-1 ${m.from_me ? "text-sky-100" : "text-slate-400"}`}
+                          >
+                            {formatTime(m.created_at)}
+                            {m.message_type !== "text" && !textoDeMensajeDeSistema(m.message_type)
+                              ? ` · ${m.message_type}`
+                              : null}
+                            {m.from_me ? (
+                              <MessageDeliveryTicks status={m.whatsapp_delivery_status} />
+                            ) : null}
+                          </p>
+                          {m.from_me && m.whatsapp_delivery_status === "failed" ? (
+                            <div className="mt-1 rounded-md bg-red-50 border border-red-200 px-2 py-1 text-[11px] text-red-700 flex items-start gap-1">
+                              <span aria-hidden>⚠</span>
+                              <span>
+                                <span className="font-semibold">No entregado.</span>{" "}
+                                {friendlyWhatsappFailureReason(extractWhatsappFailureInfo(m.raw_payload))}
+                              </span>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  </div>
+                )}
+                {pendingSends
+                  .filter((p) => p.convId === selectedId)
+                  .map((p) => (
+                    <div key={p.tempId} className="flex justify-end py-1.5 border-t border-slate-200/55">
+                      <div className="max-w-[92%] sm:max-w-[88%] md:max-w-[78%] lg:max-w-[72%] rounded-2xl rounded-br-md px-3 py-2 text-[13px] sm:text-sm leading-relaxed bg-[#4FAEB2]/70 text-white shadow-md ring-1 ring-white/15">
+                        <p className="whitespace-pre-wrap break-words">{p.text}</p>
+                        <p className="text-[10px] mt-1 text-sky-100">
+                          {p.status === "sending" ? (
+                            "enviando…"
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => retryPendingSend(p.tempId)}
+                              className="underline decoration-white/60 hover:decoration-white"
+                            >
+                              no se envió · reintentar
+                            </button>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+              </div>
+
+              <form
+                onSubmit={handleSend}
+                className="p-1.5 border-t border-slate-200 bg-white flex flex-col gap-1 shrink-0 min-h-0"
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
+                  onChange={(e) => void handleSendFile(e)}
+                />
+                {sendError && (
+                  <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-md px-2 py-1">
+                    {sendError}
+                  </div>
+                )}
+                {imagenPegada ? (
+                  <ImagenPegada
+                    archivo={imagenPegada}
+                    enviando={uploadingFile}
+                    alCancelar={() => setImagenPegada(null)}
+                    alEnviar={() => {
+                      const f = imagenPegada;
+                      void sendMediaFile(f).finally(() => setImagenPegada(null));
+                    }}
+                  />
+                ) : null}
+                {uploadHint && (
+                  <div className="text-xs text-[#3F8E91] bg-[#4FAEB2]/10 border border-[#4FAEB2]/30 rounded-md px-2 py-1">
+                    {uploadHint}
+                  </div>
+                )}
+                {replyingTo && (
+                  <div className="flex items-start gap-2 rounded-md border-l-[3px] border-[#4FAEB2] bg-slate-50 px-2 py-1.5">
+                    <div className="min-w-0 flex-1">
+                      <span className="block text-[10px] font-semibold uppercase tracking-wide text-[#3F8E91]">
+                        Respondiendo a {replyingTo.from_me ? "vos" : "el cliente"}
+                      </span>
+                      <span className="block truncate text-[12px] text-slate-600">
+                        {messagePreview(replyingTo)}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setReplyingTo(null)}
+                      aria-label="Cancelar respuesta"
+                      className="shrink-0 rounded px-1 text-base leading-none text-slate-400 hover:bg-slate-200 hover:text-slate-600"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+                <div className="flex gap-1 items-end">
+                  <div ref={quickReplyPanelRef} className="relative flex shrink-0 gap-0.5 items-center">
+                    <button
+                      type="button"
+                      disabled={uploadingFile || !selectedId || recordingVoice}
+                      onClick={() => fileInputRef.current?.click()}
+                      className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                      title="Adjuntar imagen, audio o documento"
+                      aria-label="Adjuntar archivo"
+                    >
+                      {uploadingFile ? (
+                        <span className="text-xs font-bold">…</span>
+                      ) : (
+                        <Paperclip className="w-[18px] h-[18px]" aria-hidden />
+                      )}
+                    </button>
+                    {!recordingVoice && !pendingVoice ? (
+                      <button
+                        type="button"
+                        disabled={uploadingFile || !selectedId}
+                        onClick={() => void startVoiceRecording()}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                        title="Grabar nota de voz"
+                        aria-label="Grabar nota de voz"
+                      >
+                        <Mic className="w-[18px] h-[18px]" aria-hidden />
+                      </button>
+                    ) : null}
+                    <div ref={emojiPanelRef} className="relative">
+                      <button
+                        type="button"
+                        disabled={!selectedId || recordingVoice || !!pendingVoice}
+                        onClick={() => setEmojiOpen((o) => !o)}
+                        className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border disabled:opacity-50 ${
+                          emojiOpen
+                            ? "border-[#4FAEB2]/50 bg-[#4FAEB2]/10 text-[#3F8E91]"
+                            : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                        }`}
+                        title="Emojis"
+                        aria-label="Insertar emoji"
+                        aria-expanded={emojiOpen}
+                      >
+                        <Smile className="w-[18px] h-[18px]" aria-hidden />
+                      </button>
+                      {emojiOpen ? (
+                        <div className="absolute bottom-full left-0 z-30 mb-1 w-[min(calc(100vw-2rem),18rem)] max-h-64 overflow-y-auto overscroll-contain rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+                          {EMOJI_GRUPOS.map((g) => (
+                            <div key={g.grupo} className="mb-2 last:mb-0">
+                              <p className="mb-1 px-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                                {g.grupo}
+                              </p>
+                              <div className="grid grid-cols-8 gap-0.5">
+                                {g.items.map((em) => (
+                                  <button
+                                    key={em}
+                                    type="button"
+                                    onClick={() => insertEmoji(em)}
+                                    className="flex h-8 w-8 items-center justify-center rounded-md text-lg leading-none transition-colors hover:bg-slate-100"
+                                    title={em}
+                                  >
+                                    {em}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                    {vista !== "bot" && selected?.channel.quick_replies_inbox_enabled !== false ? (
+                      <>
+                        <button
+                          type="button"
+                          disabled={!selectedId || quickRepliesLoading}
+                          onClick={() => {
+                            setQuickReplyOpen((o) => !o);
+                            setQuickReplySearch("");
+                          }}
+                          className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border disabled:opacity-50 ${
+                            quickReplyOpen
+                              ? "border-[#4FAEB2]/50 bg-[#4FAEB2]/10 text-[#3F8E91]"
+                              : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                          }`}
+                          title="Respuestas rápidas"
+                          aria-label="Insertar respuesta rápida"
+                          aria-expanded={quickReplyOpen}
+                        >
+                          <Zap className="w-[18px] h-[18px]" aria-hidden />
+                        </button>
+                        {quickReplyOpen ? (
+                          <div className="absolute bottom-full left-0 z-30 mb-1 flex w-[min(calc(100vw-2rem),20rem)] max-h-72 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+                            <div className="border-b border-slate-100 px-2 py-1.5">
+                              <input
+                                type="search"
+                                className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs outline-none focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/20"
+                                placeholder="Buscar…"
+                                value={quickReplySearch}
+                                onChange={(e) => setQuickReplySearch(e.target.value)}
+                                aria-label="Buscar respuesta rápida"
+                                autoFocus
+                              />
+                            </div>
+                            <div className="max-h-56 overflow-y-auto overscroll-contain p-1">
+                              {quickRepliesLoading ? (
+                                <p className="px-2 py-4 text-center text-xs text-slate-400">Cargando…</p>
+                              ) : filteredQuickReplies.length === 0 ? (
+                                <p className="px-2 py-4 text-center text-xs text-slate-500">
+                                  {channelQuickReplies.length === 0
+                                    ? "No hay respuestas configuradas para este canal."
+                                    : "Sin coincidencias."}
+                                </p>
+                              ) : (
+                                <ul className="space-y-0.5">
+                                  {filteredQuickReplies.map((r) => (
+                                    <li key={r.id}>
+                                      <button
+                                        type="button"
+                                        className="w-full rounded-lg px-2 py-2 text-left text-xs hover:bg-slate-50"
+                                        onClick={() => insertQuickReplyBody(r.body)}
+                                      >
+                                        <span className="block font-semibold text-slate-900">{r.title}</span>
+                                        <span className="mt-0.5 line-clamp-2 text-[11px] text-slate-500">
+                                          {r.body}
+                                        </span>
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          </div>
+                        ) : null}
+                      </>
+                    ) : null}
+                    {vista !== "bot" ? (
+                      <>
+                        <button
+                          type="button"
+                          disabled={!selectedId}
+                          onClick={() => {
+                            if (tplPanelOpen) setTplPanelOpen(false);
+                            else void openTemplatePanel();
+                          }}
+                          className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border disabled:opacity-50 ${
+                            tplPanelOpen
+                              ? "border-[#4FAEB2]/50 bg-[#4FAEB2]/10 text-[#3F8E91]"
+                              : !windowOpen
+                                ? "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                                : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                          }`}
+                          title={!windowOpen ? "Recontactar con plantilla (fuera de las 24 h)" : "Enviar plantilla"}
+                          aria-label="Enviar plantilla / recontactar"
+                          aria-expanded={tplPanelOpen}
+                        >
+                          <FileText className="w-[18px] h-[18px]" aria-hidden />
+                        </button>
+                        {tplPanelOpen ? (
+                          <div
+                            ref={tplPanelRef}
+                            className="absolute bottom-full left-0 z-30 mb-1 flex w-[min(calc(100vw-2rem),24rem)] max-h-[26rem] flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl"
+                          >
+                            <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
+                              <span className="text-xs font-semibold text-slate-800">Recontactar con plantilla</span>
+                              <button
+                                type="button"
+                                onClick={() => setTplPanelOpen(false)}
+                                className="text-sm text-slate-400 hover:text-slate-600"
+                                aria-label="Cerrar"
+                              >
+                                ✕
+                              </button>
+                            </div>
+                            {!windowOpen ? (
+                              <div className="border-b border-amber-100 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-800">
+                                Pasaron +24 h desde el último mensaje del cliente: para recontactarlo solo se
+                                puede enviar una plantilla aprobada.
+                              </div>
+                            ) : null}
+                            <div className="max-h-[22rem] overflow-y-auto overscroll-contain p-2">
+                              {tplLoading ? (
+                                <p className="px-2 py-4 text-center text-xs text-slate-400">Cargando plantillas…</p>
+                              ) : tplList.length === 0 ? (
+                                <p className="px-2 py-4 text-center text-xs text-slate-500">
+                                  No hay plantillas aprobadas para este canal.
+                                </p>
+                              ) : !tplSelected ? (
+                                <ul className="space-y-0.5">
+                                  {tplList.map((t) => (
+                                    <li key={t.id}>
+                                      <button
+                                        type="button"
+                                        onClick={() => selectTemplate(t)}
+                                        className="w-full rounded-lg px-2 py-2 text-left text-xs hover:bg-slate-50"
+                                      >
+                                        <span className="block font-semibold text-slate-900">{t.name}</span>
+                                        <span className="mt-0.5 line-clamp-2 text-[11px] text-slate-500">
+                                          {getBodyComponentText(t.components_json ?? [])}
+                                        </span>
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <div className="space-y-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setTplSelectedId(null);
+                                      setTplVars({});
+                                      setTplError(null);
+                                    }}
+                                    className="text-[11px] text-[#3F8E91] hover:underline"
+                                  >
+                                    ← Elegir otra
+                                  </button>
+                                  <p className="text-xs font-semibold text-slate-800">{tplSelected.name}</p>
+                                  {tplSlots.length > 0 ? (
+                                    <div className="space-y-1.5">
+                                      {tplSlots.map((s) => (
+                                        <label key={s} className="block">
+                                          <span className="mb-0.5 block text-[11px] font-medium text-slate-600">{s}</span>
+                                          <input
+                                            type="text"
+                                            value={tplVars[s] ?? ""}
+                                            onChange={(e) =>
+                                              setTplVars((prev) => ({ ...prev, [s]: e.target.value }))
+                                            }
+                                            className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs outline-none focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/20"
+                                            placeholder={`Valor para ${s}`}
+                                          />
+                                        </label>
+                                      ))}
+                                    </div>
+                                  ) : null}
+                                  <div className="rounded-lg border border-slate-100 bg-slate-50 px-2 py-2">
+                                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                                      Vista previa
+                                    </span>
+                                    <p className="whitespace-pre-wrap break-words text-[12px] text-slate-700">
+                                      {tplPreview}
+                                    </p>
+                                  </div>
+                                  {tplError ? <p className="text-[11px] text-red-600">{tplError}</p> : null}
+                                  <button
+                                    type="button"
+                                    onClick={() => void sendTemplate()}
+                                    disabled={tplSending}
+                                    className="w-full rounded-lg bg-[#4FAEB2] px-3 py-2 text-xs font-semibold text-white hover:bg-[#3F8E91] disabled:bg-slate-200 disabled:text-slate-400"
+                                  >
+                                    {tplSending ? "Enviando…" : "Enviar plantilla"}
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                            {tplError && !tplSelected ? (
+                              <p className="px-3 pb-2 text-[11px] text-red-600">{tplError}</p>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </>
+                    ) : null}
+                  </div>
+                  {recordingVoice ? (
+                    /* Grabando: barra tipo WhatsApp con contador. No se envía hasta confirmar. */
+                    <div className="flex flex-1 min-w-0 items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 min-h-[2.25rem]">
+                      <span className="relative flex h-2.5 w-2.5 shrink-0" aria-hidden>
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+                        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-600" />
+                      </span>
+                      <span className="text-sm font-semibold tabular-nums text-red-700">
+                        {formatRecordTime(recordSeconds)}
+                      </span>
+                      <span className="truncate text-xs text-red-600">Grabando nota de voz…</span>
+                      <button
+                        type="button"
+                        onClick={cancelVoiceRecording}
+                        className="ml-auto inline-flex h-7 items-center gap-1 rounded-lg border border-red-200 bg-white px-2 text-xs font-semibold text-red-700 transition-colors hover:bg-red-100"
+                        title="Cancelar grabación"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={stopVoiceRecording}
+                        className="inline-flex h-7 items-center gap-1 rounded-lg bg-red-600 px-2.5 text-xs font-semibold text-white transition-colors hover:bg-red-700"
+                        title="Detener grabación"
+                      >
+                        <Square className="h-3 w-3 fill-current" aria-hidden />
+                        Listo
+                      </button>
+                    </div>
+                  ) : pendingVoice ? (
+                    /* Grabada y esperando confirmación: se puede escuchar, descartar o enviar. */
+                    <div className="flex flex-1 min-w-0 items-center gap-2 rounded-xl border border-[#4FAEB2]/40 bg-[#4FAEB2]/[0.06] px-2.5 py-1.5 min-h-[2.25rem]">
+                      <Mic className="h-4 w-4 shrink-0 text-[#3F8E91]" aria-hidden />
+                      <audio src={pendingVoice.url} controls className="h-8 min-w-0 flex-1" />
+                      <button
+                        type="button"
+                        onClick={discardPendingVoice}
+                        className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 hover:text-red-600"
+                        title="Descartar nota de voz"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                        Descartar
+                      </button>
+                    </div>
+                  ) : (
+                    <textarea
+                      ref={composerRef}
+                      rows={1}
+                      className="flex-1 min-w-0 resize-none rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-900 shadow-sm transition-colors placeholder:text-slate-400 hover:border-[#4FAEB2]/60 focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/20 outline-none min-h-[2.25rem] max-h-[140px] overflow-y-auto leading-snug"
+                      placeholder="Escribí un mensaje…  (Enter envía · Shift+Enter salto de línea)"
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={handleComposerKeyDown}
+                      onPaste={(e) => {
+                        const img = imagenDelPortapapeles(e);
+                        if (!img) return; // texto: pegado normal
+                        e.preventDefault();
+                        setImagenPegada(img);
+                      }}
+                    />
+                  )}
+                  <button
+                    type="submit"
+                    disabled={recordingVoice || (!input.trim() && !pendingVoice)}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-[#4FAEB2] px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-[#4FAEB2]/20 transition-colors hover:bg-[#3F8E91] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none min-h-[2.25rem]"
+                  >
+                    <span>Enviar</span>
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="h-3.5 w-3.5"
+                      aria-hidden="true"
+                    >
+                      <line x1="22" y1="2" x2="11" y2="13" />
+                      <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                    </svg>
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

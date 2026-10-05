@@ -1,0 +1,65 @@
+import { NextResponse } from "next/server";
+import { getServiceAuthUsuario } from "@/lib/auth/get-service-auth-usuario";
+import { nombrePreferido } from "@/lib/format/nombres";
+
+type UsuarioActivoRow = {
+  id: string;
+  nombre: string | null;
+  email: string | null;
+  rol?: string | null;
+  estado: string | null;
+  /** Marca a la persona de QA: su tarjeta del tablero usa las etapas de QA. */
+  es_qa?: boolean | null;
+  /** Marca a la persona de Project Manager (para asignarla como PM de un cliente). */
+  es_project_manager?: boolean | null;
+  es_tecnico?: boolean | null;
+};
+
+/**
+ * GET /api/usuarios/empresa-activos
+ *
+ * Catálogo acotado para selects: resuelve la empresa desde la sesión y lee
+ * `usuarios` server-side con service role, sin exponer RLS ni datos de otras empresas.
+ */
+export async function GET(request: Request) {
+  try {
+    const r = await getServiceAuthUsuario(request);
+    if (!r.ok) {
+      return NextResponse.json({ error: "No autenticado" }, { status: r.status });
+    }
+
+    const { catalogUsuario, supabaseSr } = r;
+    const empresaId = catalogUsuario?.empresa_id ?? null;
+    if (!empresaId) {
+      return NextResponse.json({ error: "Perfil de empresa no encontrado" }, { status: 403 });
+    }
+
+    const { data, error } = await supabaseSr
+      .from("usuarios")
+      .select("id, nombre, nombre_chat, email, rol, estado, es_qa, es_project_manager, es_tecnico")
+      .eq("empresa_id", empresaId)
+      .ilike("estado", "activo")
+      .order("nombre", { ascending: true })
+      .order("email", { ascending: true });
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+
+    const usuarios = ((data ?? []) as UsuarioActivoRow[]).map((u) => ({
+      id: u.id,
+      nombre: nombrePreferido(u) || u.nombre,
+      email: u.email ?? "",
+      rol: u.rol ?? null,
+      estado: u.estado,
+      es_qa: u.es_qa === true,
+      es_project_manager: u.es_project_manager === true,
+      es_tecnico: u.es_tecnico === true,
+    }));
+
+    return NextResponse.json({ usuarios });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Error al listar usuarios activos";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}

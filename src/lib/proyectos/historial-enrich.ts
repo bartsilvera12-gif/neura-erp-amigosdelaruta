@@ -1,0 +1,159 @@
+import "server-only";
+
+import { createServiceRoleClient } from "@/lib/supabase/service-admin";
+import type { AppSupabaseClient } from "@/lib/supabase/schema";
+
+import {
+  formatDurationHuman,
+  slaTipoSnapshotLabel,
+} from "@/lib/proyectos/brief-data";
+import { msLaborables } from "@/lib/proyectos/reloj-laboral";
+import { subestadoDesarrolloLabel } from "@/lib/proyectos/subestados-desarrollo";
+import { nombrePreferido } from "@/lib/format/nombres";
+
+/**
+ * Cuánto duró un segmento en HORAS DE TRABAJO.
+ *
+ * Un segmento abierto un viernes a las 17 y cerrado el lunes a las 8 son 63 h
+ * corridas y cero de trabajo. `duration_seconds` guarda el calendario y se deja
+ * como está en la base —es el hecho crudo—, pero el historial tiene que hablar
+ * la misma unidad que el SLA y que el contador de la tarjeta.
+ */
+function duracionLaboralSegundos(r: HistorialRowRaw): number | null {
+  if (!r.entered_at) return r.duration_seconds != null ? Number(r.duration_seconds) : null;
+  // Los eventos puntuales (reasignación, sub-etapa) entran y salen en el mismo
+  // instante: su duración es cero y no tiene sentido mostrarla.
+  const ms = msLaborables(r.entered_at, r.exited_at ?? new Date().toISOString());
+  return ms != null ? Math.floor(ms / 1000) : null;
+}
+
+export type HistorialRowRaw = {
+  id: string;
+  estado_anterior_id?: string | null;
+  estado_nuevo_id?: string | null;
+  changed_by?: string | null;
+  changed_at?: string | null;
+  entered_at?: string | null;
+  exited_at?: string | null;
+  duration_seconds?: number | null;
+  tipo_sla_snapshot?: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
+export type HistorialRowEnriched = HistorialRowRaw & {
+  estado_anterior_nombre: string | null;
+  estado_nuevo_nombre: string;
+  tipo_sla_label: string;
+  usuario_cambio_label: string;
+  duration_label: string;
+  /**
+   * "estado" (cambio de estado) | "reasignacion_tecnico" (cambio de responsable)
+   * | "subestado_desarrollo" (cambio de sub-etapa de desarrollo).
+   */
+  evento_tipo: "estado" | "reasignacion_tecnico" | "subestado_desarrollo";
+  reasignacion_de_label: string | null;
+  reasignacion_a_label: string | null;
+  subestado_de_label: string | null;
+  subestado_a_label: string | null;
+};
+
+/** Lee metadata.tipo/de/a de una fila de reasignación (defensivo con jsonb suelto). */
+function leerReasignacion(meta: Record<string, unknown> | null | undefined): { de: string | null; a: string | null } | null {
+  if (!meta || typeof meta !== "object") return null;
+  if (String((meta as { tipo?: unknown }).tipo ?? "") !== "reasignacion_tecnico") return null;
+  const de = (meta as { de?: unknown }).de;
+  const a = (meta as { a?: unknown }).a;
+  return {
+    de: typeof de === "string" && de ? de : null,
+    a: typeof a === "string" && a ? a : null,
+  };
+}
+
+/** Lee metadata.tipo/de/a de una fila de cambio de sub-etapa (de/a son códigos). */
+function leerSubestado(meta: Record<string, unknown> | null | undefined): { de: string | null; a: string | null } | null {
+  if (!meta || typeof meta !== "object") return null;
+  if (String((meta as { tipo?: unknown }).tipo ?? "") !== "subestado_desarrollo") return null;
+  const de = (meta as { de?: unknown }).de;
+  const a = (meta as { a?: unknown }).a;
+  return {
+    de: typeof de === "string" && de ? de : null,
+    a: typeof a === "string" && a ? a : null,
+  };
+}
+
+export async function enrichProyectoHistorialRows(
+  sb: AppSupabaseClient,
+  empresaId: string,
+  rows: HistorialRowRaw[]
+): Promise<HistorialRowEnriched[]> {
+  if (rows.length === 0) return [];
+
+  const estadoIds = new Set<string>();
+  const userIds = new Set<string>();
+  for (const r of rows) {
+    if (r.estado_anterior_id) estadoIds.add(r.estado_anterior_id);
+    if (r.estado_nuevo_id) estadoIds.add(r.estado_nuevo_id);
+    if (r.changed_by) userIds.add(r.changed_by);
+    const rea = leerReasignacion(r.metadata);
+    if (rea?.de) userIds.add(rea.de);
+    if (rea?.a) userIds.add(rea.a);
+  }
+
+  const catalog = createServiceRoleClient();
+
+  const [estRes, usrRes] = await Promise.all([
+    estadoIds.size > 0
+      ? sb.from("proyecto_estados").select("id,nombre").eq("empresa_id", empresaId).in("id", [...estadoIds])
+      : Promise.resolve({ data: [] as { id: string; nombre?: string }[] }),
+    userIds.size > 0
+      ? catalog.from("usuarios").select("id,nombre,nombre_chat,email").eq("empresa_id", empresaId).in("id", [...userIds])
+      : Promise.resolve({ data: [] as { id: string; nombre?: string; email?: string }[] }),
+  ]);
+
+  const nombreEstado = new Map<string, string>();
+  for (const e of estRes.data ?? []) {
+    nombreEstado.set(e.id, String(e.nombre ?? ""));
+  }
+
+  const nombreUsuario = new Map<string, string>();
+  for (const u of usrRes.data ?? []) {
+    // Sólo el nombre: el email no aporta nada en el historial y ensuciaba la
+    // línea ("ALAN AYALA · alanayalapsn@gmail.com"). El email sigue estando en
+    // el módulo de Usuarios, que es donde corresponde buscarlo.
+    const label = nombrePreferido(u as { nombre?: string; nombre_chat?: string }) || String(u.email ?? "").trim() || u.id.slice(0, 8);
+    nombreUsuario.set(u.id, label);
+  }
+
+  return rows.map((r) => {
+    const antId = r.estado_anterior_id ?? null;
+    const nueId = r.estado_nuevo_id ?? "";
+    const uid = r.changed_by ?? null;
+    let usuarioLabel = "No registrado";
+    if (uid) {
+      usuarioLabel = nombreUsuario.get(uid) ?? "Usuario desconocido";
+    }
+
+    const rea = leerReasignacion(r.metadata);
+    const sub = leerSubestado(r.metadata);
+    const nombreDe = (id: string | null) =>
+      id ? nombreUsuario.get(id) ?? "Usuario desconocido" : "Sin asignar";
+
+    return {
+      ...r,
+      estado_anterior_nombre: antId ? nombreEstado.get(antId) ?? "—" : null,
+      estado_nuevo_nombre: nueId ? nombreEstado.get(nueId) ?? "—" : "—",
+      tipo_sla_label: slaTipoSnapshotLabel(r.tipo_sla_snapshot),
+      usuario_cambio_label: usuarioLabel,
+      // Horas de TRABAJO, no corridas: es la misma unidad que el SLA y que el
+      // contador de la tarjeta. `duration_seconds` guarda el calendario y se
+      // deja intacto en la base —es el hecho crudo—, pero mostrarlo acá haría
+      // que el historial y el SLA dijeran cosas distintas del mismo segmento.
+      duration_label: formatDurationHuman(duracionLaboralSegundos(r)),
+      evento_tipo: rea ? "reasignacion_tecnico" : sub ? "subestado_desarrollo" : "estado",
+      reasignacion_de_label: rea ? nombreDe(rea.de) : null,
+      reasignacion_a_label: rea ? nombreDe(rea.a) : null,
+      subestado_de_label: sub ? subestadoDesarrolloLabel(sub.de) ?? "Sin definir" : null,
+      subestado_a_label: sub ? subestadoDesarrolloLabel(sub.a) ?? "Sin definir" : null,
+    };
+  });
+}

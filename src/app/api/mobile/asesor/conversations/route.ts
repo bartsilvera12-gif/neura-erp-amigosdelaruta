@@ -1,0 +1,90 @@
+import { NextResponse } from "next/server";
+import { conBearer } from "@/lib/auth/bearer-contexto";
+import { extractBearerTokenFromRequest } from "@/lib/auth/get-auth-user-for-api-route";
+import { requireEmpresaTenantServiceRole } from "@/lib/chat/empresa-tenant-service-role";
+import { fetchChatChannels, fetchChatConversations } from "@/lib/chat/actions";
+import { getMyAgentOperationalPresence, listChatQueues } from "@/lib/chat/chat-ops-actions";
+
+export const runtime = "nodejs";
+
+/**
+ * GET /api/mobile/asesor/conversations
+ * Lista ESTRICTAMENTE las conversaciones open/pending asignadas al asesor logueado
+ * (assigned_agent_id ∈ sus chat_agents). Seguridad en backend.
+ *
+ * Reusa el MISMO camino que el inbox desktop (`fetchChatConversations` con assignment="mine"),
+ * que internamente elige PostgREST (neura) o pool PG (tenants no expuestos) según el schema.
+ * Antes este endpoint consultaba el pool PG crudo, que para neura (PostgREST) no es el camino
+ * soportado → fallaba con "Error interno".
+ */
+export async function GET(request: Request) {
+  // Todo el handler corre con el token disponible: `fetchChatConversations` y
+  // `getMyAgentOperationalPresence` resuelven al usuario por su cuenta leyendo cookies, y
+  // desde la app nativa no hay ninguna. Con el contexto lo encuentran sin cambiar sus firmas.
+  return conBearer(extractBearerTokenFromRequest(request), () => manejar(request));
+}
+
+async function manejar(request: Request) {
+  // 1) Sesión.
+  try {
+    await requireEmpresaTenantServiceRole();
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: "Iniciá sesión", code: "unauthenticated" },
+      { status: 401 }
+    );
+  }
+
+  try {
+    // 2) ¿Es agente en cola? Si no, lista vacía con flag (no error).
+    const presence = await getMyAgentOperationalPresence();
+    if (!presence.in_queues) {
+      return NextResponse.json({ ok: true, is_agent: false, conversations: [] });
+    }
+
+    // 3) Solo sus asignadas (assignment="mine" aplica scope + filtro por su agent_id).
+    const sp = new URL(request.url).searchParams;
+    const cola = sp.get("cola")?.trim() || null;
+    // `?canal=`: el selector "Todos los canales" del inbox de escritorio (línea de WhatsApp,
+    // Messenger, Instagram…).
+    const canal = sp.get("canal")?.trim() || null;
+    const [{ conversations }, queues, channels] = await Promise.all([
+      fetchChatConversations("inbox", {
+        assignment: "mine",
+        queue_id: cola,
+        channel_id: canal,
+        limit: 200,
+      }),
+      // Si las colas fallan, la lista igual sale: el selector simplemente no aparece.
+      listChatQueues().catch(() => []),
+      fetchChatChannels().catch(() => []),
+    ]);
+
+    const mapped = conversations.map((c) => ({
+      id: c.id,
+      status: c.status,
+      last_message_at: c.last_message_at,
+      last_message_preview: c.last_message_preview,
+      unread_count: c.unread_count,
+      contact_nombre: c.contact?.name ?? null,
+      contact_telefono: c.contact?.phone_number ?? null,
+      queue_id: c.queue_id ?? null,
+      last_message_from_me: c.last_message_from_me ?? null,
+      last_message_status: c.last_message_status ?? null,
+      window_open: null as boolean | null,
+    }));
+
+    return NextResponse.json({
+      ok: true,
+      is_agent: true,
+      queues: queues.filter((q) => q.is_active).map((q) => ({ id: q.id, nombre: q.nombre })),
+      channels: channels
+        .filter((c) => c.activo)
+        .map((c) => ({ id: c.id, nombre: (c.nombre ?? "").trim() || "Canal", tipo: c.type ?? null })),
+      conversations: mapped,
+    });
+  } catch (e) {
+    console.error("[mobile/asesor/conversations]", e instanceof Error ? e.message : String(e));
+    return NextResponse.json({ ok: false, error: "Error interno" }, { status: 500 });
+  }
+}

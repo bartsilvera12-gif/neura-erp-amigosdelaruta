@@ -1,0 +1,637 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
+import { ClienteSearchSelect } from "@/app/dashboard/proyectos/components/ClienteSearchSelect";
+import { FacturaSelect } from "@/app/dashboard/proyectos/components/FacturaSelect";
+import {
+  ProyectoModuloSelector,
+  type ProyectoModuloCatalogo as ModuloCatalogo,
+} from "@/app/dashboard/proyectos/components/ProyectoModuloSelector";
+import { FancySelect } from "@/app/dashboard/proyectos/components/FancySelect";
+import {
+  PROYECTO_DATOS_BRIEF_FIELDS,
+  PROYECTO_WEB_KEYS_OCULTAS,
+  PROYECTO_FACTURACION_OPCIONES,
+  applyBriefFormToExisting,
+  applySaasFormToExisting,
+  esFacturacionValida,
+  type ProyectoModuloSnapshot,
+} from "@/lib/proyectos/brief-data";
+import { tipoIncluyeSaas, tipoIncluyeWeb } from "@/lib/proyectos/tipos-proyecto";
+import { FechaSelect } from "@/components/ui/FechaSelect";
+
+type Tipo = { id: string; nombre: string; codigo: string };
+type Estado = { id: string; nombre: string };
+type Cliente = {
+  id: string;
+  empresa?: string | null;
+  nombre_contacto?: string | null;
+  telefono?: string | null;
+  telefono_secundario?: string | null;
+};
+type Usuario = { id: string; nombre?: string | null };
+
+export type ProyectoNuevoFormProps = {
+  variant?: "page" | "modal";
+  onCreated: (id: string) => void;
+  onCancel?: () => void;
+};
+
+const INPUT_CLS =
+  "mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm transition-colors hover:border-[#4FAEB2]/60 focus:border-[#4FAEB2] focus:outline-none focus:ring-2 focus:ring-[#4FAEB2]/20";
+const LABEL_CLS = "text-xs font-medium uppercase tracking-wide text-slate-500";
+
+export default function ProyectoNuevoForm({
+  variant = "page",
+  onCreated,
+  onCancel,
+}: ProyectoNuevoFormProps) {
+  const [tipos, setTipos] = useState<Tipo[]>([]);
+  const [estados, setEstados] = useState<Estado[]>([]);
+  const [clientes, setClientes] = useState<Cliente[]>([]);
+  const [usuarios, setUsuarios] = useState<Usuario[]>([]);
+  const [modulosCatalogo, setModulosCatalogo] = useState<ModuloCatalogo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const [tipoId, setTipoId] = useState("");
+  const [estadoId, setEstadoId] = useState("");
+  const [clienteId, setClienteId] = useState("");
+  const [facturaId, setFacturaId] = useState("");
+  const [titulo, setTitulo] = useState("");
+  const [prioridad, setPrioridad] = useState("normal");
+  const [rc, setRc] = useState("");
+  const [rt, setRt] = useState("");
+  const [fechaIngreso, setFechaIngreso] = useState(() => new Date().toISOString().slice(0, 10));
+  const [fechaProm, setFechaProm] = useState("");
+  const [brief, setBrief] = useState<Record<string, string>>({});
+  const [briefLists, setBriefLists] = useState<Record<string, string[]>>({});
+  // "Comentarios" al crear: en vez de guardarse como observación del proyecto,
+  // este texto crea el PRIMER comentario de la tarjeta (canal Comercial) y los
+  // archivos van a la pestaña Archivos del proyecto (cualquier tipo). Así lo que
+  // carga el comercial queda impactado en la conversación del proyecto.
+  const [comentarioInicial, setComentarioInicial] = useState("");
+  const [archivosNuevos, setArchivosNuevos] = useState<File[]>([]);
+  const [saasEmpresaNombre, setSaasEmpresaNombre] = useState("");
+  // WhatsApp / contacto del proyecto (arriba, junto a Fecha prometida). Se autocompleta con el
+  // teléfono del cliente elegido y queda editable.
+  const [contactoWhatsapp, setContactoWhatsapp] = useState("");
+  const [saasObservaciones, setSaasObservaciones] = useState("");
+  /**
+   * Situación de facturación del cliente. Obligatoria en SaaS/ERP y mixto:
+   * define si el arranque necesita timbrado, certificado y homologación con
+   * la DNIT, o ninguno de los tres. Preguntarlo después es descubrirlo tarde.
+   */
+  const [saasFacturacion, setSaasFacturacion] = useState("");
+  const [saasModuloIds, setSaasModuloIds] = useState<string[]>([]);
+
+  const tipoCodigo = useMemo(() => tipos.find((t) => t.id === tipoId)?.codigo ?? "", [tipos, tipoId]);
+  // El tipo mixto muestra los dos bloques de brief a la vez.
+  const esWeb = tipoIncluyeWeb(tipoCodigo);
+  const esSaas = tipoIncluyeSaas(tipoCodigo);
+  const saasModulosSeleccionados = useMemo<ProyectoModuloSnapshot[]>(
+    () =>
+      modulosCatalogo
+        .filter((modulo) => saasModuloIds.includes(modulo.id))
+        .map((modulo) => ({ id: modulo.id, slug: modulo.slug, nombre: modulo.nombre })),
+    [modulosCatalogo, saasModuloIds]
+  );
+
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      const [rT, rE, rC, rU, rM] = await Promise.all([
+        fetchWithSupabaseSession("/api/proyectos/tipos", { cache: "no-store" }),
+        fetchWithSupabaseSession("/api/proyectos/estados", { cache: "no-store" }),
+        fetchWithSupabaseSession("/api/clientes", { cache: "no-store" }),
+        fetchWithSupabaseSession("/api/usuarios/empresa-activos", { cache: "no-store" }),
+        fetchWithSupabaseSession("/api/proyectos/modulos-catalogo", { cache: "no-store" }),
+      ]);
+      const jT = (await rT.json()) as { success?: boolean; data?: Tipo[] };
+      const jE = (await rE.json()) as { success?: boolean; data?: Estado[] };
+      const jC = (await rC.json()) as { success?: boolean; data?: Cliente[] };
+      const jUsers = (await rU.json()) as { usuarios?: Usuario[] };
+      const jModulos = (await rM.json()) as { success?: boolean; data?: ModuloCatalogo[] };
+      if (cancel) return;
+      if (jT.success && jT.data) {
+        setTipos(jT.data);
+        const web = jT.data.find((t) => t.codigo === "web");
+        if (web) setTipoId(web.id);
+      }
+      if (jE.success && jE.data) setEstados(jE.data);
+      if (jC.success && jC.data) setClientes(jC.data);
+      setUsuarios(jUsers.usuarios ?? []);
+      if (jModulos.success && jModulos.data) setModulosCatalogo(jModulos.data);
+      setLoading(false);
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, []);
+
+  // Responsable comercial: se preselecciona con el usuario que está creando el
+  // proyecto (queda editable). Antes arrancaba vacío y había que elegirse a mano.
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      try {
+        const r = await fetchWithSupabaseSession("/api/usuarios/me", { cache: "no-store" });
+        const j = (await r.json().catch(() => null)) as { usuario?: { id?: string | null } } | null;
+        if (!cancel && j?.usuario?.id) setRc(j.usuario.id);
+      } catch {
+        // Si falla, queda sin preseleccionar (no bloquea la creación).
+      }
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, []);
+
+  // Al elegir un cliente: setear el cliente y autocompletar WhatsApp/contacto con su teléfono
+  // (editable). Se hace en el evento de selección, no en un efecto.
+  function handleClienteChange(id: string) {
+    setClienteId(id);
+    // La factura pertenece al cliente: al cambiarlo, se descarta la elegida.
+    setFacturaId("");
+    if (!id) return;
+    const c = clientes.find((x) => x.id === id);
+    const tel = (c?.telefono ?? "").trim() || (c?.telefono_secundario ?? "").trim();
+    if (tel) setContactoWhatsapp(tel);
+  }
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!tipoId) {
+      setErr("Seleccioná un tipo de proyecto.");
+      return;
+    }
+    if (!titulo.trim()) {
+      setErr("El título es requerido.");
+      return;
+    }
+    // El cliente es obligatorio: un proyecto sin cliente no aparece en su ficha
+    // en Gestión y queda huérfano. El backend lo valida también (POST /api/proyectos).
+    if (!clienteId) {
+      setErr("Seleccioná el cliente del proyecto.");
+      return;
+    }
+    // Comentario obligatorio: describe qué necesita el cliente y queda como el
+    // primer comentario de la tarjeta.
+    if ((esWeb || esSaas) && !comentarioInicial.trim()) {
+      setErr("El comentario es obligatorio.");
+      return;
+    }
+    // En SaaS/ERP define qué hay que preparar para la puesta en marcha, así que
+    // se pide ahora y no cuando ya haya que arrancar.
+    if (esSaas && !esFacturacionValida(saasFacturacion)) {
+      setErr("Indicá la situación de facturación del cliente.");
+      return;
+    }
+    // El dominio a usar es obligatorio en proyectos web y mixtos.
+    if (esWeb && !(brief.dominio_usar ?? "").trim()) {
+      setErr("Indicá el dominio a usar.");
+      return;
+    }
+    setSaving(true);
+    setErr(null);
+    // Se aplican en cadena, no en if/else: el tipo mixto guarda ambos briefs.
+    // Las claves de cada uno son disjuntas (`saas_*` vs. marca/dominio/…).
+    let brief_data: Record<string, unknown> = {};
+    if (esWeb) brief_data = applyBriefFormToExisting(brief_data, brief, briefLists);
+    if (esSaas) {
+      brief_data = applySaasFormToExisting(brief_data, {
+        empresa_nombre: saasEmpresaNombre,
+        whatsapp_contacto: contactoWhatsapp,
+        observaciones: saasObservaciones,
+        modulos_necesarios: saasModulosSeleccionados,
+        facturacion: saasFacturacion,
+      });
+    }
+    // WhatsApp/contacto único (arriba): se guarda como clave general del brief para web/mixto
+    // (el SaaS ya la tomó como saas_whatsapp_contacto arriba).
+    const contacto = contactoWhatsapp.trim();
+    if (contacto) brief_data.whatsapp_contacto = contacto;
+
+    const body: Record<string, unknown> = {
+      tipo_id: tipoId,
+      titulo,
+      descripcion: null,
+      prioridad,
+      cliente_id: clienteId || null,
+      factura_id: facturaId || null,
+      responsable_comercial_id: rc || null,
+      responsable_tecnico_id: rt || null,
+      fecha_ingreso: new Date(fechaIngreso + "T12:00:00").toISOString(),
+      fecha_prometida: fechaProm ? new Date(fechaProm + "T12:00:00").toISOString() : null,
+      brief_data,
+    };
+    if (estadoId) body.estado_id = estadoId;
+
+    try {
+      const res = await fetchWithSupabaseSession("/api/proyectos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const j = (await res.json().catch(() => null)) as
+        | { success?: boolean; data?: { id?: string }; error?: string }
+        | null;
+      if (!res.ok || !j?.success || !j.data?.id) {
+        setErr(j?.error ?? "No se pudo crear");
+        return;
+      }
+      const nuevoId = j.data.id;
+
+      // Archivos (cualquier tipo) → pestaña Archivos del proyecto. Best-effort: el
+      // proyecto ya está creado, un fallo de subida no lo tira.
+      for (const file of archivosNuevos) {
+        const fd = new FormData();
+        fd.append("file", file);
+        await fetchWithSupabaseSession(`/api/proyectos/${nuevoId}/archivos`, {
+          method: "POST",
+          body: fd,
+        }).catch(() => {});
+      }
+
+      // "Comentario" → primer comentario de la tarjeta (canal Comercial), así lo
+      // que carga el comercial queda en la conversación del proyecto.
+      const comentarioTxt = comentarioInicial.trim();
+      if (comentarioTxt) {
+        await fetchWithSupabaseSession(`/api/proyectos/${nuevoId}/comentarios`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ comentario: comentarioTxt, canal: "comercial" }),
+        }).catch(() => {});
+      }
+
+      onCreated(nuevoId);
+    } catch (e) {
+      // Antes, un throw de red dejaba "Crear" trabado con el formulario lleno.
+      setErr(e instanceof Error ? e.message : "No se pudo crear el proyecto.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center px-6 py-12 text-sm text-slate-500">
+        Cargando…
+      </div>
+    );
+  }
+
+  const isModal = variant === "modal";
+
+  // "Comentarios" + "Archivos": el mismo bloque para web y SaaS. El texto crea el
+  // primer comentario de la tarjeta (canal Comercial) y los archivos van a la
+  // pestaña Archivos del proyecto (cualquier tipo).
+  const comentariosYArchivos = (
+    <>
+      <label className="block text-sm sm:col-span-2">
+        <span className={LABEL_CLS}>
+          Comentarios <span className="text-rose-500">*</span>
+        </span>
+        <textarea
+          required
+          className={`${INPUT_CLS} min-h-[88px]`}
+          rows={3}
+          value={comentarioInicial}
+          onChange={(e) => setComentarioInicial(e.target.value)}
+          placeholder="Contanos qué necesita el cliente. Queda como primer comentario de la tarjeta."
+        />
+      </label>
+      {/* Archivos de cualquier tipo (pdf, docs, imágenes…): al crear el proyecto
+          se suben a su pestaña Archivos. */}
+      <div className="block text-sm sm:col-span-2">
+        <span className={LABEL_CLS}>Archivos (opcional)</span>
+        <div className="mt-1.5 space-y-2">
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-[#4FAEB2]/40 bg-[#4FAEB2]/5 px-3 py-2 text-xs font-semibold text-[#3F8E91] transition-colors hover:border-[#4FAEB2] hover:bg-[#4FAEB2]/10">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
+            Adjuntar archivos
+            <input
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const nuevos = Array.from(e.target.files ?? []);
+                if (nuevos.length > 0) setArchivosNuevos((prev) => [...prev, ...nuevos]);
+                e.target.value = "";
+              }}
+            />
+          </label>
+          {archivosNuevos.length > 0 ? (
+            <ul className="space-y-1">
+              {archivosNuevos.map((f, idx) => (
+                <li
+                  key={`${f.name}-${idx}`}
+                  className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] text-slate-600"
+                >
+                  <span className="min-w-0 flex-1 truncate" title={f.name}>
+                    {f.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setArchivosNuevos((prev) => prev.filter((_, i) => i !== idx))}
+                    className="shrink-0 text-slate-400 transition-colors hover:text-rose-500"
+                    aria-label={`Quitar ${f.name}`}
+                    title="Quitar"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      </div>
+    </>
+  );
+
+  return (
+    <form
+      onSubmit={onSubmit}
+      className={
+        isModal
+          ? "flex h-full min-h-0 flex-col"
+          : "space-y-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"
+      }
+    >
+      {err ? (
+        <div
+          className={
+            isModal
+              ? "mx-6 mt-4 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2 text-sm text-rose-700"
+              : "rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2 text-sm text-rose-700"
+          }
+        >
+          {err}
+        </div>
+      ) : null}
+
+      <div
+        className={
+          isModal
+            ? "min-h-0 flex-1 space-y-6 overflow-y-auto bg-slate-50/50 px-6 py-5"
+            : "space-y-6"
+        }
+      >
+        <div className={isModal ? "rounded-2xl border border-slate-200 bg-white p-5 shadow-sm" : ""}>
+          {isModal ? (
+            <div className="mb-4 flex items-center gap-2">
+              <span className="h-5 w-1 rounded-full bg-[#4FAEB2]" />
+              <h2 className="text-sm font-semibold text-slate-900">Datos generales</h2>
+            </div>
+          ) : null}
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            {/* Fila 1: Tipo | Resp. comercial */}
+            <div className="block text-sm">
+              <span className={LABEL_CLS}>
+                Tipo <span className="text-rose-500">*</span>
+              </span>
+              <div className="mt-1.5">
+                <FancySelect
+                  ariaLabel="Tipo de proyecto"
+                  placeholder="Seleccionar…"
+                  value={tipoId}
+                  onChange={setTipoId}
+                  options={tipos.map((t) => ({ value: t.id, label: t.nombre }))}
+                />
+              </div>
+            </div>
+            <div className="block text-sm">
+              <span className={LABEL_CLS}>Resp. comercial</span>
+              <div className="mt-1.5">
+                <FancySelect
+                  ariaLabel="Responsable comercial"
+                  placeholder="—"
+                  value={rc}
+                  onChange={setRc}
+                  options={[
+                    { value: "", label: "—" },
+                    ...usuarios.map((u) => ({
+                      value: u.id,
+                      label: u.nombre ?? u.id.slice(0, 8),
+                    })),
+                  ]}
+                />
+              </div>
+            </div>
+            {/* Fila 2: Título (todo el ancho) */}
+            <label className="block text-sm sm:col-span-2">
+              <span className={LABEL_CLS}>Título</span>
+              <input
+                required
+                className={INPUT_CLS}
+                value={titulo}
+                onChange={(e) => setTitulo(e.target.value)}
+                placeholder="Nombre del proyecto"
+              />
+            </label>
+            {/* Fila 3: Cliente (todo el ancho) */}
+            <ClienteSearchSelect clientes={clientes} value={clienteId} onChange={handleClienteChange} required />
+            {/* Factura de la venta asociada (opcional): la deuda del proyecto sale de su saldo. */}
+            <label className="block text-sm sm:col-span-2">
+              <span className={LABEL_CLS}>
+                Factura de la venta <span className="font-normal text-slate-400">(opcional)</span>
+              </span>
+              <div className="mt-1.5">
+                <FacturaSelect clienteId={clienteId} value={facturaId} onChange={setFacturaId} />
+              </div>
+              <span className="mt-1 block text-[11px] text-slate-400">
+                Asociá la factura de esta venta. La deuda del proyecto en el tablero sale de su saldo.
+              </span>
+            </label>
+            {/* Fila 4: Fecha ingreso | WhatsApp */}
+            <label className="block text-sm">
+              <span className={LABEL_CLS}>Fecha ingreso</span>
+              <FechaSelect
+                required
+                className={INPUT_CLS}
+                value={fechaIngreso}
+                onChange={(e) => setFechaIngreso(e.target.value)}
+/>
+            </label>
+            <label className="block text-sm">
+              <span className={LABEL_CLS}>WhatsApp / contacto</span>
+              <input
+                className={INPUT_CLS}
+                placeholder="+595..."
+                value={contactoWhatsapp}
+                onChange={(e) => setContactoWhatsapp(e.target.value)}
+              />
+              <span className="mt-1 block text-[11px] text-slate-400">
+                Se completa solo con el teléfono del cliente. Podés editarlo.
+              </span>
+            </label>
+          </div>
+        </div>
+
+        {esWeb ? (
+          <div
+            className={
+              isModal
+                ? "rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+                : "rounded-2xl border border-[#4FAEB2]/20 bg-[#4FAEB2]/5 p-5"
+            }
+          >
+            <div className="mb-4 flex items-center gap-2">
+              <span className="h-5 w-1 rounded-full bg-[#4FAEB2]" />
+              <h2 className="text-sm font-semibold text-slate-900">Datos del proyecto (web)</h2>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {/* whatsapp_contacto se pide arriba, autocompletado. Acá se dejan solo
+                  los esenciales (marca, dominio, redes). El resto del brief NO se
+                  saca del sistema —el dato sigue guardado— sólo se oculta de estas
+                  pantallas. Lista compartida con la ficha (PROYECTO_WEB_KEYS_OCULTAS)
+                  para que crear y ficha muestren EXACTAMENTE lo mismo. */}
+              {PROYECTO_DATOS_BRIEF_FIELDS.filter(
+                (f) => !PROYECTO_WEB_KEYS_OCULTAS.includes(f.key)
+              ).map((f) => {
+                if (f.kind === "checkbox") {
+                  return (
+                    <label
+                      key={f.key}
+                      className="flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 transition-colors hover:border-[#4FAEB2]/60"
+                    >
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-slate-300 text-[#4FAEB2] accent-[#4FAEB2] focus:ring-[#4FAEB2]/30"
+                        checked={brief[f.key] === "1"}
+                        onChange={(e) =>
+                          setBrief((b) => ({ ...b, [f.key]: e.target.checked ? "1" : "" }))
+                        }
+                      />
+                      {f.label}
+                    </label>
+                  );
+                }
+                if (f.kind === "url_list") {
+                  // En el popup de CREAR se muestra un solo link (sin "Agregar otro
+                  // link"). Se guarda como lista de un elemento; agregar más se hace
+                  // después en el detalle, donde el campo sí es multi-link.
+                  const urls = briefLists[f.key] ?? [];
+                  return (
+                    <label key={f.key} className="block text-sm sm:col-span-2">
+                      <span className={LABEL_CLS}>{f.label}</span>
+                      <input
+                        type="url"
+                        className={INPUT_CLS}
+                        placeholder={f.placeholder ?? "https://..."}
+                        value={urls[0] ?? ""}
+                        onChange={(e) =>
+                          setBriefLists((b) => ({ ...b, [f.key]: [e.target.value] }))
+                        }
+                      />
+                    </label>
+                  );
+                }
+                return (
+                  <label key={f.key} className="block text-sm sm:col-span-2">
+                    <span className={LABEL_CLS}>
+                      {f.label}
+                      {f.key === "dominio_usar" ? <span className="text-rose-500"> *</span> : null}
+                    </span>
+                    <input
+                      className={INPUT_CLS}
+                      placeholder={f.placeholder}
+                      value={brief[f.key] ?? ""}
+                      onChange={(e) => setBrief((b) => ({ ...b, [f.key]: e.target.value }))}
+                    />
+                  </label>
+                );
+              })}
+              {comentariosYArchivos}
+            </div>
+          </div>
+        ) : null}
+
+        {esSaas ? (
+          <div
+            className={
+              isModal
+                ? "rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+                : "rounded-2xl border border-[#4FAEB2]/20 bg-[#4FAEB2]/5 p-5"
+            }
+          >
+            <div className="mb-4 flex items-center gap-2">
+              <span className="h-5 w-1 rounded-full bg-[#4FAEB2]" />
+              <h2 className="text-sm font-semibold text-slate-900">Datos del ERP / SaaS</h2>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="block text-sm sm:col-span-2">
+                <span className={LABEL_CLS}>
+                  Facturación del cliente <span className="text-rose-500">*</span>
+                </span>
+                <div className="mt-1.5 grid gap-2 sm:grid-cols-3">
+                  {PROYECTO_FACTURACION_OPCIONES.map((o) => {
+                    const activo = saasFacturacion === o.value;
+                    return (
+                      <button
+                        key={o.value}
+                        type="button"
+                        onClick={() => setSaasFacturacion(o.value)}
+                        className={`rounded-xl border px-3 py-2.5 text-left text-[13px] font-medium transition-colors ${
+                          activo
+                            ? "border-[#4FAEB2] bg-[#4FAEB2]/10 text-[#2F6E71]"
+                            : "border-slate-200 bg-white text-slate-600 hover:border-[#4FAEB2]/50"
+                        }`}
+                      >
+                        {o.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="block text-sm sm:col-span-2">
+                <span className={LABEL_CLS}>Módulos necesarios</span>
+                <div className="mt-1.5">
+                  <ProyectoModuloSelector
+                    modulos={modulosCatalogo}
+                    selectedIds={saasModuloIds}
+                    onChange={setSaasModuloIds}
+                    layout="chips"
+                  />
+                </div>
+              </div>
+              {comentariosYArchivos}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      <div
+        className={
+          isModal
+            ? "flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 bg-white px-6 py-4"
+            : "flex flex-wrap items-center justify-end gap-2 pt-2"
+        }
+      >
+        {onCancel ? (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:border-[#4FAEB2]/60 hover:text-[#4FAEB2]"
+          >
+            Cancelar
+          </button>
+        ) : null}
+        <button
+          type="submit"
+          disabled={saving}
+          className="rounded-xl bg-[#4FAEB2] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#3F8E91] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
+        >
+          {saving ? "Guardando…" : "Crear proyecto"}
+        </button>
+      </div>
+    </form>
+  );
+}

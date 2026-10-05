@@ -1,0 +1,109 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import ProyectoDetalleInner from "./ProyectoDetalleInner";
+
+export default function ProyectoDetalleModal({
+  projectId,
+  open,
+  onClose,
+  onUpdated,
+  dataSchema,
+  proyectoPreview,
+  initialTab,
+  initialCanal,
+  backHref,
+  backLabel,
+}: {
+  projectId: string | null;
+  open: boolean;
+  onClose: () => void;
+  onUpdated: () => void;
+  dataSchema: string;
+  /** Fila del tablero para pintar la cabecera al instante (ver ProyectoDetalleInner). */
+  proyectoPreview?: (Record<string, unknown> & { id: string }) | null;
+  /** Solapa/canal iniciales al abrir por deep-link de notificación. */
+  initialTab?: string;
+  initialCanal?: string;
+  /** Adónde volver si el modal se abrió desde otra pantalla (p. ej. el Tablero). */
+  backHref?: string | null;
+  backLabel?: string;
+}) {
+  const router = useRouter();
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (!open) setDirty(false);
+  }, [open]);
+
+  const requestClose = useCallback(() => {
+    if (dirty) {
+      if (!window.confirm("Hay cambios sin guardar en Datos. ¿Cerrar igualmente?")) return;
+    }
+    onClose();
+  }, [dirty, onClose]);
+
+  /** Volver al origen (Tablero): navega en vez de quedarse en el Kanban. */
+  const requestBack = useCallback(() => {
+    if (!backHref) return;
+    if (dirty && !window.confirm("Hay cambios sin guardar en Datos. ¿Salir igualmente?")) return;
+    router.push(backHref);
+  }, [backHref, dirty, router]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      requestClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, requestClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open]);
+
+  if (!open || !projectId) return null;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 sm:p-4 md:p-6">
+      <button
+        type="button"
+        aria-label="Cerrar modal"
+        className="absolute inset-0 bg-slate-900/55 backdrop-blur-sm"
+        onClick={requestClose}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="proyecto-detalle-titulo"
+        className="relative flex h-[100dvh] max-h-[100dvh] w-full max-w-5xl flex-col overflow-hidden rounded-none border-0 border-slate-200 bg-white shadow-2xl shadow-[#4FAEB2]/10 ring-1 ring-[#4FAEB2]/15 sm:h-[88dvh] sm:max-h-[920px] sm:rounded-2xl sm:border"
+      >
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#4FAEB2] via-[#4FAEB2]/80 to-[#4FAEB2]/40"
+        />
+        <ProyectoDetalleInner
+          projectId={projectId}
+          variant="modal"
+          onClose={requestClose}
+          onBack={backHref ? requestBack : undefined}
+          backLabel={backLabel}
+          onProjectUpdated={onUpdated}
+          onDirtyChange={setDirty}
+          dataSchema={dataSchema}
+          proyectoPreview={proyectoPreview}
+          initialTab={initialTab}
+          initialCanal={initialCanal}
+        />
+      </div>
+    </div>
+  );
+}

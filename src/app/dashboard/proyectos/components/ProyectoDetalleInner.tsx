@@ -1,0 +1,4834 @@
+"use client";
+
+import { esImagenElegida, normalizarImagenes } from "@/lib/imagenes/heic";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { AlertTriangle, X } from "lucide-react";
+import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
+import { createBrowserClientForSchema } from "@/lib/supabase";
+import {
+  ProyectoModuloSelector,
+  type ProyectoModuloCatalogo as ModuloCatalogo,
+} from "@/app/dashboard/proyectos/components/ProyectoModuloSelector";
+import { FancySelect } from "@/app/dashboard/proyectos/components/FancySelect";
+import { ClienteSearchSelect } from "@/app/dashboard/proyectos/components/ClienteSearchSelect";
+import { FacturaSelect } from "@/app/dashboard/proyectos/components/FacturaSelect";
+import { PersonaSearchSelect } from "@/app/dashboard/proyectos/components/PersonaSearchSelect";
+import SpotlightCard from "@/components/reactbits/SpotlightCard";
+import { inicialesNombre, nombreCapitular, nombreCorto } from "@/lib/format/nombres";
+import type { CandidatoMencion } from "@/lib/proyectos/comentarios-permisos";
+import { isoAInputDatetimeLocal } from "@/lib/format/hora-py";
+import { FechaHoraSelect } from "@/app/dashboard/proyectos/components/FechaHoraSelect";
+import { HistorialLinea } from "@/app/dashboard/proyectos/components/HistorialLinea";
+import ProyectoQATab from "@/app/dashboard/proyectos/components/ProyectoQATab";
+import ProyectoCredencialesTab from "@/app/dashboard/proyectos/components/ProyectoCredencialesTab";
+import { RubroWebSelect } from "@/app/dashboard/proyectos/components/RubroWebSelect";
+import {
+  PROYECTO_DATOS_BRIEF_FIELDS,
+  PROYECTO_WEB_KEYS_OCULTAS,
+  applyBriefFormToExisting,
+  applySaasFormToExisting,
+  coalesceBriefData,
+  formatFechaPyFull,
+  formatFechaPySolo,
+  readBriefUrlList,
+  readSaasBriefData,
+  type ProyectoModuloSnapshot,
+  type ProyectoSaasBriefForm,
+  PROYECTO_FACTURACION_OPCIONES,
+  facturacionLabel,
+} from "@/lib/proyectos/brief-data";
+import { tipoIncluyeSaas, tipoIncluyeWeb } from "@/lib/proyectos/tipos-proyecto";
+import { subestadosParaTipo } from "@/lib/proyectos/subestados-desarrollo";
+import { nombreClienteDisplay, nombreClienteContacto } from "@/lib/clientes/display-name";
+import { FechaSelect } from "@/components/ui/FechaSelect";
+import {
+  BLOQUEO_RESPONSABLES,
+  BLOQUEO_RESPONSABLE_LABEL,
+} from "@/lib/proyectos/dashboard/config";
+
+export type ProyectoCambioCliente = {
+  id: string;
+  nro: 1 | 2 | 3;
+  realizado: boolean;
+  comentario: string | null;
+  realizado_at: string | null;
+  realizado_por: string | null;
+  realizado_por_nombre: string | null;
+};
+
+export type DetalleResp = {
+  proyecto: Record<string, unknown> & {
+    id: string;
+    titulo?: string;
+    brief_data?: Record<string, unknown>;
+    tipo_id?: string;
+    estado_id?: string;
+    proyecto_tipo?: { codigo?: string };
+    proyecto_estado?: { codigo?: string };
+    estado_actual_desde?: string | null;
+  };
+  historial: Record<string, unknown>[];
+  sla: Record<string, unknown>;
+  tareas: Record<string, unknown>[];
+  comentarios: Record<string, unknown>[];
+  archivos: Record<string, unknown>[];
+  cambios?: ProyectoCambioCliente[];
+  avance_pct: number | null;
+  current_user_id?: string | null;
+  current_user_rol?: string | null;
+  current_user_puede_eliminar?: boolean;
+  /** `true` para el comercial (rol vendedor puro): ficha en solo lectura del flujo. */
+  current_user_solo_lectura?: boolean;
+  /** Canales de comentarios que este usuario puede ver/escribir (comercial/desarrollo). */
+  comentarios_canales_visibles?: string[];
+};
+
+type CanalComentarioUI = "comercial" | "desarrollo";
+const CANAL_COMENTARIO_LABEL: Record<CanalComentarioUI, string> = {
+  comercial: "Comercial",
+  desarrollo: "Desarrollo",
+};
+
+const ESTADO_ENTREGADO_CODIGO = "publicado";
+const ESTADO_CANCELADO_CODIGO = "cancelado";
+const POSTENTREGA_PERIODO_DIAS = 30;
+const CAMBIOS_SLOTS = [1, 2, 3] as const;
+
+/**
+ * Firma de los campos editables de la pestaña Datos.
+ *
+ * Sirve para dos cosas: saber si hay cambios sin guardar y, después de guardar,
+ * volver a marcar el formulario como limpio. Es UNA sola función a propósito:
+ * cuando cada lado armaba su propio JSON, el del guardado se quedó sin cliente,
+ * responsable comercial, prioridad ni fecha prometida, y entonces la firma
+ * nunca volvía a coincidir: el proyecto quedaba "sucio" para siempre y al
+ * cerrar la tarjeta se pedía confirmación aunque estuviera todo guardado.
+ */
+function firmaDatos(v: {
+  briefForm: unknown;
+  briefLists: unknown;
+  saasForm: unknown;
+  responsableTecnicoId: string;
+  observaciones: string;
+  clienteId: string;
+  facturaId: string;
+  responsableComercialId: string;
+  projectManagerId: string;
+  bloqueoTipo: string;
+  bloqueoMotivo: string;
+  bloqueoResponsable: string;
+  bloqueoProximaAccion: string;
+  cancelacionMotivo: string;
+  prioridad: string;
+  fechaPrometida: string;
+}): string {
+  return JSON.stringify({
+    bf: v.briefForm,
+    bl: v.briefLists,
+    saas: v.saasForm,
+    responsable_tecnico_id: v.responsableTecnicoId,
+    obs: v.observaciones,
+    cliente_id: v.clienteId,
+    factura_id: v.facturaId,
+    responsable_comercial_id: v.responsableComercialId,
+    project_manager_id: v.projectManagerId,
+    bloqueo_tipo: v.bloqueoTipo,
+    bloqueo_motivo: v.bloqueoMotivo,
+    bloqueo_responsable: v.bloqueoResponsable,
+    bloqueo_proxima_accion: v.bloqueoProximaAccion,
+    cancelacion_motivo: v.cancelacionMotivo,
+    prioridad: v.prioridad,
+    fecha_prometida: v.fechaPrometida,
+  });
+}
+
+type UsuarioActivo = {
+  id: string;
+  nombre?: string | null;
+  email?: string | null;
+  es_project_manager?: boolean | null;
+  es_tecnico?: boolean | null;
+};
+type CatalogoCliente = { id: string; empresa?: string | null; nombre_contacto?: string | null };
+
+/**
+ * Cache en memoria (por sesión/tab) de los catálogos de la tarjeta: estados,
+ * tipos, usuarios, módulos y clientes. Son listas de referencia iguales para
+ * todos los proyectos y se re-descargaban `no-store` en CADA apertura del modal.
+ * Con un TTL corto, reabrir es instantáneo y se refresca solo pasado el tiempo.
+ */
+type CatalogosDetalle = {
+  estados: { id: string; nombre: string; codigo?: string | null; tipo_sla?: string | null }[];
+  tipos: { id: string; nombre: string }[];
+  usuarios: UsuarioActivo[];
+  modulos: ModuloCatalogo[];
+  clientes: CatalogoCliente[];
+};
+let catalogosDetalleCache: { at: number; data: CatalogosDetalle } | null = null;
+const CATALOGOS_DETALLE_TTL_MS = 60_000;
+
+/** Respuesta de `GET /api/proyectos/[id]/qa/observaciones/resumen`. */
+type QAResumen = {
+  total: number;
+  abiertas: number;
+  cerradas: number;
+  por_estado: Record<string, number>;
+  porcentaje: number;
+  /** Lo decide el servidor. `false` para el comercial del proyecto. */
+  puede_ver_qa?: boolean;
+};
+
+const TAB_IDS = [
+  "resumen",
+  "datos",
+  "tareas",
+  "qa",
+  "comentarios",
+  "archivos",
+  "credenciales",
+  "cambios",
+  "historial",
+] as const;
+export type TabId = (typeof TAB_IDS)[number];
+
+const TAB_LABELS: Record<TabId, string> = {
+  resumen: "Resumen",
+  datos: "Datos",
+  tareas: "Tareas",
+  qa: "QA",
+  comentarios: "Comentarios",
+  archivos: "Archivos",
+  credenciales: "Credenciales",
+  cambios: "Cambios",
+  historial: "Historial",
+};
+
+// Pestañas ocultas por ahora (no se usan). Se mantiene el código/contenido por si se reactivan,
+// pero no se muestran en la barra ni son accesibles por URL.
+const HIDDEN_TABS: readonly TabId[] = ["tareas", "cambios"];
+const VISIBLE_TAB_IDS = TAB_IDS.filter((t) => !HIDDEN_TABS.includes(t));
+
+/**
+ * QA es una vista del equipo técnico. Al comercial del proyecto se le esconde
+ * la pestaña — igual la API le respondería 403 si entrara a mano, pero mostrar
+ * una pestaña que sólo da error es peor que no mostrarla.
+ *
+ * Mientras el resumen no llegó (`null`) la pestaña se muestra: ocultarla y
+ * volverla a aparecer haría un salto en la barra en cada apertura.
+ */
+function tabsPara(resumen: QAResumen | null): readonly TabId[] {
+  if (resumen && resumen.puede_ver_qa === false) return VISIBLE_TAB_IDS.filter((t) => t !== "qa");
+  return VISIBLE_TAB_IDS;
+}
+
+function normalizeTab(raw: string | null | undefined): TabId {
+  if (!raw) return "resumen";
+  if (raw === "brief") return "datos";
+  if ((HIDDEN_TABS as readonly string[]).includes(raw ?? "")) return "resumen";
+  return (TAB_IDS as readonly string[]).includes(raw) ? (raw as TabId) : "resumen";
+}
+
+function prioridadLabel(value: unknown): string {
+  if (value === "normal") return "Media";
+  if (value === "baja") return "Baja";
+  if (value === "alta") return "Alta";
+  if (value === "urgente") return "Urgente";
+  return value == null ? "—" : String(value);
+}
+
+const TAREA_ESTADO_OPTIONS = [
+  { value: "pendiente", label: "Pendiente" },
+  { value: "en_proceso", label: "En proceso" },
+  { value: "completada", label: "Completada" },
+  { value: "bloqueada", label: "Bloqueada" },
+] as const;
+
+const TAREA_ESTADO_TONE: Record<
+  string,
+  { dot: string; chip: string; ring: string }
+> = {
+  pendiente: {
+    dot: "bg-slate-400",
+    chip: "border-slate-200 bg-slate-50 text-slate-600",
+    ring: "ring-slate-200/60",
+  },
+  en_proceso: {
+    dot: "bg-amber-500",
+    chip: "border-amber-200 bg-amber-50 text-amber-700",
+    ring: "ring-amber-200/60",
+  },
+  completada: {
+    dot: "bg-emerald-500",
+    chip: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    ring: "ring-emerald-200/60",
+  },
+  bloqueada: {
+    dot: "bg-rose-500",
+    chip: "border-rose-200 bg-rose-50 text-rose-700",
+    ring: "ring-rose-200/60",
+  },
+};
+
+function tareaEstadoLabel(value: unknown): string {
+  const match = TAREA_ESTADO_OPTIONS.find((opt) => opt.value === value);
+  return match ? match.label : "—";
+}
+
+function formatFechaRelativa(iso?: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  const t = d.getTime();
+  if (!Number.isFinite(t)) return "—";
+  const diffMs = Date.now() - t;
+  const sec = Math.round(diffMs / 1000);
+  if (sec < 45) return "hace instantes";
+  const min = Math.round(sec / 60);
+  if (min < 60) return `hace ${min} min`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `hace ${h} h`;
+  const days = Math.round(h / 24);
+  if (days < 7) return `hace ${days} d`;
+  if (days < 30) return `hace ${Math.round(days / 7)} sem`;
+  if (days < 365) return `hace ${Math.round(days / 30)} m`;
+  return `hace ${Math.round(days / 365)} a`;
+}
+
+// Debe coincidir con PROYECTOS_ARCHIVO_MAX_BYTES del helper server-only (no importable acá).
+const ARCHIVO_MAX_BYTES = 50 * 1024 * 1024;
+
+function formatBytes(bytes: unknown): string {
+  const n = typeof bytes === "number" ? bytes : Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return "—";
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let val = n / 1024;
+  let i = 0;
+  while (val >= 1024 && i < units.length - 1) {
+    val /= 1024;
+    i += 1;
+  }
+  return `${val >= 10 || Number.isInteger(val) ? Math.round(val) : val.toFixed(1)} ${units[i]}`;
+}
+
+function isPreviewableMime(mime: unknown): boolean {
+  if (typeof mime !== "string" || !mime) return false;
+  const m = mime.toLowerCase();
+  if (m === "application/pdf") return true;
+  return ["image/", "text/", "audio/", "video/"].some((p) => m.startsWith(p));
+}
+
+type ArchivoCategoria =
+  | "pdf"
+  | "imagen"
+  | "video"
+  | "audio"
+  | "excel"
+  | "documento"
+  | "comprimido"
+  | "otro";
+
+const ARCHIVO_CATEGORIAS_ORDEN: { key: ArchivoCategoria; label: string }[] = [
+  { key: "pdf", label: "PDF" },
+  { key: "imagen", label: "Imágenes" },
+  { key: "video", label: "Videos" },
+  { key: "audio", label: "Audio" },
+  { key: "excel", label: "Hojas de cálculo" },
+  { key: "documento", label: "Documentos" },
+  { key: "comprimido", label: "Comprimidos" },
+  { key: "otro", label: "Otros" },
+];
+
+const ARCHIVO_CATEGORIA_COLOR: Record<ArchivoCategoria, { bg: string; text: string }> = {
+  pdf: { bg: "bg-rose-50", text: "text-rose-500" },
+  imagen: { bg: "bg-violet-50", text: "text-violet-500" },
+  video: { bg: "bg-amber-50", text: "text-amber-600" },
+  audio: { bg: "bg-fuchsia-50", text: "text-fuchsia-500" },
+  excel: { bg: "bg-emerald-50", text: "text-emerald-600" },
+  documento: { bg: "bg-sky-50", text: "text-sky-600" },
+  comprimido: { bg: "bg-orange-50", text: "text-orange-600" },
+  otro: { bg: "bg-slate-100", text: "text-slate-500" },
+};
+
+function extensionArchivo(nombre: unknown): string {
+  if (typeof nombre !== "string") return "";
+  const m = nombre.toLowerCase().match(/\.([a-z0-9]+)$/);
+  return m ? m[1] : "";
+}
+
+function categoriaArchivo(nombre: unknown, mime: unknown): ArchivoCategoria {
+  const m = typeof mime === "string" ? mime.toLowerCase() : "";
+  const ext = extensionArchivo(nombre);
+  if (
+    m.startsWith("image/") ||
+    ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "heic", "heif", "tif", "tiff", "avif", "ico"].includes(ext)
+  )
+    return "imagen";
+  if (
+    m.startsWith("video/") ||
+    ["mp4", "mov", "avi", "mkv", "webm", "wmv", "flv", "m4v", "mpeg", "mpg"].includes(ext)
+  )
+    return "video";
+  if (
+    m.startsWith("audio/") ||
+    ["mp3", "wav", "ogg", "m4a", "flac", "aac", "opus", "wma"].includes(ext)
+  )
+    return "audio";
+  if (m === "application/pdf" || ext === "pdf") return "pdf";
+  if (
+    m.includes("spreadsheet") ||
+    m.includes("excel") ||
+    m === "text/csv" ||
+    ["xls", "xlsx", "xlsm", "xlsb", "csv", "ods"].includes(ext)
+  )
+    return "excel";
+  if (
+    m.includes("zip") ||
+    m.includes("compressed") ||
+    m.includes("x-tar") ||
+    m.includes("x-7z") ||
+    m.includes("x-rar") ||
+    ["zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz"].includes(ext)
+  )
+    return "comprimido";
+  if (
+    m.includes("word") ||
+    m.includes("opendocument.text") ||
+    m.startsWith("text/") ||
+    ["doc", "docx", "txt", "rtf", "odt", "md", "pages"].includes(ext)
+  )
+    return "documento";
+  return "otro";
+}
+
+const IconTareaUser = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="11"
+    height="11"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+    <circle cx="12" cy="7" r="4" />
+  </svg>
+);
+
+const IconTareaRefresh = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="11"
+    height="11"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <polyline points="23 4 23 10 17 10" />
+    <polyline points="1 20 1 14 7 14" />
+    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
+    <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
+  </svg>
+);
+
+const IconTareaCalendar = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="11"
+    height="11"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+    <line x1="16" y1="2" x2="16" y2="6" />
+    <line x1="8" y1="2" x2="8" y2="6" />
+    <line x1="3" y1="10" x2="21" y2="10" />
+  </svg>
+);
+
+const IconPencil = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="13"
+    height="13"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M12 20h9" />
+    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+  </svg>
+);
+
+const IconReenviar = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="13"
+    height="13"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <polyline points="15 14 20 9 15 4" />
+    <path d="M4 20v-7a4 4 0 0 1 4-4h12" />
+  </svg>
+);
+
+const IconTrash = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="13"
+    height="13"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    <path d="M10 11v6" />
+    <path d="M14 11v6" />
+    <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
+  </svg>
+);
+
+const IconSpinner = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="13"
+    height="13"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+    className="animate-spin"
+  >
+    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+  </svg>
+);
+
+const IconUpload = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="15"
+    height="15"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="17 8 12 3 7 8" />
+    <line x1="12" y1="3" x2="12" y2="15" />
+  </svg>
+);
+
+const IconDownload = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="13"
+    height="13"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" y1="15" x2="12" y2="3" />
+  </svg>
+);
+
+const IconEye = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="13"
+    height="13"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+);
+
+const IconCheckSquare = () => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="14"
+    height="14"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <polyline points="9 11 12 14 22 4" />
+    <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+  </svg>
+);
+
+/** Confirmación de solicitud del cliente: burbuja de mensaje con un check. */
+const IconConfirmacionCliente = ({ className }: { className?: string }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+    className={className ?? "h-4 w-4"}
+  >
+    <path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-4-1L3 20l1.3-3.9a8.5 8.5 0 1 1 16.7-4.6z" />
+    <path d="m8.5 12 2.2 2.2L15.5 9" />
+  </svg>
+);
+
+// Ícono por tipo de archivo (categoría). Líneas finas, estilo coherente con el resto del set.
+function ArchivoTipoIcon({ cat }: { cat: ArchivoCategoria }) {
+  const common = {
+    xmlns: "http://www.w3.org/2000/svg",
+    width: 18,
+    height: 18,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.7,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    "aria-hidden": true,
+  };
+  switch (cat) {
+    case "imagen":
+      return (
+        <svg {...common}>
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <circle cx="8.5" cy="8.5" r="1.6" />
+          <path d="m21 15-4.2-4.2a2 2 0 0 0-2.8 0L4 21" />
+        </svg>
+      );
+    case "video":
+      return (
+        <svg {...common}>
+          <rect x="2" y="4" width="20" height="16" rx="2.5" />
+          <path d="m10 9 5 3-5 3z" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "audio":
+      return (
+        <svg {...common}>
+          <path d="M9 18V6l11-2v12" />
+          <circle cx="6" cy="18" r="2.6" />
+          <circle cx="17" cy="16" r="2.6" />
+        </svg>
+      );
+    case "pdf":
+      return (
+        <svg {...common}>
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+          <line x1="8.5" y1="13" x2="15.5" y2="13" />
+          <line x1="8.5" y1="16.5" x2="13" y2="16.5" />
+        </svg>
+      );
+    case "excel":
+      return (
+        <svg {...common}>
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <line x1="3" y1="9" x2="21" y2="9" />
+          <line x1="3" y1="15" x2="21" y2="15" />
+          <line x1="9" y1="3" x2="9" y2="21" />
+          <line x1="15" y1="3" x2="15" y2="21" />
+        </svg>
+      );
+    case "documento":
+      return (
+        <svg {...common}>
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+        </svg>
+      );
+    case "comprimido":
+      return (
+        <svg {...common}>
+          <rect x="2.5" y="4" width="19" height="5" rx="1.2" />
+          <path d="M4.5 9v9a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5V9" />
+          <line x1="10" y1="13" x2="14" y2="13" />
+          <line x1="10.5" y1="16" x2="13.5" y2="16" />
+        </svg>
+      );
+    default:
+      return (
+        <svg {...common}>
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+        </svg>
+      );
+  }
+}
+
+export type ProyectoDetalleInnerProps = {
+  projectId: string;
+  variant: "page" | "modal";
+  onClose?: () => void;
+  /**
+   * "Volver" al origen desde donde se abrió el modal (p. ej. el Tablero). Cuando
+   * viene, la cabecera muestra un enlace arriba a la izquierda. Distinto de
+   * `onClose`: cerrar deja al usuario en el Kanban; volver lo devuelve a donde
+   * estaba. Sólo se pasa cuando el usuario NO llegó por el Kanban.
+   */
+  onBack?: () => void;
+  backLabel?: string;
+  onProjectUpdated?: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
+  dataSchema: string;
+  /**
+   * Fila que el Kanban (o el tablero) ya tiene en memoria. Se usa para pintar la
+   * cabecera (título, tipo, estado, cliente) al instante mientras llega el GET
+   * completo, en vez de bloquear toda la tarjeta con un spinner.
+   */
+  proyectoPreview?: (Record<string, unknown> & { id: string }) | null;
+  /** Solapa inicial (variant modal), p. ej. al abrir por un deep-link de notificación. */
+  initialTab?: string;
+  /** Canal inicial de Comentarios (variant modal), para abrir la sección correcta. */
+  initialCanal?: string;
+};
+
+/**
+ * Formulario de comentario nuevo, aislado con estado LOCAL. Antes el texto vivía
+ * en el estado del componente gigante, así que cada tecla re-renderizaba todo el
+ * árbol de la solapa activa (incluida la lista de comentarios). Con el estado
+ * acá, tipear sólo re-renderiza este formulario. `onEnviar` devuelve `true` si el
+ * guardado salió bien, y recién ahí se limpia el textarea (si falla, no se pierde
+ * lo escrito).
+ */
+const NuevoComentarioForm = memo(function NuevoComentarioForm({
+  onEnviar,
+  canal,
+  inputCls,
+  candidatos,
+}: {
+  onEnviar: (
+    texto: string,
+    canal: CanalComentarioUI,
+    imagenes: File[],
+    menciones: string[]
+  ) => Promise<boolean>;
+  canal: CanalComentarioUI;
+  inputCls: string;
+  /** A quién se puede mencionar en este canal. Lo decide el servidor. */
+  candidatos: CandidatoMencion[];
+}) {
+  const [texto, setTexto] = useState("");
+  const [imagenes, setImagenes] = useState<File[]>([]);
+  const [previews, setPreviews] = useState<string[]>([]);
+  const [enviando, setEnviando] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const areaRef = useRef<HTMLTextAreaElement>(null);
+  /** Menciones ya elegidas. Se guardan por id, no por el texto escrito. */
+  const [menciones, setMenciones] = useState<CandidatoMencion[]>([]);
+  /** Texto tipeado después del `@` que está abierto, o `null` si no hay ninguno. */
+  const [consulta, setConsulta] = useState<string | null>(null);
+  /**
+   * Dónde dibujar el menú de menciones, en coordenadas de ventana.
+   *
+   * Iba `absolute bottom-full` dentro del formulario, y ahí lo recortaba el
+   * `overflow-hidden` del panel: con el composer cerca del borde de arriba, la
+   * lista salía cortada por la mitad. Colgado del `body` con posición fija no
+   * depende de ningún contenedor, y además puede abrirse hacia abajo cuando
+   * arriba no entra.
+   */
+  const [posMenu, setPosMenu] = useState<{
+    left: number;
+    top: number;
+    maxHeight: number;
+    haciaArriba: boolean;
+  } | null>(null);
+
+  /**
+   * Detecta un `@` en curso: el que está justo antes del cursor y todavía no se
+   * cerró con un espacio. Sólo cuenta si arranca palabra, para no disparar el
+   * menú dentro de un correo.
+   */
+  function detectarArroba(valor: string, cursor: number) {
+    const antes = valor.slice(0, cursor);
+    const i = antes.lastIndexOf("@");
+    if (i < 0) return null;
+    if (i > 0 && !/[\s(]/.test(antes[i - 1])) return null;
+    const frag = antes.slice(i + 1);
+    if (/\s/.test(frag)) return null;
+    return { inicio: i, frag };
+  }
+
+  const sugeridos = (() => {
+    if (consulta == null) return [];
+    const q = consulta.trim().toLowerCase();
+    const ya = new Set(menciones.map((m) => m.id));
+    return candidatos
+      .filter((c) => !ya.has(c.id))
+      .filter((c) => (q ? c.nombre.toLowerCase().includes(q) : true))
+      .slice(0, 6);
+  })();
+
+  const hayMenu = consulta != null;
+
+  useEffect(() => {
+    if (!hayMenu) {
+      setPosMenu(null);
+      return;
+    }
+    const recalcular = () => {
+      const area = areaRef.current;
+      if (!area) return;
+      const caja = area.getBoundingClientRect();
+      const MARGEN = 8;
+      const arriba = caja.top - MARGEN;
+      const abajo = window.innerHeight - caja.bottom - MARGEN;
+      // Se prefiere arriba —es donde estaba y no tapa lo que se está
+      // escribiendo—, pero si no entra se da vuelta en vez de recortarse.
+      const haciaArriba = arriba >= 160 || arriba >= abajo;
+      const alto = Math.max(120, Math.min(288, haciaArriba ? arriba : abajo));
+      const ancho = 256;
+      setPosMenu({
+        left: Math.max(MARGEN, Math.min(caja.left, window.innerWidth - ancho - MARGEN)),
+        top: haciaArriba ? Math.max(MARGEN, caja.top - MARGEN - alto) : caja.bottom + MARGEN,
+        maxHeight: alto,
+        haciaArriba,
+      });
+    };
+    recalcular();
+    // `true` para capturar el scroll de CUALQUIER contenedor, no sólo el de la
+    // ventana: el composer vive dentro de un panel que scrollea por su cuenta.
+    window.addEventListener("scroll", recalcular, true);
+    window.addEventListener("resize", recalcular);
+    return () => {
+      window.removeEventListener("scroll", recalcular, true);
+      window.removeEventListener("resize", recalcular);
+    };
+  }, [hayMenu]);
+
+  function elegir(c: CandidatoMencion) {
+    const area = areaRef.current;
+    const cursor = area?.selectionStart ?? texto.length;
+    const at = detectarArroba(texto, cursor);
+    const nombre = nombreCorto(c.nombre);
+    const nuevo = at
+      ? `${texto.slice(0, at.inicio)}@${nombre} ${texto.slice(cursor)}`
+      : `${texto}@${nombre} `;
+    setTexto(nuevo);
+    setMenciones((prev) => (prev.some((m) => m.id === c.id) ? prev : [...prev, c]));
+    setConsulta(null);
+    requestAnimationFrame(() => area?.focus());
+  }
+
+  // Previews locales (object URLs) que se liberan al cambiar la selección.
+  useEffect(() => {
+    const urls = imagenes.map((f) => URL.createObjectURL(f));
+    setPreviews(urls);
+    return () => urls.forEach((u) => URL.revokeObjectURL(u));
+  }, [imagenes]);
+
+  const puedeEnviar = (texto.trim().length > 0 || imagenes.length > 0) && !enviando;
+
+  return (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (!puedeEnviar) return;
+        setEnviando(true);
+        // Sólo viajan las menciones que siguen escritas: si borró el @Nombre
+        // del texto, no tiene sentido notificar a esa persona.
+        const vigentes = menciones.filter((m) => texto.includes(`@${nombreCorto(m.nombre)}`));
+        try {
+          const ok = await onEnviar(texto, canal, imagenes, vigentes.map((m) => m.id));
+          if (ok) {
+            setTexto("");
+            setImagenes([]);
+            setMenciones([]);
+          }
+        } finally {
+          // Sin este finally, un throw de red dejaba "Publicar" trabado hasta F5.
+          setEnviando(false);
+        }
+      }}
+      className="space-y-2"
+    >
+      <div className="relative">
+      <textarea
+        ref={areaRef}
+        className={`${inputCls} min-h-[88px]`}
+        rows={3}
+        placeholder={
+          canal === "desarrollo"
+            ? "Comentario para PM / QA · @ para mencionar"
+            : "Comentario para el PM · @ para mencionar"
+        }
+        value={texto}
+        onChange={(e) => {
+          setTexto(e.target.value);
+          const at = detectarArroba(e.target.value, e.target.selectionStart ?? 0);
+          setConsulta(at ? at.frag : null);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && consulta != null) {
+            e.preventDefault();
+            setConsulta(null);
+          }
+          // Enter elige la primera sugerencia: es lo que uno espera del menú.
+          if (e.key === "Enter" && sugeridos.length > 0) {
+            e.preventDefault();
+            elegir(sugeridos[0]);
+          }
+        }}
+        onPaste={(e) => {
+          // Pegar imágenes del portapapeles (captura de pantalla, copiar imagen).
+          const items = e.clipboardData?.items;
+          if (!items) return;
+          const pegadas: File[] = [];
+          for (const it of Array.from(items)) {
+            if (it.kind === "file" && it.type.startsWith("image/")) {
+              const f = it.getAsFile();
+              if (f && f.size > 0) {
+                // Las capturas suelen venir sin nombre; le damos uno.
+                pegadas.push(
+                  f.name ? f : new File([f], `pegada-${Date.now()}.png`, { type: f.type })
+                );
+              }
+            }
+          }
+          if (pegadas.length > 0) {
+            e.preventDefault();
+            setImagenes((prev) => [...prev, ...pegadas].slice(0, 10));
+          }
+        }}
+        disabled={enviando}
+      />
+      {sugeridos.length > 0 && posMenu && typeof document !== "undefined"
+        ? createPortal(
+        <ul
+          className="fixed w-64 overflow-y-auto overscroll-contain rounded-xl border border-[#4FAEB2]/25 bg-white p-1 shadow-xl"
+          /*
+            Cuelga del `body`, así que compite en el stacking context RAÍZ contra
+            el modal del detalle (llega a z-[110]). Mismo valor que el panel de
+            FechaSelect, por el mismo motivo.
+          */
+          style={{ left: posMenu.left, top: posMenu.top, maxHeight: posMenu.maxHeight, zIndex: 1000 }}
+        >
+          {sugeridos.map((c) => (
+            <li key={c.id}>
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  // `onMouseDown`: con `onClick` el textarea pierde el foco antes
+                  // y el cursor se va, así que la inserción caería en otro lado.
+                  e.preventDefault();
+                  elegir(c);
+                }}
+                className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                <span className="min-w-0 truncate">{nombreCapitular(c.nombre)}</span>
+                {c.etiqueta ? (
+                  <span className="shrink-0 rounded-full bg-[#4FAEB2]/12 px-1.5 text-[9px] font-bold uppercase text-[#2F6E71]">
+                    {c.etiqueta}
+                  </span>
+                ) : null}
+              </button>
+            </li>
+          ))}
+        </ul>,
+            document.body
+          )
+        : null}
+      </div>
+      {imagenes.length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {imagenes.map((f, i) => (
+            <div key={i} className="relative">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={previews[i]}
+                alt={f.name}
+                className="h-20 w-20 rounded-lg border border-slate-200 object-cover"
+              />
+              <button
+                type="button"
+                onClick={() => setImagenes((prev) => prev.filter((_, idx) => idx !== i))}
+                disabled={enviando}
+                aria-label={`Quitar ${f.name}`}
+                title="Quitar"
+                className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-slate-700 text-white shadow hover:bg-slate-900"
+              >
+                <span className="text-xs leading-none">×</span>
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          const files = Array.from(e.target.files ?? []).filter(esImagenElegida);
+          e.target.value = "";
+          if (files.length === 0) return;
+          // Las fotos de iPhone (HEIC) se pasan a JPG acá: los navegadores no las muestran.
+          void normalizarImagenes(files).then(({ listos, fallaron }) => {
+            if (listos.length > 0) setImagenes((prev) => [...prev, ...listos].slice(0, 10));
+            if (fallaron.length > 0) {
+              window.alert(
+                `No se pudieron leer estas fotos: ${fallaron.join(", ")}.\n` +
+                  "Probá enviarlas como JPG o sacar la captura desde la computadora."
+              );
+            }
+          });
+        }}
+      />
+      <div className="flex items-center gap-2">
+        <button
+          type="submit"
+          disabled={!puedeEnviar}
+          className="rounded-xl bg-[#4FAEB2] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#3F8E91] disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {enviando ? "Publicando…" : "Publicar"}
+        </button>
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          disabled={enviando}
+          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:border-[#4FAEB2]/60 hover:text-[#3F8E91] disabled:cursor-not-allowed disabled:opacity-60"
+          title="Adjuntar imagen"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <circle cx="9" cy="9" r="2" />
+            <path d="m21 15-3.5-3.5a2 2 0 0 0-2.8 0L6 21" />
+          </svg>
+          Imagen
+        </button>
+      </div>
+    </form>
+  );
+});
+
+/**
+ * Miniatura de una imagen adjunta a un comentario. Pide un signed URL de corta
+ * duración por su path (validado en el server), muestra la vista previa —click =
+ * abrir en grande— y permite descargar.
+ */
+const ComentarioImagen = memo(function ComentarioImagen({
+  projectId,
+  adjunto,
+}: {
+  projectId: string;
+  adjunto: { path: string; nombre?: string };
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [falló, setFalló] = useState(false);
+
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      try {
+        const res = await fetchWithSupabaseSession(
+          `/api/proyectos/${projectId}/comentarios/adjuntos?path=${encodeURIComponent(adjunto.path)}`,
+          { cache: "no-store" }
+        );
+        const j = (await res.json()) as { success?: boolean; data?: { url?: string } };
+        if (!cancel && res.ok && j.success && j.data?.url) setUrl(j.data.url);
+        else if (!cancel) setFalló(true);
+      } catch {
+        if (!cancel) setFalló(true);
+      }
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, [projectId, adjunto.path]);
+
+  async function descargar() {
+    const res = await fetchWithSupabaseSession(
+      `/api/proyectos/${projectId}/comentarios/adjuntos?path=${encodeURIComponent(adjunto.path)}&download=1`,
+      { cache: "no-store" }
+    );
+    const j = (await res.json()) as { success?: boolean; data?: { url?: string } };
+    if (res.ok && j.success && j.data?.url) {
+      const a = document.createElement("a");
+      a.href = j.data.url;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+  }
+
+  return (
+    <div className="group relative">
+      {url ? (
+        <a href={url} target="_blank" rel="noopener noreferrer" title="Ver imagen">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={url}
+            alt={adjunto.nombre ?? "imagen"}
+            className="max-h-44 rounded-lg border border-slate-200 object-cover"
+          />
+        </a>
+      ) : falló ? (
+        <div className="flex h-24 w-24 items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 text-[10px] text-slate-400">
+          No se pudo cargar
+        </div>
+      ) : (
+        <div className="h-24 w-24 animate-pulse rounded-lg border border-slate-200 bg-slate-100" />
+      )}
+      {url ? (
+        <button
+          type="button"
+          onClick={() => void descargar()}
+          aria-label="Descargar imagen"
+          title="Descargar"
+          className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-md bg-white/90 text-slate-600 opacity-0 shadow-sm transition-opacity hover:text-[#3F8E91] group-hover:opacity-100"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+        </button>
+      ) : null}
+    </div>
+  );
+});
+
+export default function ProyectoDetalleInner({
+  projectId,
+  variant,
+  onClose,
+  onBack,
+  backLabel,
+  onProjectUpdated,
+  onDirtyChange,
+  dataSchema,
+  proyectoPreview,
+  initialTab,
+  initialCanal,
+}: ProyectoDetalleInnerProps) {
+  const router = useRouter();
+  const sp = useSearchParams();
+  const tabUrl = variant === "page" ? normalizeTab(sp?.get("tab")) : null;
+  // En modal, la solapa inicial puede venir de un deep-link de notificación.
+  const [modalTab, setModalTab] = useState<TabId>(() => normalizeTab(initialTab));
+
+  const tab = variant === "page" ? (tabUrl ?? "resumen") : modalTab;
+
+  const setTab = useCallback(
+    (t: TabId) => {
+      if (variant === "modal") setModalTab(t);
+      else router.replace(`/dashboard/proyectos/${projectId}?tab=${t}`);
+    },
+    [variant, router, projectId]
+  );
+
+  // Seed instantáneo desde la fila del Kanban: la cabecera se pinta ya con lo
+  // que el tablero tenía en memoria (título/tipo/estado/cliente) y el GET
+  // completo reemplaza esto apenas llega. Sólo la primera vez que abre (mismo
+  // proyecto por apertura, porque el modal re-monta al cerrarse).
+  const [data, setData] = useState<DetalleResp | null>(() =>
+    proyectoPreview && proyectoPreview.id === projectId
+      ? {
+          proyecto: proyectoPreview,
+          historial: [],
+          sla: {},
+          tareas: [],
+          comentarios: [],
+          archivos: [],
+          cambios: [],
+          avance_pct: null,
+        }
+      : null
+  );
+  const [estados, setEstados] = useState<
+    { id: string; nombre: string; codigo?: string | null; tipo_sla?: string | null }[]
+  >([]);
+  const [tipos, setTipos] = useState<{ id: string; nombre: string }[]>([]);
+  const [usuarios, setUsuarios] = useState<UsuarioActivo[]>([]);
+  const [modulosCatalogo, setModulosCatalogo] = useState<ModuloCatalogo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const [comEditandoId, setComEditandoId] = useState<string | null>(null);
+  const [comEditTexto, setComEditTexto] = useState("");
+  const [comActionId, setComActionId] = useState<string | null>(null);
+  // Reenvío de comentario: qué comentario se está reenviando y la nota opcional.
+  const [comReenviandoId, setComReenviandoId] = useState<string | null>(null);
+  const [comReenvioNota, setComReenvioNota] = useState("");
+  // Canal de comentarios activo (comercial ↔ PM / desarrollo ↔ PM+QA). Se
+  // muestra un switch sólo si el usuario ve ambos; si ve uno, se fija ahí.
+  const [canalComentario, setCanalComentario] = useState<CanalComentarioUI>("comercial");
+  const [tareaTitulo, setTareaTitulo] = useState("");
+  const [tareaDescripcion, setTareaDescripcion] = useState("");
+  const [tareaResponsableId, setTareaResponsableId] = useState("");
+  const [tareaFechaLimite, setTareaFechaLimite] = useState("");
+  const [tareaSaving, setTareaSaving] = useState(false);
+  const [tareaEditandoId, setTareaEditandoId] = useState<string | null>(null);
+  const [tareaEditTitulo, setTareaEditTitulo] = useState("");
+  const [tareaEditDescripcion, setTareaEditDescripcion] = useState("");
+  const [tareaEditResponsableId, setTareaEditResponsableId] = useState("");
+  const [tareaEditFechaLimite, setTareaEditFechaLimite] = useState("");
+  const [tareaActionId, setTareaActionId] = useState<string | null>(null);
+
+  const [cambiosDraft, setCambiosDraft] = useState<Record<number, { realizado: boolean; comentario: string }>>({});
+  const [cambioSavingNro, setCambioSavingNro] = useState<number | null>(null);
+
+  const [archivoUploading, setArchivoUploading] = useState(false);
+  const [archivoActionId, setArchivoActionId] = useState<string | null>(null);
+  const [archivoDragActive, setArchivoDragActive] = useState(false);
+  const archivoInputRef = useRef<HTMLInputElement | null>(null);
+  const [archivoFiltro, setArchivoFiltro] = useState<ArchivoCategoria | "todos">("todos");
+  const [archivosSel, setArchivosSel] = useState<Set<string>>(() => new Set());
+  const [archivoBulkBusy, setArchivoBulkBusy] = useState(false);
+  /**
+   * Tildado antes de subir, marca las imágenes de esa tanda como confirmación
+   * de solicitud del cliente. Se resetea después de cada subida para no
+   * arrastrar el tilde a la próxima tanda por accidente.
+   */
+  const [subirComoConfirmacion, setSubirComoConfirmacion] = useState(false);
+  const [confirmacionActionId, setConfirmacionActionId] = useState<string | null>(null);
+  // Miniaturas (signed URL inline) para archivos de imagen. id → url.
+  const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
+  const thumbFetchingRef = useRef<Set<string>>(new Set());
+  const thumbFailedRef = useRef<Set<string>>(new Set());
+
+  const [briefForm, setBriefForm] = useState<Record<string, string>>({});
+  const [briefLists, setBriefLists] = useState<Record<string, string[]>>({});
+  const [saasForm, setSaasForm] = useState<ProyectoSaasBriefForm>({
+    empresa_nombre: "",
+    whatsapp_contacto: "",
+    observaciones: "",
+    facturacion: "",
+    modulos_necesarios: [],
+  });
+  const [responsableTecnicoId, setResponsableTecnicoId] = useState("");
+  const [observaciones, setObservaciones] = useState("");
+  /**
+   * Campos que "Nuevo proyecto" pide al crear pero que después no se podían ver
+   * ni corregir desde acá: cliente, asesor, prioridad y fecha de entrega. Si el
+   * alta se cargaba con un dato mal, no había forma de arreglarlo.
+   */
+  const [clienteId, setClienteId] = useState("");
+  const [facturaId, setFacturaId] = useState("");
+  const [responsableComercialId, setResponsableComercialId] = useState("");
+  /**
+   * PM del proyecto. Vacío = hereda el de la ficha del cliente, que es como
+   * funcionó siempre; asignarlo acá sólo hace falta cuando este proyecto tiene
+   * que ir a otra persona, o cuando el proyecto todavía no tiene cliente.
+   */
+  const [projectManagerId, setProjectManagerId] = useState("");
+  /**
+   * Por qué está detenido el proyecto. El tipo agrupa (cliente / interno /
+   * tercero) y el motivo lo cuenta. Hasta ahora la columna existía en la base
+   * pero no había dónde cargarla, así que el dashboard sólo podía mostrar el
+   * estado — que dice que está pausado, no por qué.
+   */
+  const [bloqueoTipo, setBloqueoTipo] = useState("");
+  const [bloqueoMotivo, setBloqueoMotivo] = useState("");
+  const [bloqueoResponsable, setBloqueoResponsable] = useState("");
+  const [bloqueoProximaAccion, setBloqueoProximaAccion] = useState("");
+  const [cancelacionMotivo, setCancelacionMotivo] = useState("");
+  const [prioridad, setPrioridad] = useState("normal");
+  const [fechaPrometida, setFechaPrometida] = useState("");
+  const [clientes, setClientes] = useState<{ id: string; empresa?: string | null; nombre_contacto?: string | null }[]>([]);
+  const [datosSnapshot, setDatosSnapshot] = useState("");
+  const [guardandoDatos, setGuardandoDatos] = useState(false);
+  // Confirmación efímera tras guardar: el botón se apaga solo (queda limpio),
+  // pero sin un "Guardado ✓" el usuario no sabía si se aplicó.
+  const [guardadoOk, setGuardadoOk] = useState(false);
+  // Popup obligatorio al pasar a "Pausado": el motivo queda como comentario y
+  // recién ahí se aplica el cambio de estado (que va al historial como siempre).
+  const [pausaModal, setPausaModal] = useState<{ estadoId: string } | null>(null);
+  const [pausaMotivo, setPausaMotivo] = useState("");
+  const [pausaGuardando, setPausaGuardando] = useState(false);
+  const [pausaError, setPausaError] = useState<string | null>(null);
+  // Versión (updated_at) del proyecto tal como se cargó: viaja en el PATCH para
+  // el locking optimista (#7). Se refresca con la respuesta de cada guardado y
+  // en cada recarga, así dos guardados seguidos no se auto-chocan.
+  const versionRef = useRef<string | null>(null);
+
+  /**
+   * `silencioso` refresca sin encender el spinner: se usa después de guardar,
+   * cuando el dato ya está confirmado y la recarga es sólo para reconciliar.
+   * Con el spinner, ese refresco de fondo tapaba la pantalla y hacía sentir el
+   * guardado mucho más lento de lo que era.
+   */
+  const load = useCallback(async (silencioso = false) => {
+    if (!projectId) return;
+    if (!silencioso) setLoading(true);
+    setErr(null);
+    try {
+    const res = await fetchWithSupabaseSession(`/api/proyectos/${projectId}`, { cache: "no-store" });
+    const j = (await res.json().catch(() => null)) as
+      | { success?: boolean; data?: DetalleResp; error?: string }
+      | null;
+    if (!res.ok || !j?.success || !j.data) {
+      setErr(j?.error ?? "Error al cargar");
+      return;
+    }
+    setData(j.data);
+
+    // En modo silencioso no se re-hidratan los campos editables. Es un refresco
+    // posterior a guardar, así que el formulario ya tiene lo que el usuario
+    // escribió; pisarlo con la respuesta del servidor borraría lo que haya
+    // empezado a tipear mientras la recarga volvía. Historial, SLA, archivos y
+    // comentarios sí se actualizan, porque salen de `data` y no se editan acá.
+    if (silencioso) return;
+
+    const p = j.data.proyecto;
+    // Versión para el locking optimista: se toma SOLO acá, cuando el formulario
+    // se re-hidrata de verdad. Se guarda tal cual la manda el server (string con
+    // microsegundos), sin re-parsear a Date, para que el `.eq` del PATCH matchee
+    // exacto. En el reload silencioso NO se toca: el form sigue mostrando lo que
+    // el usuario tenía sobre la versión vieja, así que su próximo save debe
+    // seguir comparando contra esa versión (si otro guardó, dará 409).
+    {
+      const ua = (p as { updated_at?: unknown }).updated_at;
+      versionRef.current = typeof ua === "string" ? ua : null;
+    }
+    const merged = coalesceBriefData(p.brief_data);
+    const saas = readSaasBriefData(p.brief_data);
+    const lists: Record<string, string[]> = {};
+    for (const f of PROYECTO_DATOS_BRIEF_FIELDS) {
+      if (f.kind === "url_list") {
+        lists[f.key] = readBriefUrlList(p.brief_data, f.key);
+      }
+    }
+    setBriefForm(merged);
+    setBriefLists(lists);
+    setSaasForm(saas);
+    const rt = typeof p.responsable_tecnico_id === "string" ? p.responsable_tecnico_id : "";
+    const obsCom = typeof p.observaciones_comerciales === "string" ? p.observaciones_comerciales : "";
+    const cli = typeof p.cliente_id === "string" ? p.cliente_id : "";
+    const fac = typeof p.factura_id === "string" ? p.factura_id : "";
+    const rc = typeof p.responsable_comercial_id === "string" ? p.responsable_comercial_id : "";
+    const pm = typeof p.project_manager_id === "string" ? p.project_manager_id : "";
+    const bt = typeof p.bloqueo_tipo === "string" ? p.bloqueo_tipo : "";
+    const bm = typeof p.bloqueo_motivo === "string" ? p.bloqueo_motivo : "";
+    const br = typeof p.bloqueo_responsable === "string" ? p.bloqueo_responsable : "";
+    const bpa = typeof p.bloqueo_proxima_accion === "string" ? p.bloqueo_proxima_accion : "";
+    const cm = typeof p.cancelacion_motivo === "string" ? p.cancelacion_motivo : "";
+    const prio = typeof p.prioridad === "string" ? p.prioridad : "normal";
+    // Fecha Y hora: se recorta a lo que entiende `datetime-local`.
+    const fProm = typeof p.fecha_prometida === "string" ? isoAInputDatetimeLocal(p.fecha_prometida) : "";
+    setResponsableTecnicoId(rt);
+    setObservaciones(obsCom);
+    setClienteId(cli);
+    setFacturaId(fac);
+    setResponsableComercialId(rc);
+    setProjectManagerId(pm);
+    setBloqueoTipo(bt);
+    setBloqueoMotivo(bm);
+    // Estos tres se leían de la base pero NUNCA se hidrataban al formulario: se
+    // veían vacíos y, al guardar cualquier otro campo, se mandaban vacíos y se
+    // borraban en la base. Además la firma en vivo (que sale del estado) no
+    // coincidía con el snapshot (que sale de estos valores), así que el botón
+    // Guardar quedaba habilitado apenas se abría la ficha. Al setearlos, el
+    // formulario muestra el dato real y el snapshot vuelve a coincidir.
+    setBloqueoResponsable(br);
+    setBloqueoProximaAccion(bpa);
+    setCancelacionMotivo(cm);
+    setPrioridad(prio);
+    setFechaPrometida(fProm);
+    setDatosSnapshot(
+      firmaDatos({
+        briefForm: merged,
+        briefLists: lists,
+        saasForm: saas,
+        responsableTecnicoId: rt,
+        observaciones: obsCom,
+        clienteId: cli,
+        facturaId: fac,
+        responsableComercialId: rc,
+        projectManagerId: pm,
+        bloqueoTipo: bt,
+        bloqueoMotivo: bm,
+        bloqueoResponsable: br,
+        bloqueoProximaAccion: bpa,
+        cancelacionMotivo: cm,
+        prioridad: prio,
+        fechaPrometida: fProm,
+      })
+    );
+    const draft: Record<number, { realizado: boolean; comentario: string }> = {};
+    for (const c of j.data.cambios ?? []) {
+      draft[c.nro] = { realizado: c.realizado, comentario: c.comentario ?? "" };
+    }
+    for (const nro of CAMBIOS_SLOTS) {
+      if (!draft[nro]) draft[nro] = { realizado: false, comentario: "" };
+    }
+    setCambiosDraft(draft);
+    } catch (e) {
+      // Sin esto, un corte de red o una respuesta no-JSON dejaba la ficha en
+      // "Cargando…" para siempre (sólo salía con F5). Ahora muestra el error.
+      setErr(e instanceof Error ? e.message : "No se pudo cargar el proyecto.");
+    } finally {
+      if (!silencioso) setLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // Saco de la selección los archivos que ya no existen (tras borrar o recarga realtime).
+  const archivoIdsActuales = useMemo(
+    () => new Set((data?.archivos ?? []).map((a) => String(a.id ?? ""))),
+    [data?.archivos]
+  );
+  useEffect(() => {
+    setArchivosSel((prev) => {
+      let cambio = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (archivoIdsActuales.has(id)) next.add(id);
+        else cambio = true;
+      }
+      return cambio ? next : prev;
+    });
+  }, [archivoIdsActuales]);
+
+  // Carga perezosa de miniaturas para archivos de imagen (signed URL inline).
+  useEffect(() => {
+    if (tab !== "archivos") return;
+    const imagenes = (data?.archivos ?? []).filter(
+      (a) => categoriaArchivo(a.nombre, a.mime_type) === "imagen"
+    );
+    for (const a of imagenes) {
+      const aid = String(a.id ?? "");
+      if (
+        !aid ||
+        thumbUrls[aid] ||
+        thumbFetchingRef.current.has(aid) ||
+        thumbFailedRef.current.has(aid)
+      )
+        continue;
+      thumbFetchingRef.current.add(aid);
+      void (async () => {
+        try {
+          const res = await fetchWithSupabaseSession(
+            `/api/proyectos/${projectId}/archivos/${aid}`,
+            { cache: "no-store" }
+          );
+          const j = (await res.json().catch(() => null)) as
+            | { success?: boolean; data?: { url?: string } }
+            | null;
+          if (res.ok && j?.success && j.data?.url) {
+            setThumbUrls((prev) => ({ ...prev, [aid]: j.data!.url! }));
+          } else {
+            // Falló la firma: se marca como fallida para NO reintentarla en cada
+            // éxito ajeno (el efecto depende de `thumbUrls`). Antes cada miniatura
+            // que cargaba bien re-disparaba todas las que habían fallado.
+            thumbFailedRef.current.add(aid);
+          }
+        } catch {
+          // Silencioso: si falla, la fila muestra el ícono de tipo. Se marca como
+          // fallida por la misma razón que arriba (evitar la cascada de reintentos).
+          thumbFailedRef.current.add(aid);
+        } finally {
+          thumbFetchingRef.current.delete(aid);
+        }
+      })();
+    }
+  }, [tab, data?.archivos, thumbUrls, projectId]);
+
+  // Abrir el proyecto apaga sus novedades de QA para *este* usuario: el badge
+  // de la lista y el contador de la campanita bajan solos. Los demás
+  // responsables siguen viendo el suyo hasta que entren ellos.
+  useEffect(() => {
+    if (!projectId) return;
+    void fetchWithSupabaseSession("/api/notificaciones/marcar-leidas", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ proyecto_id: projectId }),
+    }).catch(() => {
+      // No es crítico: si falla, el badge se apaga la próxima vez que entre.
+    });
+  }, [projectId]);
+
+  // Mantengo una ref a `load` para que las suscripciones de Realtime no se re-creen
+  // en cada render. El callback estable adentro del channel siempre llama al último.
+  const loadRef = useRef(load);
+  useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
+
+  // Recarga silenciosa y COALESCIDA. Antes cada edición disparaba dos recargas
+  // completas del detalle (la explícita `await load()` y el eco de Realtime de
+  // las 5 tablas, sin debounce y compitiendo entre sí) más la del tablero: ~30
+  // consultas por un clic. Ahora la mutación del usuario, el eco de Realtime y
+  // el aviso al tablero se juntan en UN solo GET, sin spinner. La ref hace que
+  // el scheduler sea estable (no re-suscribe el canal de Realtime).
+  const onProjectUpdatedRef = useRef(onProjectUpdated);
+  useEffect(() => {
+    onProjectUpdatedRef.current = onProjectUpdated;
+  }, [onProjectUpdated]);
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleReload = useCallback(() => {
+    if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+    reloadTimerRef.current = setTimeout(() => {
+      reloadTimerRef.current = null;
+      void loadRef.current?.(true);
+      onProjectUpdatedRef.current?.();
+    }, 300);
+  }, []);
+
+  // Patch optimista de campos escalares del proyecto: el control (ej. el select
+  // de estado) refleja el valor elegido al instante, sin esperar los 300ms del
+  // reload de reconciliación. Los datos derivados (nombre del estado, SLA,
+  // historial) se completan cuando llega el GET silencioso.
+  const patchProyectoLocal = useCallback((campos: Record<string, unknown>) => {
+    setData((prev) => (prev ? { ...prev, proyecto: { ...prev.proyecto, ...campos } } : prev));
+  }, []);
+  useEffect(
+    () => () => {
+      if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+    },
+    []
+  );
+
+  // Realtime: cualquier cambio en las 5 tablas del proyecto dispara re-fetch.
+  // Filtramos por proyecto_id para no recibir eventos de otros proyectos.
+  useEffect(() => {
+    if (!projectId || !dataSchema) return;
+    const sb = createBrowserClientForSchema(dataSchema);
+    const filtro = `proyecto_id=eq.${projectId}`;
+
+    const channel = sb
+      .channel(`proyecto-detalle:${projectId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: dataSchema, table: "proyectos", filter: `id=eq.${projectId}` },
+        () => scheduleReload()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: dataSchema, table: "proyecto_tareas", filter: filtro },
+        () => scheduleReload()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: dataSchema, table: "proyecto_comentarios", filter: filtro },
+        () => scheduleReload()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: dataSchema, table: "proyecto_archivos", filter: filtro },
+        () => scheduleReload()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: dataSchema, table: "proyecto_estado_historial", filter: filtro },
+        () => scheduleReload()
+      )
+      .subscribe();
+
+    return () => {
+      void sb.removeChannel(channel);
+    };
+  }, [projectId, dataSchema, scheduleReload]);
+
+  useEffect(() => {
+    if (variant !== "page" || !projectId) return;
+    const raw = sp?.get("tab");
+    if (raw === "brief") {
+      router.replace(`/dashboard/proyectos/${projectId}?tab=datos`);
+    }
+  }, [variant, projectId, sp, router]);
+
+  useEffect(() => {
+    let c = false;
+    // Cache fresco: sembramos las listas y no pegamos a la red.
+    if (catalogosDetalleCache && Date.now() - catalogosDetalleCache.at < CATALOGOS_DETALLE_TTL_MS) {
+      const cch = catalogosDetalleCache.data;
+      setEstados(cch.estados);
+      setTipos(cch.tipos);
+      setUsuarios(cch.usuarios);
+      setModulosCatalogo(cch.modulos);
+      setClientes(cch.clientes);
+      return;
+    }
+    (async () => {
+      const [r, rUsers, rModulos, rClientes, rTipos] = await Promise.all([
+        fetchWithSupabaseSession("/api/proyectos/estados", { cache: "no-store" }),
+        fetchWithSupabaseSession("/api/usuarios/empresa-activos", { cache: "no-store" }),
+        fetchWithSupabaseSession("/api/proyectos/modulos-catalogo", { cache: "no-store" }),
+        // Para poder corregir el cliente desde la ficha, no sólo al crear.
+        fetchWithSupabaseSession("/api/clientes", { cache: "no-store" }),
+        // Para poder cambiar el tipo de proyecto desde la ficha.
+        fetchWithSupabaseSession("/api/proyectos/tipos", { cache: "no-store" }),
+      ]);
+      const j = (await r.json()) as {
+        success?: boolean;
+        data?: { id: string; nombre: string; codigo?: string | null; tipo_sla?: string | null }[];
+      };
+      const jUsers = (await rUsers.json()) as { usuarios?: UsuarioActivo[] };
+      const jModulos = (await rModulos.json()) as { success?: boolean; data?: ModuloCatalogo[] };
+      const jTipos = (await rTipos.json().catch(() => null)) as
+        | { success?: boolean; data?: { id: string; nombre: string }[] }
+        | null;
+      const jCli = (await rClientes.json().catch(() => null)) as
+        | { success?: boolean; data?: CatalogoCliente[] }
+        | null;
+
+      const estados = j.success && j.data ? j.data : null;
+      const tipos = jTipos?.success && jTipos.data ? jTipos.data : null;
+      const usuarios = jUsers.usuarios ?? [];
+      const modulos = jModulos.success && jModulos.data ? jModulos.data : null;
+      const clientes = jCli?.data ?? null;
+
+      // Se cachea sólo si todo cargó; si algo falló, la próxima apertura reintenta.
+      if (estados && tipos && modulos && clientes) {
+        catalogosDetalleCache = {
+          at: Date.now(),
+          data: { estados, tipos, usuarios, modulos, clientes },
+        };
+      }
+
+      if (c) return;
+      if (tipos) setTipos(tipos);
+      if (estados) setEstados(estados);
+      setUsuarios(usuarios);
+      if (modulos) setModulosCatalogo(modulos);
+      if (clientes) setClientes(clientes);
+    })();
+    return () => {
+      c = true;
+    };
+  }, []);
+
+  /**
+   * A quién se puede mencionar en el canal abierto. Se pide al servidor porque
+   * quién ve cada canal es una decisión de permisos: resolverlo en el navegador
+   * permitiría ofrecer a alguien que después no puede abrir el comentario.
+   */
+  const [candidatosMencion, setCandidatosMencion] = useState<CandidatoMencion[]>([]);
+  useEffect(() => {
+    let cancel = false;
+    setCandidatosMencion([]);
+    fetchWithSupabaseSession(
+      `/api/proyectos/${projectId}/comentarios/menciones?canal=${canalComentario}`,
+      { cache: "no-store" }
+    )
+      .then(async (r) => {
+        const j = (await r.json().catch(() => ({}))) as {
+          data?: { candidatos?: CandidatoMencion[] };
+        };
+        if (!cancel) setCandidatosMencion(j?.data?.candidatos ?? []);
+      })
+      .catch(() => {
+        // Sin lista el comentario se publica igual; sólo no se puede mencionar.
+        if (!cancel) setCandidatosMencion([]);
+      });
+    return () => {
+      cancel = true;
+    };
+  }, [projectId, canalComentario]);
+
+  const projectManagers = useMemo(
+    () => usuarios.filter((u) => u.es_project_manager === true),
+    [usuarios]
+  );
+
+  /**
+   * Sólo quienes tienen la función técnica.
+   *
+   * No se filtra por `area` ni por `rol`: `area` está cargada de forma poco
+   * confiable —la técnica con más proyectos figura en "soporte"— y `rol` es el
+   * permiso del ERP, no la función. La bandera `es_tecnico` se administra en la
+   * ficha del usuario, igual que QA y Project Manager.
+   *
+   * Si el técnico ya asignado perdió la bandera, se lo agrega igual: sacarlo de
+   * la lista haría que al guardar cualquier otro campo se perdiera en silencio.
+   */
+  const tecnicos = useMemo(() => {
+    const lista = usuarios.filter((u) => u.es_tecnico === true);
+    if (responsableTecnicoId && !lista.some((u) => u.id === responsableTecnicoId)) {
+      const actual = usuarios.find((u) => u.id === responsableTecnicoId);
+      if (actual) return [actual, ...lista];
+    }
+    return lista;
+  }, [usuarios, responsableTecnicoId]);
+
+  const datosFirma = useMemo(
+    () =>
+      firmaDatos({
+        briefForm,
+        briefLists,
+        saasForm,
+        responsableTecnicoId,
+        observaciones,
+        clienteId,
+        facturaId,
+        responsableComercialId,
+        projectManagerId,
+        bloqueoTipo,
+        bloqueoMotivo,
+        bloqueoResponsable,
+        bloqueoProximaAccion,
+        cancelacionMotivo,
+        prioridad,
+        fechaPrometida,
+      }),
+    [
+      briefForm,
+      briefLists,
+      saasForm,
+      responsableTecnicoId,
+      observaciones,
+      clienteId,
+      facturaId,
+      responsableComercialId,
+      projectManagerId,
+      bloqueoTipo,
+      bloqueoMotivo,
+      bloqueoResponsable,
+      bloqueoProximaAccion,
+      cancelacionMotivo,
+      prioridad,
+      fechaPrometida,
+    ]
+  );
+
+  const datosDirty = datosSnapshot !== "" && datosFirma !== datosSnapshot;
+
+  useEffect(() => {
+    onDirtyChange?.(datosDirty);
+  }, [datosDirty, onDirtyChange]);
+
+  async function guardarDatos() {
+    const proyecto = data?.proyecto;
+    if (!proyecto || guardandoDatos) return;
+    setGuardandoDatos(true);
+    setErr(null);
+    const tipoCodigo = proyecto.proyecto_tipo?.codigo ?? "";
+    // En cadena y no en if/else: el tipo mixto guarda los dos briefs, y sus
+    // claves son disjuntas (`saas_*` vs. marca/dominio/…).
+    let briefMerged: unknown = proyecto.brief_data;
+    if (tipoIncluyeWeb(tipoCodigo)) {
+      briefMerged = applyBriefFormToExisting(briefMerged, briefForm, briefLists);
+    }
+    if (tipoIncluyeSaas(tipoCodigo)) {
+      briefMerged = applySaasFormToExisting(briefMerged, saasForm);
+    }
+    try {
+    const res = await fetchWithSupabaseSession(`/api/proyectos/${projectId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        brief_data: briefMerged,
+        responsable_tecnico_id: responsableTecnicoId || null,
+        observaciones_comerciales: observaciones.trim() === "" ? null : observaciones.trim(),
+        cliente_id: clienteId || null,
+        factura_id: facturaId || null,
+        responsable_comercial_id: responsableComercialId || null,
+        project_manager_id: projectManagerId || null,
+        bloqueo_tipo: bloqueoTipo || null,
+        bloqueo_motivo: bloqueoMotivo.trim() === "" ? null : bloqueoMotivo.trim(),
+        bloqueo_responsable: bloqueoResponsable || null,
+        bloqueo_proxima_accion:
+          bloqueoProximaAccion.trim() === "" ? null : bloqueoProximaAccion.trim(),
+        cancelacion_motivo: cancelacionMotivo.trim() === "" ? null : cancelacionMotivo.trim(),
+        prioridad,
+        // El input ya trae fecha Y hora local; se pasa a ISO para guardar el
+        // instante exacto. Antes se forzaba el mediodía y la hora que eligiera
+        // el usuario se perdía.
+        fecha_prometida: fechaPrometida ? new Date(fechaPrometida).toISOString() : null,
+        // Locking optimista (#7): la versión que se cargó. Si otro guardó antes,
+        // el server responde 409 y NO se pisa su trabajo.
+        expected_updated_at: versionRef.current ?? undefined,
+      }),
+    });
+    const j = (await res.json().catch(() => null)) as
+      | { success?: boolean; error?: string; data?: { updated_at?: unknown } }
+      | null;
+    if (!res.ok || !j?.success) {
+      // El 409 (conflicto) cae acá: se muestra el aviso del server y NO se marca
+      // limpio el formulario, así el usuario conserva sus cambios para recargar
+      // y volver a aplicarlos.
+      setErr(j?.error ?? "No se pudo guardar");
+      return;
+    }
+
+    // Guardado confirmado por el servidor. Se refresca la versión con el
+    // updated_at que devolvió el PATCH (ya bumpeado por el trigger), así un
+    // segundo guardado seguido no se auto-choca.
+    if (typeof j.data?.updated_at === "string") versionRef.current = j.data.updated_at;
+
+    // El formulario se marca limpio acá, con lo que el usuario acaba de escribir,
+    // y NO se espera la recarga: el botón se apaga apenas responde el PATCH.
+    setDatosSnapshot(datosFirma);
+
+    // Aviso de éxito por unos segundos (el botón se apaga y sin esto no había
+    // señal de que se guardó).
+    setGuardadoOk(true);
+    window.setTimeout(() => setGuardadoOk(false), 3000);
+
+    // Reconciliación en segundo plano: trae historial, SLA y lo que el servidor
+    // haya derivado del cambio. Antes esto se esperaba, y entre la recarga del
+    // detalle y la del tablero el guardado tardaba varios segundos en devolver
+    // el control aunque el dato ya estuviera escrito.
+    scheduleReload();
+    } catch (e) {
+      // Antes, un throw de red dejaba "Guardar" trabado hasta recargar la página.
+      setErr(e instanceof Error ? e.message : "No se pudo guardar.");
+    } finally {
+      setGuardandoDatos(false);
+    }
+  }
+
+  const [deleting, setDeleting] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  function abrirModalEliminar() {
+    setDeleteConfirmText("");
+    setDeleteError(null);
+    setDeleteModalOpen(true);
+  }
+
+  async function confirmarEliminacion() {
+    if (deleting) return;
+    const proyectoActual = data?.proyecto;
+    if (!proyectoActual) return;
+    const titulo = String(proyectoActual.titulo ?? "").trim();
+    if (deleteConfirmText.trim() !== titulo) {
+      setDeleteError("El título no coincide. Verificá la escritura exacta.");
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetchWithSupabaseSession(`/api/proyectos/${projectId}`, { method: "DELETE" });
+      const j = (await res.json().catch(() => null)) as { success?: boolean; error?: string } | null;
+      if (!res.ok || !j?.success) {
+        setDeleteError(j?.error ?? "No se pudo eliminar el proyecto.");
+        return;
+      }
+      setDeleteModalOpen(false);
+      onProjectUpdated?.();
+      if (variant === "modal") {
+        onClose?.();
+      } else {
+        router.push("/dashboard/proyectos");
+      }
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!deleteModalOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !deleting) setDeleteModalOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [deleteModalOpen, deleting]);
+
+  // Conteos de QA para el badge de la solapa y la barra de avance del Resumen.
+  // Ruta liviana aparte: solo trae `estado`, sin adjuntos ni signed URLs.
+  const [qaResumen, setQaResumen] = useState<QAResumen | null>(null);
+  const recargarQaResumen = useCallback(async () => {
+    const res = await fetchWithSupabaseSession(
+      `/api/proyectos/${projectId}/qa/observaciones/resumen`,
+      { cache: "no-store" }
+    );
+    const j = (await res.json().catch(() => null)) as { success?: boolean; data?: QAResumen } | null;
+    if (res.ok && j?.success && j.data) setQaResumen(j.data);
+  }, [projectId]);
+
+  // El resumen de QA sólo cambia trabajando en la solapa QA. Antes se re-pedía
+  // a la red en CADA cambio de solapa; ahora sólo en el mount y al entrar/salir
+  // de QA, que es cuando pudo cambiar. Igual mantiene el badge y la barra al día.
+  const prevTabRef = useRef<TabId | null>(null);
+  useEffect(() => {
+    const prev = prevTabRef.current;
+    prevTabRef.current = tab;
+    if (prev === null || tab === "qa" || prev === "qa") {
+      void recargarQaResumen();
+    }
+  }, [recargarQaResumen, tab]);
+
+  // Canales de comentarios que el usuario puede ver (los decide el server).
+  const canalesComentarioVisibles = useMemo<CanalComentarioUI[]>(() => {
+    const raw = data?.comentarios_canales_visibles;
+    const arr = Array.isArray(raw)
+      ? raw.filter((x): x is CanalComentarioUI => x === "comercial" || x === "desarrollo")
+      : [];
+    return arr.length > 0 ? arr : ["comercial"];
+  }, [data?.comentarios_canales_visibles]);
+
+  // Si el canal activo no está entre los visibles (p. ej. un técnico que sólo ve
+  // desarrollo), se cae al primero permitido.
+  useEffect(() => {
+    if (!canalesComentarioVisibles.includes(canalComentario)) {
+      setCanalComentario(canalesComentarioVisibles[0]);
+    }
+  }, [canalesComentarioVisibles, canalComentario]);
+
+  // Deep-link desde una notificación de comentario (variant page): `?tab=comentarios&cc=<canal>`
+  // abre la sección correcta para quien ve ambas (PM/QA). Se aplica una sola vez,
+  // cuando ya se conocen los canales visibles, y no vuelve a pisar si el usuario
+  // cambia de sección a mano.
+  const ccAplicadoRef = useRef(false);
+  useEffect(() => {
+    if (ccAplicadoRef.current) return;
+    // En page viene por la URL (?cc=…); en modal, por el prop del deep-link.
+    const cc = variant === "page" ? sp?.get("cc") : initialCanal;
+    if (cc === "comercial" || cc === "desarrollo") {
+      if (canalesComentarioVisibles.includes(cc)) {
+        setCanalComentario(cc);
+        ccAplicadoRef.current = true;
+      }
+    } else {
+      ccAplicadoRef.current = true;
+    }
+  }, [variant, sp, initialCanal, canalesComentarioVisibles]);
+
+  const agregarComentario = useCallback(
+    async (
+      texto: string,
+      canal: CanalComentarioUI,
+      imagenes: File[],
+      menciones: string[]
+    ): Promise<boolean> => {
+      const comentario = texto.trim();
+      if (!comentario && imagenes.length === 0) return false;
+      try {
+      // Las imágenes se suben primero al storage; el comentario guarda sus refs.
+      const adjuntos: Array<{ path: string; nombre: string; mime_type: string; size_bytes: number }> = [];
+      for (const file of imagenes) {
+        const fd = new FormData();
+        fd.append("file", file);
+        const up = await fetchWithSupabaseSession(
+          `/api/proyectos/${projectId}/comentarios/adjuntos`,
+          { method: "POST", body: fd }
+        );
+        const uj = (await up.json()) as {
+          success?: boolean;
+          error?: string;
+          data?: { path?: string; nombre?: string; mime_type?: string; size_bytes?: number };
+        };
+        if (!up.ok || !uj.success || !uj.data?.path) {
+          setErr(uj.error ?? `No se pudo subir "${file.name}"`);
+          return false;
+        }
+        adjuntos.push({
+          path: uj.data.path,
+          nombre: uj.data.nombre ?? file.name,
+          mime_type: uj.data.mime_type ?? file.type,
+          size_bytes: uj.data.size_bytes ?? file.size,
+        });
+      }
+      const res = await fetchWithSupabaseSession(`/api/proyectos/${projectId}/comentarios`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comentario, canal, adjuntos, menciones }),
+      });
+      const j = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !j.success) {
+        setErr(j.error ?? "Error");
+        return false;
+      }
+      scheduleReload();
+      return true;
+      } catch (e) {
+        // Antes un throw de red no mostraba nada; ahora avisa y libera el botón.
+        setErr(e instanceof Error ? e.message : "No se pudo publicar el comentario.");
+        return false;
+      }
+    },
+    [projectId, scheduleReload]
+  );
+
+  async function guardarCambio(nro: number) {
+    if (cambioSavingNro != null) return;
+    const draft = cambiosDraft[nro];
+    if (!draft) return;
+    const comentarioTrim = draft.comentario.trim();
+    if (draft.realizado && comentarioTrim.length === 0) {
+      setErr("Agregá un comentario para el cambio realizado.");
+      return;
+    }
+    setCambioSavingNro(nro);
+    try {
+      const res = await fetchWithSupabaseSession(
+        `/api/proyectos/${projectId}/cambios/${nro}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            realizado: draft.realizado,
+            comentario: comentarioTrim.length > 0 ? comentarioTrim : null,
+          }),
+        }
+      );
+      const j = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !j.success) {
+        setErr(j.error ?? "No se pudo guardar el cambio");
+        return;
+      }
+      setErr(null);
+      scheduleReload();
+    } finally {
+      setCambioSavingNro(null);
+    }
+  }
+
+  function iniciarEdicionComentario(cid: string, texto: string) {
+    setComEditandoId(cid);
+    setComEditTexto(texto);
+  }
+
+  function cancelarEdicionComentario() {
+    setComEditandoId(null);
+    setComEditTexto("");
+  }
+
+  function iniciarReenvioComentario(cid: string) {
+    // No se puede editar y reenviar a la vez.
+    setComEditandoId(null);
+    setComReenviandoId(cid);
+    setComReenvioNota("");
+  }
+
+  function cancelarReenvioComentario() {
+    setComReenviandoId(null);
+    setComReenvioNota("");
+  }
+
+  // Reenvía el comentario `cid` al OTRO canal (comercial ↔ desarrollo), con la
+  // nota opcional arriba. El server arma el snapshot del original (autor, texto,
+  // fecha) y dispara la notificación al destinatario del canal destino.
+  async function reenviarComentario(cid: string, canalOrigen: CanalComentarioUI) {
+    if (comActionId) return;
+    const destino: CanalComentarioUI = canalOrigen === "desarrollo" ? "comercial" : "desarrollo";
+    setComActionId(cid);
+    try {
+      const res = await fetchWithSupabaseSession(`/api/proyectos/${projectId}/comentarios`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ canal: destino, comentario: comReenvioNota.trim(), reenviar_de: cid }),
+      });
+      const j = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !j.success) {
+        setErr(j.error ?? "No se pudo reenviar el comentario");
+        return;
+      }
+      cancelarReenvioComentario();
+      scheduleReload();
+    } finally {
+      setComActionId(null);
+    }
+  }
+
+  async function guardarEdicionComentario(cid: string) {
+    const texto = comEditTexto.trim();
+    if (!texto || comActionId) return;
+    setComActionId(cid);
+    try {
+      const res = await fetchWithSupabaseSession(
+        `/api/proyectos/${projectId}/comentarios/${cid}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ comentario: texto }),
+        }
+      );
+      const j = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !j.success) {
+        setErr(j.error ?? "Error");
+        return;
+      }
+      cancelarEdicionComentario();
+      scheduleReload();
+    } finally {
+      setComActionId(null);
+    }
+  }
+
+  async function eliminarComentario(cid: string) {
+    if (comActionId) return;
+    const ok = window.confirm("¿Eliminar este comentario? Esta acción no se puede deshacer.");
+    if (!ok) return;
+    setComActionId(cid);
+    try {
+      const res = await fetchWithSupabaseSession(
+        `/api/proyectos/${projectId}/comentarios/${cid}`,
+        { method: "DELETE" }
+      );
+      const j = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !j.success) {
+        setErr(j.error ?? "Error");
+        return;
+      }
+      if (comEditandoId === cid) cancelarEdicionComentario();
+      scheduleReload();
+    } finally {
+      setComActionId(null);
+    }
+  }
+
+  async function agregarTarea(e: React.FormEvent) {
+    e.preventDefault();
+    const titulo = tareaTitulo.trim();
+    if (!titulo || tareaSaving) return;
+    setTareaSaving(true);
+    const payload: Record<string, unknown> = { titulo };
+    const descripcion = tareaDescripcion.trim();
+    if (descripcion) payload.descripcion = descripcion;
+    if (tareaResponsableId) payload.responsable_id = tareaResponsableId;
+    if (tareaFechaLimite) payload.fecha_limite = tareaFechaLimite;
+    try {
+      const res = await fetchWithSupabaseSession(`/api/proyectos/${projectId}/tareas`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const j = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !j.success) {
+        setErr(j.error ?? "Error");
+        return;
+      }
+      setTareaTitulo("");
+      setTareaDescripcion("");
+      setTareaResponsableId("");
+      setTareaFechaLimite("");
+      scheduleReload();
+    } finally {
+      setTareaSaving(false);
+    }
+  }
+
+  function limpiarFormularioTarea() {
+    setTareaTitulo("");
+    setTareaDescripcion("");
+    setTareaResponsableId("");
+    setTareaFechaLimite("");
+  }
+
+  async function patchTarea(tareaId: string, patch: Record<string, unknown>) {
+    const res = await fetchWithSupabaseSession(`/api/proyectos/${projectId}/tareas/${tareaId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const j = (await res.json()) as { success?: boolean; error?: string };
+    if (!res.ok || !j.success) setErr(j.error ?? "Error");
+    else {
+      scheduleReload();
+    }
+  }
+
+  function iniciarEdicionTarea(t: Record<string, unknown>) {
+    setTareaEditandoId(String(t.id ?? ""));
+    setTareaEditTitulo(typeof t.titulo === "string" ? t.titulo : "");
+    setTareaEditDescripcion(typeof t.descripcion === "string" ? t.descripcion : "");
+    setTareaEditResponsableId(typeof t.responsable_id === "string" ? t.responsable_id : "");
+    setTareaEditFechaLimite(
+      typeof t.fecha_limite === "string" && t.fecha_limite ? t.fecha_limite.slice(0, 10) : ""
+    );
+  }
+
+  function cancelarEdicionTarea() {
+    setTareaEditandoId(null);
+    setTareaEditTitulo("");
+    setTareaEditDescripcion("");
+    setTareaEditResponsableId("");
+    setTareaEditFechaLimite("");
+  }
+
+  async function guardarEdicionTarea(tareaId: string) {
+    const titulo = tareaEditTitulo.trim();
+    if (!titulo || tareaActionId) return;
+    setTareaActionId(tareaId);
+    try {
+      const res = await fetchWithSupabaseSession(
+        `/api/proyectos/${projectId}/tareas/${tareaId}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            titulo,
+            descripcion: tareaEditDescripcion.trim(),
+            responsable_id: tareaEditResponsableId || null,
+            fecha_limite: tareaEditFechaLimite || null,
+          }),
+        }
+      );
+      const j = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !j.success) {
+        setErr(j.error ?? "Error");
+        return;
+      }
+      cancelarEdicionTarea();
+      scheduleReload();
+    } finally {
+      setTareaActionId(null);
+    }
+  }
+
+  async function eliminarTarea(tareaId: string) {
+    if (tareaActionId) return;
+    const ok = window.confirm("¿Eliminar esta tarea? Esta acción no se puede deshacer.");
+    if (!ok) return;
+    setTareaActionId(tareaId);
+    try {
+      const res = await fetchWithSupabaseSession(
+        `/api/proyectos/${projectId}/tareas/${tareaId}`,
+        { method: "DELETE" }
+      );
+      const j = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !j.success) {
+        setErr(j.error ?? "Error");
+        return;
+      }
+      if (tareaEditandoId === tareaId) cancelarEdicionTarea();
+      scheduleReload();
+    } finally {
+      setTareaActionId(null);
+    }
+  }
+
+  async function subirArchivos(files: File[]) {
+    if (archivoUploading) return;
+    const validos: File[] = [];
+    for (const f of files) {
+      if (f.size === 0) {
+        setErr(`"${f.name}" está vacío y no se subió.`);
+        continue;
+      }
+      if (f.size > ARCHIVO_MAX_BYTES) {
+        setErr(`"${f.name}" supera el máximo de ${Math.round(ARCHIVO_MAX_BYTES / (1024 * 1024))} MB.`);
+        continue;
+      }
+      validos.push(f);
+    }
+    if (validos.length === 0) return;
+    const comoConfirmacion = subirComoConfirmacion;
+    setArchivoUploading(true);
+    try {
+      for (const file of validos) {
+        const fd = new FormData();
+        fd.append("file", file);
+        // El servidor lo ignora en archivos que no son imagen: no hace falta
+        // filtrar acá cuáles son imágenes antes de mandarlo.
+        if (comoConfirmacion) fd.append("confirmacion_cliente", "1");
+        // Sin este timeout, si algo entre el navegador y el servidor (proxy,
+        // firewall) corta la conexión en silencio en vez de responder con un
+        // error, el fetch nunca resuelve y el botón queda en "Subiendo…" para
+        // siempre. Con el timeout, al menos se ve un error accionable.
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 90_000);
+        try {
+          const res = await fetchWithSupabaseSession(`/api/proyectos/${projectId}/archivos`, {
+            method: "POST",
+            body: fd,
+            signal: controller.signal,
+          });
+          const j = (await res.json()) as { success?: boolean; error?: string };
+          if (!res.ok || !j.success) {
+            setErr(j.error ?? `No se pudo subir "${file.name}"`);
+            break;
+          }
+        } catch (e) {
+          const abortado = e instanceof DOMException && e.name === "AbortError";
+          setErr(
+            abortado
+              ? `"${file.name}" tardó demasiado y se canceló. Puede ser un bloqueo de red para ese tipo de archivo — probá con otro formato o avisá a soporte.`
+              : `No se pudo subir "${file.name}": ${e instanceof Error ? e.message : "error de red"}`
+          );
+          break;
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      }
+      setSubirComoConfirmacion(false);
+      scheduleReload();
+    } finally {
+      setArchivoUploading(false);
+    }
+  }
+
+  /** Alterna el marcador de confirmación de cliente en una imagen ya subida. */
+  async function alternarConfirmacionCliente(aid: string, valor: boolean) {
+    setConfirmacionActionId(aid);
+    setErr(null);
+    try {
+      const res = await fetchWithSupabaseSession(`/api/proyectos/${projectId}/archivos/${aid}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmacion_cliente: valor }),
+      });
+      const j = (await res.json().catch(() => null)) as { success?: boolean; error?: string } | null;
+      if (!res.ok || !j?.success) {
+        setErr(j?.error ?? "No se pudo actualizar el archivo");
+        return;
+      }
+      scheduleReload();
+    } finally {
+      setConfirmacionActionId(null);
+    }
+  }
+
+  function onArchivoInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files ? Array.from(e.target.files) : [];
+    e.target.value = "";
+    if (files.length > 0) void subirArchivos(files);
+  }
+
+  function onArchivoDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    setArchivoDragActive(false);
+    const files = e.dataTransfer?.files ? Array.from(e.dataTransfer.files) : [];
+    if (files.length > 0) void subirArchivos(files);
+  }
+
+  async function fetchArchivoUrl(aid: string, download: boolean): Promise<string | null> {
+    const res = await fetchWithSupabaseSession(
+      `/api/proyectos/${projectId}/archivos/${aid}${download ? "?download=1" : ""}`,
+      { cache: "no-store" }
+    );
+    const j = (await res.json()) as { success?: boolean; data?: { url?: string }; error?: string };
+    if (!res.ok || !j.success || !j.data?.url) {
+      setErr(j.error ?? "No se pudo abrir el archivo");
+      return null;
+    }
+    return j.data.url;
+  }
+
+  async function descargarArchivo(aid: string) {
+    if (archivoActionId) return;
+    setArchivoActionId(aid);
+    try {
+      const url = await fetchArchivoUrl(aid, true);
+      if (!url) return;
+      const a = document.createElement("a");
+      a.href = url;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } finally {
+      setArchivoActionId(null);
+    }
+  }
+
+  async function previsualizarArchivo(aid: string) {
+    if (archivoActionId) return;
+    // Abrimos la pestaña en el click (sincrónico) para evitar el bloqueo de pop-ups.
+    const win = window.open("about:blank", "_blank");
+    setArchivoActionId(aid);
+    try {
+      const url = await fetchArchivoUrl(aid, false);
+      if (!url) {
+        win?.close();
+        return;
+      }
+      if (win) win.location.href = url;
+      else window.open(url, "_blank", "noopener,noreferrer");
+    } finally {
+      setArchivoActionId(null);
+    }
+  }
+
+  async function eliminarArchivo(aid: string, nombre: string) {
+    if (archivoActionId) return;
+    const ok = window.confirm(`¿Eliminar "${nombre}"? Esta acción no se puede deshacer.`);
+    if (!ok) return;
+    setArchivoActionId(aid);
+    try {
+      const res = await fetchWithSupabaseSession(`/api/proyectos/${projectId}/archivos/${aid}`, {
+        method: "DELETE",
+      });
+      const j = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !j.success) {
+        setErr(j.error ?? "No se pudo eliminar");
+        return;
+      }
+      scheduleReload();
+    } finally {
+      setArchivoActionId(null);
+    }
+  }
+
+  function toggleArchivoSel(aid: string) {
+    setArchivosSel((prev) => {
+      const next = new Set(prev);
+      if (next.has(aid)) next.delete(aid);
+      else next.add(aid);
+      return next;
+    });
+  }
+
+  function setArchivoSelLote(ids: string[], marcar: boolean) {
+    setArchivosSel((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) {
+        if (marcar) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  }
+
+  async function descargarSeleccionados(ids: string[]) {
+    if (archivoBulkBusy || ids.length === 0) return;
+    setArchivoBulkBusy(true);
+    try {
+      for (const aid of ids) {
+        const url = await fetchArchivoUrl(aid, true);
+        if (!url) continue;
+        const a = document.createElement("a");
+        a.href = url;
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        // Pequeña pausa para que el navegador no descarte descargas encadenadas.
+        await new Promise((r) => setTimeout(r, 350));
+      }
+    } finally {
+      setArchivoBulkBusy(false);
+    }
+  }
+
+  async function eliminarSeleccionados(ids: string[]) {
+    if (archivoBulkBusy || ids.length === 0) return;
+    const ok = window.confirm(
+      `¿Eliminar ${ids.length} archivo${ids.length === 1 ? "" : "s"}? Esta acción no se puede deshacer.`
+    );
+    if (!ok) return;
+    setArchivoBulkBusy(true);
+    try {
+      let huboError = false;
+      for (const aid of ids) {
+        const res = await fetchWithSupabaseSession(`/api/proyectos/${projectId}/archivos/${aid}`, {
+          method: "DELETE",
+        });
+        const j = (await res.json()) as { success?: boolean; error?: string };
+        if (!res.ok || !j.success) {
+          huboError = true;
+          setErr(j.error ?? "No se pudieron eliminar todos los archivos");
+          break;
+        }
+      }
+      setArchivoSelLote(ids, false);
+      scheduleReload();
+      if (!huboError) setErr(null);
+    } finally {
+      setArchivoBulkBusy(false);
+    }
+  }
+
+  // Devuelve el mensaje de error (string) o null si salió bien. El motivo sólo
+  // se manda al pausar; el servidor lo exige y crea el comentario de la pausa.
+  async function cambiarEstado(estadoId: string, motivo?: string): Promise<string | null> {
+    const res = await fetchWithSupabaseSession(`/api/proyectos/${projectId}/cambiar-estado`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ estado_id: estadoId, ...(motivo ? { motivo } : {}) }),
+    });
+    const j = (await res.json().catch(() => null)) as { success?: boolean; error?: string } | null;
+    if (!res.ok || !j?.success) return j?.error ?? "No se pudo cambiar el estado.";
+    patchProyectoLocal({ estado_id: estadoId });
+    scheduleReload();
+    return null;
+  }
+
+  // ¿El estado destino es de tipo "pausado"? (mismo criterio que el resto: por
+  // tipo_sla; con fallback al código por si algún catálogo no lo trae).
+  function esEstadoPausado(estadoId: string): boolean {
+    const e = estados.find((x) => x.id === estadoId);
+    return (e?.tipo_sla ?? "") === "pausado" || (e?.codigo ?? "") === "pausado";
+  }
+
+  // Punto único por donde pasa el cambio de estado desde el selector: si va a
+  // Pausado, abre el popup obligatorio en vez de cambiar directo.
+  function intentarCambiarEstado(estadoId: string) {
+    const actual = String(proyecto?.estado_id ?? "");
+    if (!estadoId || estadoId === actual) return;
+    if (esEstadoPausado(estadoId)) {
+      setPausaMotivo("");
+      setPausaError(null);
+      setPausaModal({ estadoId });
+      return;
+    }
+    void cambiarEstado(estadoId).then((err) => {
+      if (err) setErr(err);
+    });
+  }
+
+  async function confirmarPausa() {
+    if (!pausaModal || pausaGuardando) return;
+    const motivo = pausaMotivo.trim();
+    if (!motivo) {
+      setPausaError("Escribí el motivo de la pausa.");
+      return;
+    }
+    setPausaGuardando(true);
+    setPausaError(null);
+    try {
+      // El servidor exige el motivo, aplica el cambio (historial) y crea el
+      // comentario de la pausa. Un solo llamado, sin poder saltearse el motivo.
+      const err = await cambiarEstado(pausaModal.estadoId, motivo);
+      if (err) {
+        setPausaError(err);
+        return;
+      }
+      setPausaModal(null);
+      setPausaMotivo("");
+    } catch (e) {
+      setPausaError(e instanceof Error ? e.message : "No se pudo pausar.");
+    } finally {
+      setPausaGuardando(false);
+    }
+  }
+
+  async function cambiarTipo(tipoId: string) {
+    const actual = String((proyecto as { tipo_id?: string } | undefined)?.tipo_id ?? "");
+    if (!tipoId || tipoId === actual) return;
+    const res = await fetchWithSupabaseSession(`/api/proyectos/${projectId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tipo_id: tipoId }),
+    });
+    const j = (await res.json()) as { success?: boolean; error?: string };
+    if (!res.ok || !j.success) setErr(j.error ?? "No se pudo cambiar el tipo");
+    else {
+      patchProyectoLocal({ tipo_id: tipoId });
+      scheduleReload();
+    }
+  }
+
+  // Sub-etapa de desarrollo: sólo editable en el estado 'desarrollo' (el server lo
+  // vuelve a validar). Enviar "" limpia la sub-etapa (null). Cada cambio queda en
+  // el historial vía el PATCH.
+  async function cambiarSubestado(codigo: string) {
+    const actual = String(
+      (proyecto as { subestado_desarrollo?: string | null } | undefined)?.subestado_desarrollo ?? ""
+    );
+    if (codigo === actual) return;
+    const res = await fetchWithSupabaseSession(`/api/proyectos/${projectId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subestado_desarrollo: codigo || null }),
+    });
+    const j = (await res.json()) as { success?: boolean; error?: string };
+    if (!res.ok || !j.success) setErr(j.error ?? "No se pudo cambiar la sub-etapa");
+    else {
+      patchProyectoLocal({ subestado_desarrollo: codigo || null });
+      scheduleReload();
+    }
+  }
+
+  const slaFmt = useMemo(() => {
+    const s = data?.sla as { segundos_interno?: number; segundos_cliente?: number; segundos_pausado?: number } | undefined;
+    if (!s) return null;
+    const fmt = (sec?: number) =>
+      sec == null ? "—" : `${Math.round((sec / 3600) * 10) / 10} h`;
+    return {
+      interno: fmt(s.segundos_interno),
+      cliente: fmt(s.segundos_cliente),
+      pausado: fmt(s.segundos_pausado),
+    };
+  }, [data?.sla]);
+
+  const proyecto = data?.proyecto;
+  const codigoTipo = proyecto?.proyecto_tipo?.codigo ?? "";
+  // El tipo mixto muestra los dos bloques de brief a la vez.
+  const esWeb = tipoIncluyeWeb(codigoTipo);
+  const esSaas = tipoIncluyeSaas(codigoTipo);
+  // Sub-etapa de desarrollo: catálogo según el tipo; sólo editable en 'desarrollo'.
+  const codigoEstadoActual = String(
+    (proyecto as { proyecto_estado?: { codigo?: string } } | undefined)?.proyecto_estado?.codigo ?? ""
+  ).toLowerCase();
+  const esEstadoDesarrollo = codigoEstadoActual === "desarrollo";
+  const subestadosDisponibles = subestadosParaTipo(codigoTipo);
+  /**
+   * El estado actual, para mostrar el motivo de cancelación sólo cuando toca.
+   *
+   * `proyecto` puede no existir todavía: sale de `data?.proyecto`, y la guarda
+   * que corta el render está más abajo. Cuando el modal se abre desde el Kanban
+   * hay una fila de preview que lo siembra, pero al entrar por URL directa o al
+   * refrescar no hay nada, y leerlo sin `?.` tiraba abajo toda la página.
+   */
+  const estaCancelado =
+    String(
+      (proyecto as { proyecto_estado?: { codigo?: string } } | undefined)?.proyecto_estado?.codigo ?? ""
+    ).toLowerCase() === ESTADO_CANCELADO_CODIGO;
+
+  const subestadoActual = String(
+    (proyecto as { subestado_desarrollo?: string | null } | undefined)?.subestado_desarrollo ?? ""
+  );
+  const briefCoerced = coalesceBriefData(proyecto?.brief_data);
+  // El hero del resumen los muestra en dos niveles; `clienteNombre` los pega
+  // con " · ", que sirve para una fila pero no para un encabezado.
+  const clienteRef = (proyecto?.cliente ?? null) as
+    | { tipo_cliente?: string | null; empresa?: string | null; nombre_contacto?: string | null; nombre?: string | null; razon_social?: string | null }
+    | null;
+  // Nombre principal (type-aware) y contacto secundario, vía el helper canónico.
+  const clienteNombrePrincipal = nombreClienteDisplay(clienteRef, "");
+  const clienteContacto = nombreClienteContacto(clienteRef) ?? "";
+  /**
+   * WhatsApp del contacto. En SaaS vive en `saas_whatsapp_contacto` y en web en
+   * la clave general del brief; se toma el primero que tenga valor.
+   */
+  const contactoWhatsapp =
+    saasForm.whatsapp_contacto.trim() || String(briefCoerced.whatsapp_contacto ?? "").trim();
+  const saasModuloIds = saasForm.modulos_necesarios
+    .map((modulo) => modulo.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  const updateSaasField = <K extends keyof ProyectoSaasBriefForm>(key: K, value: ProyectoSaasBriefForm[K]) => {
+    setSaasForm((prev) => ({ ...prev, [key]: value }));
+  };
+  const updateSaasModulos = (ids: string[]) => {
+    const snapshots: ProyectoModuloSnapshot[] = modulosCatalogo
+      .filter((modulo) => ids.includes(modulo.id))
+      .map((modulo) => ({ id: modulo.id, slug: modulo.slug, nombre: modulo.nombre }));
+    updateSaasField("modulos_necesarios", snapshots);
+  };
+
+  if (!projectId) return null;
+  if (loading && !data) {
+    return <div className="p-8 text-sm text-slate-500">Cargando…</div>;
+  }
+  if (err && !data) {
+    return (
+      <div className="flex flex-col items-start gap-2 p-8 text-sm">
+        <p className="text-rose-600">{err}</p>
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] font-medium text-slate-600 shadow-sm transition-colors hover:bg-slate-50"
+        >
+          Reintentar
+        </button>
+      </div>
+    );
+  }
+  if (!data || !proyecto) return null;
+
+  const panelCls =
+    "rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]";
+  const labelCls = "text-xs font-medium uppercase tracking-wide text-slate-500";
+  const inputCls =
+    "mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm transition-colors hover:border-[#4FAEB2]/60 focus:border-[#4FAEB2] focus:outline-none focus:ring-2 focus:ring-[#4FAEB2]/20";
+
+  const rootClass =
+    variant === "modal"
+      ? "flex h-full min-h-0 flex-col bg-white"
+      : "mx-auto max-w-5xl space-y-6 p-6";
+
+  return (
+    <div className={rootClass}>
+      {variant === "page" ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <Link
+            href="/dashboard/proyectos"
+            className="text-sm font-medium text-[#4FAEB2] hover:text-[#3F8E91] hover:underline"
+          >
+            ← Kanban
+          </Link>
+        </div>
+      ) : null}
+
+      <div
+        className={
+          variant === "modal"
+            ? "relative flex flex-col gap-4 border-b border-slate-100 bg-gradient-to-br from-white via-white to-[#4FAEB2]/5 px-4 pb-5 pr-14 pt-6 md:px-6 md:pr-16"
+            : "relative flex flex-col gap-4 border-b border-slate-200 pb-4 pr-12"
+        }
+      >
+        {/* Botón X para cerrar/salir del detalle: reemplaza el antiguo "Cerrar" que
+            iba mezclado con los controles de estado/tipo/eliminar. En modal cierra
+            el overlay; en la vista full navega al kanban. */}
+        <button
+          type="button"
+          aria-label="Cerrar"
+          title="Cerrar"
+          onClick={() => (variant === "modal" ? onClose?.() : router.push("/dashboard/proyectos"))}
+          className={
+            variant === "modal"
+              ? "absolute right-3 top-3 z-10 inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-[#4FAEB2]/60 hover:text-[#4FAEB2]"
+              : "absolute right-0 top-0 z-10 inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 shadow-sm transition-colors hover:border-[#4FAEB2]/60 hover:text-[#4FAEB2]"
+          }
+        >
+          <X className="h-4 w-4" />
+        </button>
+        <div className="min-w-0">
+          {onBack ? (
+            <button
+              type="button"
+              onClick={onBack}
+              className="mb-2 inline-flex items-center gap-1 whitespace-nowrap text-[12px] font-medium text-[#4FAEB2] transition-colors hover:text-[#3F8E91] hover:underline"
+            >
+              ← {backLabel ?? "Volver"}
+            </button>
+          ) : null}
+          <div className="flex items-center gap-2">
+            <span
+              aria-hidden="true"
+              className="inline-block h-2 w-2 shrink-0 rounded-full bg-[#4FAEB2] shadow-[0_0_0_3px_rgba(79,174,178,0.18)]"
+            />
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#4FAEB2]">
+              Proyecto
+            </p>
+          </div>
+          <h1
+            id={variant === "modal" ? "proyecto-detalle-titulo" : undefined}
+            className="mt-1 truncate text-2xl font-semibold tracking-tight text-slate-900"
+          >
+            {String(proyecto.titulo ?? "")}
+          </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            {(proyecto as { proyecto_tipo?: { nombre?: string } }).proyecto_tipo?.nombre ?? "—"} ·{" "}
+            <span className="text-slate-600">Avance {data.avance_pct ?? "—"}%</span>
+          </p>
+        </div>
+        {data.current_user_solo_lectura ? (
+          // Comercial (o cualquiera fuera del equipo): la ficha es para coordinar,
+          // no para manejar el flujo. No se le muestra NADA del encabezado de
+          // control (ni Tipo/Estado/Sub-etapa ni Eliminar) para no ensuciarle la
+          // vista. El estado igual lo ve en la pestaña Resumen.
+          null
+        ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          {tipos.length > 0 ? (
+            <FancySelect
+              className="min-w-[170px]"
+              ariaLabel="Cambiar tipo de proyecto"
+              value={String((proyecto as { tipo_id?: string }).tipo_id ?? "")}
+              onChange={(v) => void cambiarTipo(v)}
+              options={tipos.map((t) => ({ value: t.id, label: t.nombre }))}
+            />
+          ) : null}
+          <FancySelect
+            className="min-w-[180px]"
+            ariaLabel="Cambiar estado del proyecto"
+            value={String(proyecto.estado_id ?? "")}
+            onChange={(v) => intentarCambiarEstado(v)}
+            options={estados.map((e) => ({ value: e.id, label: e.nombre }))}
+          />
+          {/* Sub-etapa de desarrollo: siempre visible; sólo editable en «En desarrollo».
+              Fuera de ese estado se muestra deshabilitada (informativa). */}
+          {subestadosDisponibles.length > 0 ? (
+            <span
+              title={
+                esEstadoDesarrollo
+                  ? "Sub-etapa de desarrollo"
+                  : "La sub-etapa sólo se puede cambiar cuando el proyecto está En desarrollo"
+              }
+            >
+              <FancySelect
+                className="min-w-[190px]"
+                ariaLabel="Cambiar sub-etapa de desarrollo"
+                disabled={!esEstadoDesarrollo}
+                placeholder="Sub-etapa…"
+                value={subestadoActual}
+                onChange={(v) => void cambiarSubestado(v)}
+                options={[
+                  { value: "", label: "Sin sub-etapa" },
+                  ...subestadosDisponibles.map((s) => ({ value: s.codigo, label: s.nombre })),
+                ]}
+              />
+            </span>
+          ) : null}
+          {(() => {
+            // El permiso lo resuelve el server (mismo criterio que el DELETE); acá solo se refleja.
+            if (!data.current_user_puede_eliminar) return null;
+            return (
+              <button
+                type="button"
+                onClick={abrirModalEliminar}
+                className="rounded-xl border border-red-200 bg-white px-3.5 py-2.5 text-sm font-medium text-red-600 shadow-sm transition-colors hover:border-red-400 hover:bg-red-50"
+                title="Eliminar definitivamente el proyecto (irreversible)"
+              >
+                Eliminar
+              </button>
+            );
+          })()}
+        </div>
+        )}
+      </div>
+
+      {err ? (
+        <div
+          className={
+            variant === "modal"
+              ? "mx-4 mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2 text-sm text-amber-900 md:mx-6"
+              : "rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2 text-sm text-amber-900"
+          }
+        >
+          {err}
+        </div>
+      ) : null}
+
+      {/*
+        En un telefono estas solapas son 7 y envolvian en tres filas, comiendose media
+        pantalla antes de mostrar nada. Abajo de `md` van en una sola fila que se desliza;
+        de `md` para arriba queda el wrap de siempre (escritorio sin cambios).
+      */}
+      <div
+        className={`flex gap-1.5 overflow-x-auto [scrollbar-width:none] md:flex-wrap md:overflow-visible [&::-webkit-scrollbar]:hidden ${
+          variant === "modal"
+            ? "border-b border-slate-100 bg-white px-4 pb-3 pt-4 md:px-6"
+            : "border-b border-slate-200 pb-2"
+        }`}
+      >
+        {tabsPara(qaResumen).map((t) => {
+          const active = tab === t;
+          return (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTab(t)}
+              className={`relative shrink-0 rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
+                active
+                  ? "border border-[#4FAEB2]/30 bg-[#4FAEB2]/10 text-[#3F8E91] shadow-sm"
+                  : "border border-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+              }`}
+            >
+              {TAB_LABELS[t]}
+              {t === "qa" && qaResumen && qaResumen.abiertas > 0 ? (
+                <span
+                  className="ml-1.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-amber-700"
+                  title={`${qaResumen.abiertas} observaciones sin resolver`}
+                >
+                  {qaResumen.abiertas}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
+
+      <div
+        className={
+          variant === "modal"
+            ? "min-h-0 flex-1 overflow-y-auto overscroll-y-contain bg-slate-50/50 px-4 py-5 md:px-6"
+            : ""
+        }
+      >
+        {tab === "resumen" ? (
+          <div className="grid gap-4 md:grid-cols-3">
+            {/*
+              El cliente arriba y a lo ancho: es el dato que se busca primero al
+              abrir un proyecto y antes venía como una fila más de la lista,
+              con el mismo peso que "Prioridad". Nombre y contacto se copian de
+              un clic, que es lo que se pega en WhatsApp para escribirle.
+            */}
+            <SpotlightCard
+              spotlightColor="rgba(79, 174, 178, 0.12)"
+              className={`${panelCls} md:col-span-3`}
+            >
+              <div className="flex flex-wrap items-start gap-4">
+                <span
+                  aria-hidden="true"
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#4FAEB2]/12 text-[13px] font-bold text-[#2F6E71]"
+                >
+                  {inicialesNombre(clienteNombrePrincipal || clienteContacto)}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.09em] text-slate-400">Cliente</p>
+                  <div className="mt-0.5 text-[15px] font-semibold text-slate-900">
+                    <CopiarTexto valor={clienteNombrePrincipal || clienteContacto} etiqueta="el nombre del cliente" />
+                  </div>
+                  {clienteContacto ? (
+                    <div className="mt-0.5 text-[13px] text-slate-500">
+                      <CopiarTexto valor={clienteContacto} etiqueta="el contacto" />
+                    </div>
+                  ) : null}
+                </div>
+                {contactoWhatsapp ? (
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.09em] text-slate-400">
+                      WhatsApp
+                    </p>
+                    <div className="mt-0.5 text-[13px] font-medium text-slate-800">
+                      <CopiarTexto valor={contactoWhatsapp} etiqueta="el WhatsApp" />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </SpotlightCard>
+
+            <div className={`${panelCls} md:col-span-2`}>
+              <div className="flex items-center gap-2">
+                <span className="h-5 w-1 rounded-full bg-[#4FAEB2]" />
+                <h2 className="text-sm font-semibold text-slate-900">Ficha del proyecto</h2>
+              </div>
+
+              <div className="mt-4 grid gap-x-6 gap-y-3.5 sm:grid-cols-2">
+                <DatoResumen etiqueta="Asesor comercial">
+                  {nombreCapitular(
+                    (proyecto as { responsable_comercial?: { nombre?: string } }).responsable_comercial?.nombre
+                  )}
+                </DatoResumen>
+                <DatoResumen etiqueta="Técnico responsable">
+                  {nombreCapitular(
+                    (proyecto as { responsable_tecnico?: { nombre?: string } }).responsable_tecnico?.nombre
+                  )}
+                </DatoResumen>
+                <DatoResumen etiqueta="Fecha prometida">
+                  {proyecto.fecha_prometida != null && String(proyecto.fecha_prometida).trim() !== ""
+                    ? formatFechaPyFull(String(proyecto.fecha_prometida))
+                    : "—"}
+                </DatoResumen>
+                <DatoResumen etiqueta="Prioridad">{prioridadLabel(proyecto.prioridad)}</DatoResumen>
+
+                {esSaas ? (
+                  <>
+                    <DatoResumen etiqueta="Facturación del cliente">
+                      {facturacionLabel(saasForm.facturacion) || "—"}
+                    </DatoResumen>
+                    <DatoResumen etiqueta="Empresa SaaS / ERP">
+                      {saasForm.empresa_nombre.trim() || "—"}
+                    </DatoResumen>
+                    <DatoResumen etiqueta="Módulos necesarios" ancho>
+                      {saasForm.modulos_necesarios.length > 0
+                        ? saasForm.modulos_necesarios.map((m) => m.nombre).join(", ")
+                        : "—"}
+                    </DatoResumen>
+                  </>
+                ) : (
+                  <>
+                    <DatoResumen etiqueta="Nombre de la marca">
+                      {(briefCoerced.marca || "").trim() || "—"}
+                    </DatoResumen>
+                    <DatoResumen etiqueta="Tipo de web">
+                      {(briefCoerced.tipo_web || "").trim() || "—"}
+                    </DatoResumen>
+                    <DatoResumen etiqueta="Dominio a usar" ancho>
+                      {(briefCoerced.dominio_usar || "").trim() ? (
+                        <CopiarTexto valor={briefCoerced.dominio_usar} etiqueta="el dominio" />
+                      ) : (
+                        "—"
+                      )}
+                    </DatoResumen>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/*
+              SLA como tarjetas y no como filas: son tres magnitudes que se
+              comparan entre sí, y en una lista de etiqueta/valor los números
+              quedaban perdidos contra el texto.
+            */}
+            <div className={panelCls}>
+              <div className="flex items-center gap-2">
+                <span className="h-5 w-1 rounded-full bg-[#4FAEB2]" />
+                <h2 className="text-sm font-semibold text-slate-900">SLA acumulado</h2>
+              </div>
+              <div className="mt-4 space-y-2">
+                <TileSla etiqueta="Tiempo interno" valor={slaFmt?.interno} tono="teal" />
+                <TileSla etiqueta="Espera cliente" valor={slaFmt?.cliente} tono="ambar" />
+                <TileSla etiqueta="Pausado" valor={slaFmt?.pausado} tono="gris" />
+              </div>
+            </div>
+
+            {qaResumen && qaResumen.total > 0 ? (
+              <div className={`${panelCls} md:col-span-2`}>
+                <div className="flex items-center gap-2">
+                  <span className="h-5 w-1 rounded-full bg-[#4FAEB2]" />
+                  <h2 className="text-sm font-semibold text-slate-900">Avance de QA</h2>
+                  <button
+                    type="button"
+                    onClick={() => setTab("qa")}
+                    className="ml-auto text-xs font-medium text-[#3F8E91] underline-offset-2 hover:underline"
+                  >
+                    Ver observaciones
+                  </button>
+                </div>
+                <div className="mt-4 flex items-baseline justify-between gap-3">
+                  <span className="text-2xl font-bold tabular-nums text-slate-900">
+                    {qaResumen.porcentaje}%
+                  </span>
+                  <span className="text-xs text-slate-500">
+                    {qaResumen.cerradas} de {qaResumen.total} cerradas
+                  </span>
+                </div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-[#4FAEB2] transition-all"
+                    style={{ width: `${qaResumen.porcentaje}%` }}
+                  />
+                </div>
+                <p className="mt-2 text-xs text-slate-500">
+                  {qaResumen.abiertas > 0
+                    ? `${qaResumen.por_estado.pendiente ?? 0} pendientes · ${qaResumen.por_estado.en_curso ?? 0} en curso`
+                    : "Sin observaciones abiertas."}
+                </p>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {tab === "datos" ? (
+          <div className={`space-y-5 ${panelCls}`}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="h-5 w-1 rounded-full bg-[#4FAEB2]" />
+                  <h2 className="text-sm font-semibold text-slate-900">Datos del proyecto</h2>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {guardadoOk ? (
+                  <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-600">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M20 6 9 17l-5-5" />
+                    </svg>
+                    Guardado
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  className="rounded-xl bg-[#4FAEB2] px-4 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#3F8E91] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
+                  disabled={!datosDirty || guardandoDatos}
+                  onClick={() => void guardarDatos()}
+                >
+                  {guardandoDatos ? "Guardando…" : "Guardar datos"}
+                </button>
+              </div>
+            </div>
+
+            {esWeb ? (
+              <p className="rounded-lg bg-[#4FAEB2]/8 px-3 py-2 text-xs text-[#3F8E91]">
+                Tipo &quot;Proyecto Web&quot;: campos adicionales del brief comercial.
+              </p>
+            ) : null}
+
+            {/*
+              Datos del alta. Se cargan en "Nuevo proyecto" pero no se veían
+              acá: si el alta salía con el cliente o el asesor equivocado, no
+              había forma de corregirlo desde la ficha.
+            */}
+            <BloqueDatos titulo="Cliente asignado">
+              <div className="block text-sm">
+                <div>
+                  <ClienteSearchSelect
+                    clientes={clientes}
+                    value={clienteId}
+                    onChange={(id) => {
+                      // La factura pertenece al cliente: al cambiarlo, se descarta.
+                      if (id !== clienteId) setFacturaId("");
+                      setClienteId(id);
+                    }}
+                    hideLabel
+                    hideSelected
+                  />
+                </div>
+                {clienteId ? null : (
+                  <p className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                    Este proyecto no tiene un cliente asignado: no aparece en la ficha de ningún
+                    cliente en Gestión. Asigná el cliente y guardá para vincularlo.
+                  </p>
+                )}
+                {/* Factura de la venta asociada (una por proyecto): la deuda del
+                    proyecto en el tablero sale de su saldo. Sirve para asociar los
+                    proyectos viejos que quedaron "sin factura". */}
+                <div className="mt-3">
+                  <span className={labelCls}>
+                    Factura de la venta <span className="font-normal text-slate-400">(opcional)</span>
+                  </span>
+                  <div className="mt-1.5">
+                    <FacturaSelect clienteId={clienteId} value={facturaId} onChange={setFacturaId} />
+                  </div>
+                </div>
+              </div>
+            </BloqueDatos>
+
+            <BloqueDatos titulo="Asignación y prioridad">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="block text-sm">
+                  <span className={labelCls}>Asesor comercial</span>
+                  <div className="mt-1.5">
+                    <PersonaSearchSelect
+                      ariaLabel="Asesor comercial"
+                      personas={usuarios}
+                      value={responsableComercialId}
+                      onChange={setResponsableComercialId}
+                      placeholder="—"
+                      vacioLabel="—"
+                    />
+                  </div>
+                </div>
+                <div className="block text-sm">
+                  <span className={labelCls}>Técnico responsable</span>
+                  <div className="mt-1.5">
+                    <PersonaSearchSelect
+                      ariaLabel="Técnico responsable"
+                      personas={tecnicos}
+                      value={responsableTecnicoId}
+                      onChange={setResponsableTecnicoId}
+                      placeholder="—"
+                      vacioLabel="—"
+                    />
+                  </div>
+                </div>
+                <div className="block text-sm">
+                  <span className={labelCls}>Project Manager</span>
+                  {/*
+                    Con cliente cargado el PM NO se edita acá: sale de la ficha
+                    del cliente y se sincroniza solo. Dos PM distintos para el
+                    mismo trabajo —uno en el proyecto y otro en el cliente— es
+                    justamente lo que no puede pasar. Se muestra de dónde viene.
+                    Sin cliente sí se elige: no hay de quién heredarlo.
+                  */}
+                  {clienteId ? (
+                    <div className="mt-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5">
+                      <div className="text-sm text-slate-800">
+                        {projectManagers.find((u) => u.id === projectManagerId)?.nombre ??
+                          "Sin Project Manager asignado"}
+                      </div>
+                      <div className="mt-0.5 text-[11px] text-slate-400">
+                        Se toma de la ficha del cliente. Para cambiarlo, cambiá el PM del cliente.
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-1.5">
+                      <PersonaSearchSelect
+                        ariaLabel="Project Manager"
+                        personas={projectManagers}
+                        value={projectManagerId}
+                        onChange={setProjectManagerId}
+                        placeholder="Sin asignar"
+                        vacioLabel="Sin asignar"
+                      />
+                    </div>
+                  )}
+                </div>
+                {/*
+                  Sólo aparece con el proyecto en Cancelado. Un campo de "por
+                  qué se canceló" siempre visible invita a llenarlo en un
+                  proyecto que sigue vivo, y después nadie sabe si ese texto
+                  significa algo.
+
+                  Se guarda aparte de `bloqueo_motivo`: un bloqueo es temporal y
+                  se destraba, una cancelación es definitiva. En el mismo campo,
+                  cancelar pisaría el motivo del bloqueo que llevó hasta ahí.
+                */}
+                {estaCancelado ? (
+                  <div className="block text-sm sm:col-span-2">
+                    <span className={labelCls}>Motivo de la cancelación</span>
+                    <textarea
+                      value={cancelacionMotivo}
+                      onChange={(e) => setCancelacionMotivo(e.target.value)}
+                      rows={2}
+                      placeholder="Por qué no continúa: el cliente desistió, se cayó el presupuesto, se duplicó el proyecto…"
+                      className={`${inputCls} mt-1.5 resize-none leading-relaxed`}
+                      aria-label="Motivo de la cancelación"
+                    />
+                    {!cancelacionMotivo.trim() ? (
+                      <span className="mt-1 block text-[11.5px] text-amber-700">
+                        Un proyecto cancelado sin motivo no se puede explicar tres meses
+                        después.
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </BloqueDatos>
+
+
+            {esWeb ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {/* La ficha muestra EXACTAMENTE los mismos campos web que el formulario
+                    de crear (marca, dominio, redes): se ocultan los demás con la lista
+                    compartida PROYECTO_WEB_KEYS_OCULTAS. El dato guardado no se toca. */}
+                {PROYECTO_DATOS_BRIEF_FIELDS.filter((f) => !PROYECTO_WEB_KEYS_OCULTAS.includes(f.key)).map((f) => {
+                  // Rubro del negocio: buscador inteligente con lista canónica (antes texto libre).
+                  if (f.key === "tipo_web") {
+                    return (
+                      <label key={f.key} className="block text-sm sm:col-span-2">
+                        <span className={labelCls}>{f.label}</span>
+                        <RubroWebSelect
+                          value={briefForm[f.key] ?? ""}
+                          onChange={(v) => setBriefForm((b) => ({ ...b, [f.key]: v }))}
+                          inputClassName={inputCls}
+                        />
+                      </label>
+                    );
+                  }
+                  if (f.kind === "checkbox") {
+                    return (
+                      <label
+                        key={f.key}
+                        className="flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 transition-colors hover:border-[#4FAEB2]/60"
+                      >
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-slate-300 text-[#4FAEB2] accent-[#4FAEB2] focus:ring-[#4FAEB2]/30"
+                          checked={briefForm[f.key] === "1"}
+                          onChange={(e) =>
+                            setBriefForm((b) => ({ ...b, [f.key]: e.target.checked ? "1" : "" }))
+                          }
+                        />
+                        {f.label}
+                      </label>
+                    );
+                  }
+                  if (f.kind === "url_list") {
+                    const urls = briefLists[f.key] ?? [];
+                    const items = urls.length > 0 ? urls : [""];
+                    return (
+                      <div key={f.key} className="block text-sm sm:col-span-2">
+                        <span className={labelCls}>{f.label}</span>
+                        <div className="mt-1.5 space-y-2">
+                          {items.map((url, idx) => (
+                            <div key={idx} className="flex items-stretch gap-2">
+                              <input
+                                type="url"
+                                className={`${inputCls} mt-0 flex-1`}
+                                placeholder={f.placeholder ?? "https://..."}
+                                value={url}
+                                onChange={(e) => {
+                                  const next = [...items];
+                                  next[idx] = e.target.value;
+                                  setBriefLists((b) => ({ ...b, [f.key]: next }));
+                                }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = items.filter((_, i) => i !== idx);
+                                  setBriefLists((b) => ({ ...b, [f.key]: next }));
+                                }}
+                                disabled={items.length === 1 && !items[0]}
+                                aria-label={`Eliminar ${idx + 1}`}
+                                title="Eliminar"
+                                className="shrink-0 rounded-xl border border-slate-200 bg-white px-3 text-slate-400 transition-colors hover:border-rose-200 hover:bg-rose-50 hover:text-rose-500 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-slate-200 disabled:hover:bg-white disabled:hover:text-slate-400"
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  aria-hidden="true"
+                                >
+                                  <line x1="18" y1="6" x2="6" y2="18" />
+                                  <line x1="6" y1="6" x2="18" y2="18" />
+                                </svg>
+                              </button>
+                            </div>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setBriefLists((b) => ({
+                                ...b,
+                                [f.key]: [...(b[f.key] ?? []), ""],
+                              }))
+                            }
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-dashed border-[#4FAEB2]/40 bg-[#4FAEB2]/5 px-3 py-2 text-xs font-semibold text-[#3F8E91] transition-colors hover:border-[#4FAEB2] hover:bg-[#4FAEB2]/10"
+                          >
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              width="12"
+                              height="12"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              aria-hidden="true"
+                            >
+                              <line x1="12" y1="5" x2="12" y2="19" />
+                              <line x1="5" y1="12" x2="19" y2="12" />
+                            </svg>
+                            {f.addLabel ?? "Agregar otro link"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return (
+                    <label key={f.key} className={`block text-sm ${f.key === "secciones" ? "sm:col-span-2" : ""}`}>
+                      <span className={labelCls}>{f.label}</span>
+                      <input
+                        className={inputCls}
+                        placeholder={f.placeholder}
+                        value={briefForm[f.key] ?? ""}
+                        onChange={(e) => setBriefForm((b) => ({ ...b, [f.key]: e.target.value }))}
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+            ) : null}
+
+            {esSaas ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="block text-sm sm:col-span-2">
+                  <span className={labelCls}>Facturación del cliente</span>
+                  <div className="mt-1.5 grid gap-2 sm:grid-cols-3">
+                    {PROYECTO_FACTURACION_OPCIONES.map((o) => {
+                      const activo = saasForm.facturacion === o.value;
+                      return (
+                        <button
+                          key={o.value}
+                          type="button"
+                          onClick={() => updateSaasField("facturacion", o.value)}
+                          className={`rounded-xl border px-3 py-2.5 text-left text-[13px] font-medium transition-colors ${
+                            activo
+                              ? "border-[#4FAEB2] bg-[#4FAEB2]/10 text-[#2F6E71]"
+                              : "border-slate-200 bg-white text-slate-600 hover:border-[#4FAEB2]/50"
+                          }`}
+                        >
+                          {o.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                {/* Nombre de la empresa, WhatsApp contacto y Observaciones se ocultan:
+                    no se piden al crear, así la ficha muestra lo mismo que el alta.
+                    El dato guardado no se toca. */}
+                <div className="block text-sm sm:col-span-2">
+                  <span className={labelCls}>Módulos necesarios</span>
+                  <div className="mt-1.5">
+                    <ProyectoModuloSelector
+                      modulos={modulosCatalogo}
+                      selectedIds={saasModuloIds}
+                      onChange={updateSaasModulos}
+                      layout="chips"
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {Object.keys(briefCoerced).length === 0 &&
+            !observaciones.trim() ? (
+              <p className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                Todavía no hay datos cargados. Completá el formulario y guardá.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {tab === "tareas" ? (
+          <div className="space-y-4">
+            <div className={`space-y-4 ${panelCls}`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="h-5 w-1 rounded-full bg-[#4FAEB2]" />
+                  <div>
+                    <h2 className="text-sm font-semibold text-slate-900">Nueva tarea</h2>
+                    <p className="text-xs text-slate-500">
+                      Sumá una tarea con todo el contexto: descripción, responsable y fecha límite.
+                    </p>
+                  </div>
+                </div>
+                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-500">
+                  {(data.tareas ?? []).length} tarea{(data.tareas ?? []).length === 1 ? "" : "s"}
+                </span>
+              </div>
+              <form onSubmit={agregarTarea} className="space-y-3">
+                <label className="block">
+                  <span className={labelCls}>Título de la tarea *</span>
+                  <input
+                    className={inputCls}
+                    placeholder="Ej.: Diseñar wireframes para la landing"
+                    value={tareaTitulo}
+                    onChange={(e) => setTareaTitulo(e.target.value)}
+                    maxLength={200}
+                    required
+                  />
+                </label>
+                <label className="block">
+                  <span className={labelCls}>Descripción / Contexto (opcional)</span>
+                  <textarea
+                    className={`${inputCls} min-h-[80px] resize-y`}
+                    placeholder="Aclaraciones, criterios de aceptación, links útiles…"
+                    rows={3}
+                    value={tareaDescripcion}
+                    onChange={(e) => setTareaDescripcion(e.target.value)}
+                  />
+                </label>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="block">
+                    <span className={labelCls}>Responsable (opcional)</span>
+                    <div className="mt-1.5">
+                      <FancySelect
+                        ariaLabel="Responsable de la tarea"
+                        placeholder="Sin asignar"
+                        value={tareaResponsableId}
+                        onChange={setTareaResponsableId}
+                        options={[
+                          { value: "", label: "Sin asignar" },
+                          ...usuarios.map((u) => ({
+                            value: u.id,
+                            label: u.nombre || u.email || u.id.slice(0, 8),
+                          })),
+                        ]}
+                      />
+                    </div>
+                  </div>
+                  <label className="block">
+                    <span className={labelCls}>Fecha límite (opcional)</span>
+                    <FechaSelect
+                      className={inputCls}
+                      value={tareaFechaLimite}
+                      onChange={(e) => setTareaFechaLimite(e.target.value)}
+/>
+                  </label>
+                </div>
+                <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
+                  <button
+                    type="button"
+                    onClick={limpiarFormularioTarea}
+                    disabled={
+                      tareaSaving ||
+                      (!tareaTitulo &&
+                        !tareaDescripcion &&
+                        !tareaResponsableId &&
+                        !tareaFechaLimite)
+                    }
+                    className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Limpiar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={tareaSaving || !tareaTitulo.trim()}
+                    className="rounded-xl bg-[#4FAEB2] px-4 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#3F8E91] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
+                  >
+                    {tareaSaving ? "Agregando…" : "Agregar tarea"}
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            <div className={`space-y-3 ${panelCls}`}>
+              <div className="flex items-center gap-2">
+                <span className="h-5 w-1 rounded-full bg-[#4FAEB2]" />
+                <h2 className="text-sm font-semibold text-slate-900">Listado de tareas</h2>
+              </div>
+              <ul className="space-y-2.5">
+                {(data.tareas ?? []).map((raw) => {
+                  const t = raw as Record<string, unknown>;
+                  const tid = String(t.id ?? "");
+                  const estado = String(t.estado ?? "pendiente");
+                  const tone = TAREA_ESTADO_TONE[estado] ?? TAREA_ESTADO_TONE.pendiente;
+                  const descripcion =
+                    typeof t.descripcion === "string" ? t.descripcion.trim() : "";
+                  const fechaLimite =
+                    typeof t.fecha_limite === "string" && t.fecha_limite.trim()
+                      ? t.fecha_limite
+                      : "";
+                  const creadoPor =
+                    (t.created_by_nombre as string | null | undefined) ?? "Usuario";
+                  const creadoAt = t.created_at ? String(t.created_at) : "";
+                  const cambioPor =
+                    (t.status_changed_by_nombre as string | null | undefined) ?? null;
+                  const cambioAt = t.status_changed_at
+                    ? String(t.status_changed_at)
+                    : "";
+                  const huboCambioEstado =
+                    Boolean(cambioAt) &&
+                    Boolean(creadoAt) &&
+                    new Date(cambioAt).getTime() - new Date(creadoAt).getTime() > 2000;
+                  const creadorId = String(t.created_by ?? "");
+                  const esCreadorTarea =
+                    !!data.current_user_id && creadorId === data.current_user_id;
+                  const responsable =
+                    (t.responsable_nombre as string | null | undefined) ?? null;
+                  const enEdicionTarea = tareaEditandoId === tid;
+                  const enAccionTarea = tareaActionId === tid;
+                  return (
+                    <li
+                      key={tid}
+                      className={`rounded-2xl border border-slate-200 bg-white p-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-shadow hover:shadow-md`}
+                    >
+                      {enEdicionTarea ? (
+                        <div className="space-y-3">
+                          <label className="block">
+                            <span className={labelCls}>Título de la tarea *</span>
+                            <input
+                              className={inputCls}
+                              value={tareaEditTitulo}
+                              onChange={(e) => setTareaEditTitulo(e.target.value)}
+                              maxLength={200}
+                              autoFocus
+                            />
+                          </label>
+                          <label className="block">
+                            <span className={labelCls}>Descripción / Contexto</span>
+                            <textarea
+                              className={`${inputCls} min-h-[72px] resize-y`}
+                              rows={3}
+                              value={tareaEditDescripcion}
+                              onChange={(e) => setTareaEditDescripcion(e.target.value)}
+                            />
+                          </label>
+                          <div className="grid gap-3 sm:grid-cols-2">
+                            <div className="block">
+                              <span className={labelCls}>Técnico asignado</span>
+                              <div className="mt-1.5">
+                                <FancySelect
+                                  ariaLabel="Técnico asignado a la tarea"
+                                  placeholder="Sin asignar"
+                                  value={tareaEditResponsableId}
+                                  onChange={setTareaEditResponsableId}
+                                  options={[
+                                    { value: "", label: "Sin asignar" },
+                                    ...usuarios.map((u) => ({
+                                      value: u.id,
+                                      label: u.nombre || u.email || u.id.slice(0, 8),
+                                    })),
+                                  ]}
+                                />
+                              </div>
+                            </div>
+                            <label className="block">
+                              <span className={labelCls}>Fecha límite</span>
+                              <FechaSelect
+                                className={inputCls}
+                                value={tareaEditFechaLimite}
+                                onChange={(e) => setTareaEditFechaLimite(e.target.value)}
+/>
+                            </label>
+                          </div>
+                          <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
+                            <button
+                              type="button"
+                              onClick={cancelarEdicionTarea}
+                              disabled={enAccionTarea}
+                              className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void guardarEdicionTarea(tid)}
+                              disabled={enAccionTarea || !tareaEditTitulo.trim()}
+                              className="rounded-xl bg-[#4FAEB2] px-4 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#3F8E91] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
+                            >
+                              {enAccionTarea ? "Guardando…" : "Guardar cambios"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex flex-wrap items-start gap-2">
+                            <span
+                              className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ring-2 ${tone.dot} ${tone.ring}`}
+                              aria-hidden="true"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <p
+                                className={`text-sm font-semibold ${
+                                  estado === "completada"
+                                    ? "text-slate-500 line-through"
+                                    : "text-slate-900"
+                                }`}
+                              >
+                                {String(t.titulo ?? "")}
+                              </p>
+                              {descripcion ? (
+                                <p className="mt-1 whitespace-pre-line text-xs leading-relaxed text-slate-600">
+                                  {descripcion}
+                                </p>
+                              ) : null}
+                              {fechaLimite ? (
+                                <p className="mt-1.5 inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                                  <IconTareaCalendar />
+                                  Vence {formatFechaPySolo(fechaLimite)}
+                                </p>
+                              ) : null}
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <FancySelect
+                                size="sm"
+                                className="min-w-[150px]"
+                                ariaLabel="Estado de la tarea"
+                                value={estado}
+                                onChange={(v) => void patchTarea(tid, { estado: v })}
+                                options={TAREA_ESTADO_OPTIONS.map((opt) => ({ ...opt }))}
+                              />
+                              {esCreadorTarea ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => iniciarEdicionTarea(t)}
+                                    disabled={enAccionTarea}
+                                    aria-label="Editar tarea"
+                                    title="Editar"
+                                    className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-[#4FAEB2]/10 hover:text-[#3F8E91] disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    <IconPencil />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => void eliminarTarea(tid)}
+                                    disabled={enAccionTarea}
+                                    aria-label="Eliminar tarea"
+                                    title="Eliminar"
+                                    className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    {enAccionTarea ? <IconSpinner /> : <IconTrash />}
+                                  </button>
+                                </>
+                              ) : null}
+                            </div>
+                          </div>
+                          <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-slate-100 pt-2.5 text-[11px] text-slate-500">
+                            <span
+                              className="inline-flex items-center gap-1.5"
+                              title={creadoAt ? formatFechaPyFull(creadoAt) : undefined}
+                            >
+                              <span className="text-slate-400">
+                                <IconTareaUser />
+                              </span>
+                              <span>
+                                Creada por{" "}
+                                <span className="font-medium text-slate-700">{creadoPor}</span>
+                                {creadoAt ? ` · ${formatFechaRelativa(creadoAt)}` : ""}
+                              </span>
+                            </span>
+                            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5">
+                              <span className="text-slate-400">
+                                <IconTareaUser />
+                              </span>
+                              <span>
+                                {responsable ? (
+                                  <>
+                                    Asignada a{" "}
+                                    <span className="font-medium text-slate-700">
+                                      {responsable}
+                                    </span>
+                                  </>
+                                ) : (
+                                  "Sin asignar"
+                                )}
+                              </span>
+                            </span>
+                            {huboCambioEstado ? (
+                              <span
+                                className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 ${tone.chip}`}
+                                title={cambioAt ? formatFechaPyFull(cambioAt) : undefined}
+                              >
+                                <IconTareaRefresh />
+                                <span>
+                                  {tareaEstadoLabel(estado)}
+                                  {cambioPor ? (
+                                    <>
+                                      {" "}por{" "}
+                                      <span className="font-medium">{cambioPor}</span>
+                                    </>
+                                  ) : null}
+                                  {cambioAt ? ` · ${formatFechaRelativa(cambioAt)}` : ""}
+                                </span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5">
+                                <IconTareaRefresh />
+                                <span>Estado: {tareaEstadoLabel(estado)} (inicial)</span>
+                              </span>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </li>
+                  );
+                })}
+                {(data.tareas ?? []).length === 0 ? (
+                  <li className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                    Sin tareas registradas. Agregá la primera arriba.
+                  </li>
+                ) : null}
+              </ul>
+            </div>
+          </div>
+        ) : null}
+
+        {tab === "qa" && qaResumen?.puede_ver_qa !== false ? (
+          <ProyectoQATab
+            projectId={projectId}
+            dataSchema={dataSchema}
+            usuarios={usuarios}
+            projectTitle={String(proyecto.titulo ?? "")}
+          />
+        ) : null}
+
+        {tab === "comentarios" ? (
+          <div className={`space-y-4 ${panelCls}`}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="h-5 w-1 rounded-full bg-[#4FAEB2]" />
+                <h2 className="text-sm font-semibold text-slate-900">
+                  {canalesComentarioVisibles.length > 1
+                    ? "Comentarios internos"
+                    : `Comentarios · ${CANAL_COMENTARIO_LABEL[canalComentario]}`}
+                </h2>
+              </div>
+              {/* Switch de canal: sólo para quien ve ambos (PM, QA, admin). El
+                  comercial/técnico ve una sola sección, sin switch. */}
+              {canalesComentarioVisibles.length > 1 ? (
+                <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-0.5">
+                  {canalesComentarioVisibles.map((canal) => {
+                    const activo = canal === canalComentario;
+                    return (
+                      <button
+                        key={canal}
+                        type="button"
+                        onClick={() => setCanalComentario(canal)}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                          activo
+                            ? "bg-white text-[#2F6E71] shadow-sm"
+                            : "text-slate-500 hover:text-slate-700"
+                        }`}
+                      >
+                        {CANAL_COMENTARIO_LABEL[canal]}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+            <NuevoComentarioForm
+              onEnviar={agregarComentario}
+              canal={canalComentario}
+              inputCls={inputCls}
+              candidatos={candidatosMencion}
+            />
+            <ul className="space-y-3">
+              {(data.comentarios ?? [])
+                .filter(
+                  (c) =>
+                    String((c as { canal?: string }).canal ?? "comercial") === canalComentario
+                )
+                .map((c) => {
+                const cid = String(c.id ?? "");
+                const autorId = String((c as { usuario_id?: string }).usuario_id ?? "");
+                const esAutor =
+                  !!data.current_user_id && autorId === data.current_user_id;
+                const enEdicion = comEditandoId === cid;
+                const enReenvio = comReenviandoId === cid;
+                const enAccion = comActionId === cid;
+                const textoOriginal = String(c.comentario ?? "");
+                const reenvio = (
+                  c as {
+                    reenvio?: {
+                      autor_nombre?: string | null;
+                      texto?: string;
+                      fecha?: string;
+                      canal_origen?: string;
+                    } | null;
+                  }
+                ).reenvio ?? null;
+                const canalDelComentario = (String((c as { canal?: string }).canal ?? "comercial") ===
+                "desarrollo"
+                  ? "desarrollo"
+                  : "comercial") as CanalComentarioUI;
+                // Reenviar es para quien ve ambos canales (PM/QA/Admin).
+                const puedeReenviar = canalesComentarioVisibles.length > 1;
+                const adjuntos = (
+                  c as { adjuntos?: Array<{ path: string; nombre?: string }> | null }
+                ).adjuntos ?? [];
+                return (
+                  <li
+                    key={cid}
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm"
+                  >
+                    <div className="flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
+                      <span className="font-medium text-[#4FAEB2]">
+                        {String((c as { usuario_nombre?: string }).usuario_nombre ?? "")}
+                      </span>
+                      <span className="text-slate-300">·</span>
+                      <span>{formatFechaPyFull(String(c.created_at ?? ""))}</span>
+                      {reenvio ? (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-[#4FAEB2]/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#3F8E91]">
+                          Reenviado
+                        </span>
+                      ) : null}
+                      {(puedeReenviar || esAutor) && !enEdicion && !enReenvio ? (
+                        <span className="ml-auto flex items-center gap-0.5">
+                          {puedeReenviar ? (
+                            <button
+                              type="button"
+                              onClick={() => iniciarReenvioComentario(cid)}
+                              disabled={enAccion}
+                              aria-label="Reenviar comentario al otro canal"
+                              title="Reenviar al otro canal"
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-[#4FAEB2]/10 hover:text-[#3F8E91] disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <IconReenviar />
+                            </button>
+                          ) : null}
+                          {esAutor ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => iniciarEdicionComentario(cid, textoOriginal)}
+                                disabled={enAccion}
+                                aria-label="Editar comentario"
+                                title="Editar"
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-[#4FAEB2]/10 hover:text-[#3F8E91] disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <IconPencil />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void eliminarComentario(cid)}
+                                disabled={enAccion}
+                                aria-label="Eliminar comentario"
+                                title="Eliminar"
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {enAccion ? <IconSpinner /> : <IconTrash />}
+                              </button>
+                            </>
+                          ) : null}
+                        </span>
+                      ) : null}
+                    </div>
+                    {enEdicion ? (
+                      <div className="mt-2 space-y-2">
+                        <textarea
+                          className={`${inputCls} min-h-[72px]`}
+                          rows={3}
+                          value={comEditTexto}
+                          onChange={(e) => setComEditTexto(e.target.value)}
+                          autoFocus
+                        />
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={cancelarEdicionComentario}
+                            disabled={enAccion}
+                            className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void guardarEdicionComentario(cid)}
+                            disabled={enAccion || !comEditTexto.trim()}
+                            className="rounded-xl bg-[#4FAEB2] px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#3F8E91] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
+                          >
+                            {enAccion ? "Guardando…" : "Guardar"}
+                          </button>
+                        </div>
+                      </div>
+                    ) : enReenvio ? (
+                      <div className="mt-2 space-y-2">
+                        <div className="rounded-lg border border-[#4FAEB2]/30 bg-[#4FAEB2]/5 px-3 py-2 text-xs text-slate-600">
+                          Reenviando a{" "}
+                          <span className="font-semibold text-[#2F6E71]">
+                            {canalDelComentario === "desarrollo" ? "Comercial" : "Desarrollo"}
+                          </span>
+                          . El mensaje se envía tal cual, con su autor y fecha.
+                        </div>
+                        <textarea
+                          className={`${inputCls} min-h-[72px]`}
+                          rows={3}
+                          placeholder="Nota (opcional) para poner arriba del reenvío…"
+                          value={comReenvioNota}
+                          onChange={(e) => setComReenvioNota(e.target.value)}
+                          autoFocus
+                        />
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={cancelarReenvioComentario}
+                            disabled={enAccion}
+                            className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void reenviarComentario(cid, canalDelComentario)}
+                            disabled={enAccion}
+                            className="rounded-xl bg-[#4FAEB2] px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#3F8E91] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
+                          >
+                            {enAccion ? "Reenviando…" : "Reenviar"}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mt-1.5 space-y-2">
+                        {textoOriginal ? (
+                          <div className="whitespace-pre-line break-words text-sm leading-relaxed text-slate-700">
+                            {textoOriginal}
+                          </div>
+                        ) : null}
+                        {adjuntos.length > 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            {adjuntos.map((a, i) => (
+                              <ComentarioImagen key={a.path ?? i} projectId={projectId} adjunto={a} />
+                            ))}
+                          </div>
+                        ) : null}
+                        {reenvio ? (
+                          <div className="rounded-lg border-l-2 border-slate-300 bg-slate-50 px-3 py-2">
+                            <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-slate-500">
+                              <span className="font-semibold text-slate-600">
+                                {reenvio.autor_nombre ?? "—"}
+                              </span>
+                              <span className="text-slate-300">·</span>
+                              <span>{formatFechaPyFull(String(reenvio.fecha ?? ""))}</span>
+                              <span className="text-slate-300">·</span>
+                              <span className="italic">
+                                de {reenvio.canal_origen === "desarrollo" ? "Desarrollo" : "Comercial"}
+                              </span>
+                            </div>
+                            <div className="mt-1 whitespace-pre-line break-words text-sm leading-relaxed text-slate-700">
+                              {reenvio.texto ?? ""}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+              {(data.comentarios ?? []).filter(
+                (c) => String((c as { canal?: string }).canal ?? "comercial") === canalComentario
+              ).length === 0 ? (
+                <li className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                  Aún no hay comentarios en esta sección.
+                </li>
+              ) : null}
+            </ul>
+          </div>
+        ) : null}
+
+        {tab === "archivos" ? (() => {
+          const archivosAll = data.archivos ?? [];
+          const esConfirmacionCliente = (a: Record<string, unknown>) => a.confirmacion_cliente === true;
+          // Las marcadas como confirmación del cliente se discriminan del resto:
+          // tienen su propia sección más abajo y no aparecen también dentro de
+          // "Imágenes", que sería mostrarlas dos veces.
+          const archivosConfirmacion = archivosAll.filter(esConfirmacionCliente);
+          const archivosCategorizables = archivosAll.filter((a) => !esConfirmacionCliente(a));
+          // Conteo por categoría sobre lo categorizable (sin las confirmaciones).
+          const conteo = new Map<ArchivoCategoria, number>();
+          for (const a of archivosCategorizables) {
+            const cat = categoriaArchivo(a.nombre, a.mime_type);
+            conteo.set(cat, (conteo.get(cat) ?? 0) + 1);
+          }
+          const categoriasPresentes = ARCHIVO_CATEGORIAS_ORDEN.filter((c) => (conteo.get(c.key) ?? 0) > 0);
+          const filtrados =
+            archivoFiltro === "todos"
+              ? archivosCategorizables
+              : archivosCategorizables.filter((a) => categoriaArchivo(a.nombre, a.mime_type) === archivoFiltro);
+          const filtradosIds = filtrados.map((a) => String(a.id ?? ""));
+          const selEnFiltro = filtradosIds.filter((id) => archivosSel.has(id));
+          const todosFiltradosSel = filtradosIds.length > 0 && selEnFiltro.length === filtradosIds.length;
+          const selIds = [...archivosSel];
+          const ownedSelIds = selIds.filter((id) => {
+            const a = archivosAll.find((x) => String(x.id ?? "") === id);
+            return (
+              !!a &&
+              !!data.current_user_id &&
+              typeof a.uploaded_by === "string" &&
+              a.uploaded_by === data.current_user_id
+            );
+          });
+          // Agrupación en secciones por tipo (respeta el filtro activo).
+          const grupos = ARCHIVO_CATEGORIAS_ORDEN.map((c) => ({
+            ...c,
+            items: filtrados.filter((a) => categoriaArchivo(a.nombre, a.mime_type) === c.key),
+          })).filter((g) => g.items.length > 0);
+          const selectionMode = selIds.length > 0;
+
+          const renderArchivoLi = (a: Record<string, unknown>) => {
+            const aid = String(a.id ?? "");
+            const nombre = String(a.nombre ?? "");
+            const mime = typeof a.mime_type === "string" ? a.mime_type : "";
+            const cat = categoriaArchivo(nombre, mime);
+            const catColor = ARCHIVO_CATEGORIA_COLOR[cat];
+            const subidoPor = (a.uploaded_by_nombre as string | null | undefined) ?? null;
+            const esPropietario =
+              !!data.current_user_id &&
+              typeof a.uploaded_by === "string" &&
+              a.uploaded_by === data.current_user_id;
+            const enAccionArchivo = archivoActionId === aid;
+            const seleccionado = archivosSel.has(aid);
+            const fijarCheck = seleccionado || selectionMode;
+            const thumb = cat === "imagen" ? thumbUrls[aid] : undefined;
+            const esConfirmacion = esConfirmacionCliente(a);
+            const enAccionConfirmacion = confirmacionActionId === aid;
+            return (
+              <li
+                key={aid}
+                className={`group flex items-center gap-3 rounded-xl border px-2.5 py-2 transition-all duration-150 ${
+                  seleccionado
+                    ? "border-[#4FAEB2]/50 bg-[#4FAEB2]/[0.06]"
+                    : "border-transparent hover:border-slate-200 hover:bg-slate-50"
+                }`}
+              >
+                {/* Ícono de tipo que se transforma en checkbox al hover / selección */}
+                <label
+                  className="relative h-10 w-10 shrink-0 cursor-pointer"
+                  title="Seleccionar"
+                >
+                  <span
+                    className={`absolute inset-0 flex items-center justify-center overflow-hidden rounded-xl transition-opacity duration-150 ${
+                      thumb ? "ring-1 ring-slate-200" : `${catColor.bg} ${catColor.text}`
+                    } ${fijarCheck ? "opacity-0" : "opacity-100 group-hover:opacity-0"}`}
+                  >
+                    {thumb ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={thumb}
+                        alt={nombre}
+                        loading="lazy"
+                        className="h-full w-full object-cover"
+                        onError={() => {
+                          thumbFailedRef.current.add(aid);
+                          setThumbUrls((prev) => {
+                            const next = { ...prev };
+                            delete next[aid];
+                            return next;
+                          });
+                        }}
+                      />
+                    ) : (
+                      <ArchivoTipoIcon cat={cat} />
+                    )}
+                  </span>
+                  <span
+                    className={`absolute inset-0 flex items-center justify-center transition-opacity duration-150 ${
+                      fijarCheck ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      className="h-[18px] w-[18px] cursor-pointer rounded-md border-slate-300 accent-[#4FAEB2]"
+                      checked={seleccionado}
+                      onChange={() => toggleArchivoSel(aid)}
+                      disabled={archivoBulkBusy}
+                      aria-label={`Seleccionar ${nombre}`}
+                    />
+                  </span>
+                </label>
+
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-slate-800" title={nombre}>
+                    {nombre}
+                  </p>
+                  <p className="mt-0.5 flex items-center gap-1.5 truncate text-[11px] text-slate-400">
+                    <span className="font-medium text-slate-500">{formatBytes(a.size_bytes)}</span>
+                    <span className="text-slate-300">·</span>
+                    {formatFechaPyFull(String(a.created_at ?? ""))}
+                    {subidoPor ? (
+                      <>
+                        <span className="text-slate-300">·</span>
+                        <span className="truncate">{subidoPor}</span>
+                      </>
+                    ) : null}
+                  </p>
+                </div>
+
+                <div
+                  className={`flex shrink-0 items-center gap-0.5 transition-opacity duration-150 ${
+                    selectionMode ? "opacity-40" : "opacity-100"
+                  }`}
+                >
+                  {cat === "imagen" ? (
+                    <button
+                      type="button"
+                      onClick={() => void alternarConfirmacionCliente(aid, !esConfirmacion)}
+                      disabled={enAccionConfirmacion || archivoBulkBusy}
+                      title={
+                        esConfirmacion
+                          ? "Quitar de Confirmación de Solicitudes del cliente"
+                          : "Marcar como Confirmación de Solicitud del cliente"
+                      }
+                      aria-label={
+                        esConfirmacion
+                          ? `Quitar confirmación de cliente de ${nombre}`
+                          : `Marcar ${nombre} como confirmación de cliente`
+                      }
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50 ${
+                        esConfirmacion
+                          ? "bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
+                          : "text-slate-400 hover:bg-white hover:text-emerald-600"
+                      }`}
+                    >
+                      {enAccionConfirmacion ? <IconSpinner /> : <IconConfirmacionCliente />}
+                    </button>
+                  ) : null}
+                  {isPreviewableMime(mime) ? (
+                    <button
+                      type="button"
+                      onClick={() => void previsualizarArchivo(aid)}
+                      disabled={enAccionArchivo || archivoBulkBusy}
+                      title="Vista previa"
+                      aria-label={`Vista previa de ${nombre}`}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-white hover:text-[#3F8E91] hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {enAccionArchivo ? <IconSpinner /> : <IconEye />}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => void descargarArchivo(aid)}
+                    disabled={enAccionArchivo || archivoBulkBusy}
+                    title="Descargar"
+                    aria-label={`Descargar ${nombre}`}
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-white hover:text-[#3F8E91] hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {enAccionArchivo ? <IconSpinner /> : <IconDownload />}
+                  </button>
+                  {esPropietario ? (
+                    <button
+                      type="button"
+                      onClick={() => void eliminarArchivo(aid, nombre)}
+                      disabled={enAccionArchivo || archivoBulkBusy}
+                      title="Eliminar"
+                      aria-label={`Eliminar ${nombre}`}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-white hover:text-rose-500 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <IconTrash />
+                    </button>
+                  ) : null}
+                </div>
+              </li>
+            );
+          };
+          return (
+          <div className={`${panelCls}`}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="h-5 w-1 rounded-full bg-[#4FAEB2]" />
+                <h2 className="text-sm font-semibold text-slate-900">Archivos del proyecto</h2>
+              </div>
+              <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-500">
+                {archivosAll.length} archivo{archivosAll.length === 1 ? "" : "s"}
+              </span>
+            </div>
+            <p className="mt-2 text-xs text-slate-500">
+              Subí documentos, imágenes, PDFs, audios o comprimidos .zip (hasta {Math.round(ARCHIVO_MAX_BYTES / (1024 * 1024))} MB cada uno).
+              Podés previsualizarlos y descargarlos cuando quieras.
+            </p>
+
+            <input
+              ref={archivoInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={onArchivoInputChange}
+            />
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => !archivoUploading && archivoInputRef.current?.click()}
+              onKeyDown={(e) => {
+                if ((e.key === "Enter" || e.key === " ") && !archivoUploading) {
+                  e.preventDefault();
+                  archivoInputRef.current?.click();
+                }
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (!archivoUploading) setArchivoDragActive(true);
+              }}
+              onDragLeave={(e) => {
+                e.preventDefault();
+                setArchivoDragActive(false);
+              }}
+              onDrop={onArchivoDrop}
+              className={`mt-4 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed px-4 py-7 text-center transition-colors ${
+                archivoDragActive
+                  ? "border-[#4FAEB2] bg-[#4FAEB2]/10"
+                  : "border-slate-300 bg-slate-50 hover:border-[#4FAEB2]/60 hover:bg-[#4FAEB2]/5"
+              } ${archivoUploading ? "pointer-events-none opacity-70" : ""}`}
+            >
+              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[#4FAEB2]/10 text-[#3F8E91]">
+                {archivoUploading ? <IconSpinner /> : <IconUpload />}
+              </span>
+              <span className="text-sm font-medium text-slate-700">
+                {archivoUploading ? "Subiendo…" : "Arrastrá archivos o hacé clic para seleccionar"}
+              </span>
+              <span className="text-xs text-slate-400">Se aceptan varios archivos a la vez</span>
+            </div>
+
+            <label className="mt-2.5 flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+              <input
+                type="checkbox"
+                checked={subirComoConfirmacion}
+                onChange={(e) => setSubirComoConfirmacion(e.target.checked)}
+                disabled={archivoUploading}
+                className="h-4 w-4 rounded border-slate-300 accent-emerald-600"
+              />
+              Estas imágenes son <strong className="font-semibold text-slate-800">Confirmación de Solicitud del cliente</strong>
+            </label>
+
+            {archivosConfirmacion.length > 0 ? (
+              <div className="mt-5">
+                <div className="mb-2.5 flex items-center gap-2.5">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+                    <IconConfirmacionCliente className="h-3.5 w-3.5" />
+                  </span>
+                  <h3 className="text-sm font-semibold text-slate-800">Confirmación de Solicitudes del cliente</h3>
+                  <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                    {archivosConfirmacion.length}
+                  </span>
+                </div>
+                <ul className="space-y-1 rounded-xl border border-emerald-100 bg-emerald-50/30 p-1.5">
+                  {archivosConfirmacion.map((a) => renderArchivoLi(a))}
+                </ul>
+              </div>
+            ) : null}
+
+            {/* Filtros por tipo + entrada a modo selección */}
+            {archivosAll.length > 0 ? (
+              <div className="mt-5 flex flex-wrap items-center gap-1.5">
+                {[{ key: "todos" as const, label: "Todos", count: archivosAll.length }, ...categoriasPresentes.map((c) => ({ key: c.key, label: c.label, count: conteo.get(c.key) ?? 0 }))].map((c) => {
+                  const activo = archivoFiltro === c.key;
+                  return (
+                    <button
+                      key={c.key}
+                      type="button"
+                      onClick={() => setArchivoFiltro(c.key)}
+                      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                        activo
+                          ? "bg-[#4FAEB2] text-white shadow-sm shadow-[#4FAEB2]/20"
+                          : "bg-slate-100 text-slate-500 hover:bg-slate-200/70"
+                      }`}
+                    >
+                      {c.label}
+                      <span
+                        className={`rounded-full px-1.5 text-[10px] font-semibold ${
+                          activo ? "bg-white/25 text-white" : "bg-white text-slate-400"
+                        }`}
+                      >
+                        {c.count}
+                      </span>
+                    </button>
+                  );
+                })}
+                {!selectionMode && filtrados.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setArchivoSelLote(filtradosIds, true)}
+                    className="ml-auto inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium text-slate-400 transition-colors hover:text-[#3F8E91]"
+                  >
+                    <IconCheckSquare />
+                    Seleccionar
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* Barra flotante de acciones masivas */}
+            {selectionMode ? (
+              <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-[#4FAEB2]/25 bg-[#4FAEB2]/[0.07] px-3 py-2">
+                <label className="inline-flex cursor-pointer items-center gap-2">
+                  <input
+                    type="checkbox"
+                    className="h-[18px] w-[18px] cursor-pointer rounded-md border-slate-300 accent-[#4FAEB2]"
+                    checked={todosFiltradosSel}
+                    ref={(el) => {
+                      if (el) el.indeterminate = selEnFiltro.length > 0 && !todosFiltradosSel;
+                    }}
+                    onChange={(e) => setArchivoSelLote(filtradosIds, e.target.checked)}
+                    disabled={archivoBulkBusy}
+                  />
+                  <span className="text-sm font-semibold text-[#3F8E91]">
+                    {selIds.length} seleccionado{selIds.length === 1 ? "" : "s"}
+                  </span>
+                </label>
+                <div className="ml-auto flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => void descargarSeleccionados(selIds)}
+                    disabled={archivoBulkBusy}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#4FAEB2] px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#3F8E91] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {archivoBulkBusy ? <IconSpinner /> : <IconDownload />}
+                    Descargar
+                  </button>
+                  {ownedSelIds.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => void eliminarSeleccionados(ownedSelIds)}
+                      disabled={archivoBulkBusy}
+                      title={
+                        ownedSelIds.length < selIds.length
+                          ? "Solo se eliminan los archivos que vos subiste"
+                          : undefined
+                      }
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {archivoBulkBusy ? <IconSpinner /> : <IconTrash />}
+                      Eliminar ({ownedSelIds.length})
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => setArchivosSel(new Set())}
+                    disabled={archivoBulkBusy}
+                    className="inline-flex items-center rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-500 transition-colors hover:bg-white hover:text-slate-700 disabled:opacity-50"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {archivosAll.length === 0 ? (
+              <div className="mt-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                Sin archivos registrados.
+              </div>
+            ) : filtrados.length === 0 ? (
+              <div className="mt-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                No hay archivos de este tipo.
+              </div>
+            ) : (
+              <div className="mt-5 space-y-6">
+                {grupos.map((g) => {
+                  const color = ARCHIVO_CATEGORIA_COLOR[g.key];
+                  const idsGrupo = g.items.map((a) => String(a.id ?? ""));
+                  const selEnGrupo = idsGrupo.filter((id) => archivosSel.has(id));
+                  const todoGrupoSel = idsGrupo.length > 0 && selEnGrupo.length === idsGrupo.length;
+                  return (
+                    <section key={g.key} className="group/sec">
+                      <div className="mb-2.5 flex items-center gap-2.5">
+                        <span
+                          className={`flex h-6 w-6 items-center justify-center rounded-lg ${color.bg} ${color.text}`}
+                          aria-hidden="true"
+                        >
+                          <span className="scale-[0.72]">
+                            <ArchivoTipoIcon cat={g.key} />
+                          </span>
+                        </span>
+                        <h3 className="text-[13px] font-semibold text-slate-700">{g.label}</h3>
+                        <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-400">
+                          {g.items.length}
+                        </span>
+                        <span className="h-px flex-1 bg-gradient-to-r from-slate-200/80 to-transparent" />
+                        <label
+                          className={`inline-flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-slate-400 transition-opacity hover:text-[#3F8E91] ${
+                            selectionMode || selEnGrupo.length > 0
+                              ? "opacity-100"
+                              : "opacity-0 group-hover/sec:opacity-100"
+                          }`}
+                          title={`Seleccionar todos los de ${g.label}`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="h-[15px] w-[15px] cursor-pointer rounded border-slate-300 accent-[#4FAEB2]"
+                            checked={todoGrupoSel}
+                            ref={(el) => {
+                              if (el) el.indeterminate = selEnGrupo.length > 0 && !todoGrupoSel;
+                            }}
+                            onChange={(e) => setArchivoSelLote(idsGrupo, e.target.checked)}
+                            disabled={archivoBulkBusy}
+                            aria-label={`Seleccionar todos los de ${g.label}`}
+                          />
+                          Todo
+                        </label>
+                      </div>
+                      <ul className="space-y-0.5">{g.items.map((a) => renderArchivoLi(a))}</ul>
+                    </section>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          );
+        })() : null}
+
+        {tab === "credenciales" ? <ProyectoCredencialesTab projectId={projectId} /> : null}
+
+        {tab === "cambios" ? (() => {
+          const estadoCodigo = String(
+            (proyecto as { proyecto_estado?: { codigo?: string } } | undefined)?.proyecto_estado?.codigo ?? ""
+          ).toLowerCase();
+          const estaEntregado = estadoCodigo === ESTADO_ENTREGADO_CODIGO;
+          // Ancla fija: la ventana corre desde la PRIMERA entrega, no desde
+          // "hace cuánto está en el estado actual" — eso se resetea si el
+          // proyecto sale de Entregado y vuelve a entrar. Ver el mismo
+          // razonamiento en `getPostentregaInfo` de ProyectosKanbanClient.
+          const proyectoConEntrega = proyecto as {
+            estado_actual_desde?: string | null;
+            primera_entrega_at?: string | null;
+          };
+          const desde = proyectoConEntrega.primera_entrega_at ?? proyectoConEntrega.estado_actual_desde;
+          const desdeMs = typeof desde === "string" ? Date.parse(desde) : Number.NaN;
+          const diaActual = Number.isFinite(desdeMs)
+            ? Math.max(1, Math.floor((Date.now() - desdeMs) / (1000 * 60 * 60 * 24)) + 1)
+            : null;
+          const vencido =
+            diaActual != null && diaActual > POSTENTREGA_PERIODO_DIAS;
+          const cambiosFromData = data.cambios ?? [];
+          const cambiosByNro = new Map<number, ProyectoCambioCliente>();
+          for (const c of cambiosFromData) cambiosByNro.set(c.nro, c);
+
+          return (
+            <div className={`space-y-4 ${panelCls}`}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="h-5 w-1 rounded-full bg-[#4FAEB2]" />
+                    <h2 className="text-sm font-semibold text-slate-900">Cambios post-entrega</h2>
+                  </div>
+                  <p className="mt-1.5 text-xs text-slate-500">
+                    Hasta 3 cambios gratis dentro de los {POSTENTREGA_PERIODO_DIAS} días desde la
+                    entrega.
+                  </p>
+                </div>
+                {estaEntregado && diaActual != null ? (
+                  <span
+                    className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold ${
+                      vencido
+                        ? "border-rose-200 bg-rose-50 text-rose-700"
+                        : diaActual >= 25
+                          ? "border-amber-200 bg-amber-50 text-amber-700"
+                          : "border-[#4FAEB2]/30 bg-[#4FAEB2]/10 text-[#3F8E91]"
+                    }`}
+                  >
+                    {vencido
+                      ? `Período cerrado · día ${diaActual}`
+                      : `Día ${diaActual} de ${POSTENTREGA_PERIODO_DIAS}`}
+                  </span>
+                ) : null}
+              </div>
+
+              {!estaEntregado ? (
+                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  La edición se habilita cuando el proyecto está en estado{" "}
+                  <span className="font-semibold">Entregado</span>. Mientras tanto podés consultar
+                  los cambios ya registrados.
+                </p>
+              ) : null}
+
+              <ul className="space-y-3">
+                {CAMBIOS_SLOTS.map((nro) => {
+                  const existing = cambiosByNro.get(nro);
+                  const draft =
+                    cambiosDraft[nro] ?? { realizado: false, comentario: "" };
+                  const enAccion = cambioSavingNro === nro;
+                  const editable = estaEntregado && !enAccion;
+                  const tienePersistido =
+                    existing != null && existing.realizado_at != null;
+                  const sinCambios =
+                    draft.realizado === (existing?.realizado ?? false) &&
+                    (draft.comentario ?? "") === (existing?.comentario ?? "");
+
+                  return (
+                    <li
+                      key={nro}
+                      className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-slate-900">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-slate-300 text-[#4FAEB2] focus:ring-[#4FAEB2]"
+                            checked={draft.realizado}
+                            disabled={!editable}
+                            onChange={(e) =>
+                              setCambiosDraft((prev) => ({
+                                ...prev,
+                                [nro]: {
+                                  realizado: e.target.checked,
+                                  comentario: prev[nro]?.comentario ?? "",
+                                },
+                              }))
+                            }
+                          />
+                          Cambio {nro} realizado
+                        </label>
+                        {tienePersistido ? (
+                          <span className="text-[11px] text-slate-500">
+                            Registrado por{" "}
+                            <span className="font-medium text-[#4FAEB2]">
+                              {existing?.realizado_por_nombre ?? "—"}
+                            </span>{" "}
+                            · {formatFechaPyFull(String(existing?.realizado_at ?? ""))}
+                          </span>
+                        ) : null}
+                      </div>
+                      <textarea
+                        className={`${inputCls} mt-2 min-h-[80px]`}
+                        rows={3}
+                        placeholder={`Detalle del cambio ${nro}…`}
+                        value={draft.comentario}
+                        disabled={!editable}
+                        onChange={(e) =>
+                          setCambiosDraft((prev) => ({
+                            ...prev,
+                            [nro]: {
+                              realizado: prev[nro]?.realizado ?? false,
+                              comentario: e.target.value,
+                            },
+                          }))
+                        }
+                      />
+                      <div className="mt-2 flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          disabled={!editable || sinCambios}
+                          onClick={() => void guardarCambio(nro)}
+                          className="rounded-xl bg-[#4FAEB2] px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-[#3F8E91] disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
+                        >
+                          {enAccion ? "Guardando…" : "Guardar"}
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          );
+        })() : null}
+
+        {tab === "historial" ? (
+          <HistorialLinea eventos={(data.historial ?? []) as Record<string, unknown>[]} />
+        ) : null}
+      </div>
+
+      {pausaModal ? (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Cerrar"
+            className="absolute inset-0 bg-slate-900/55 backdrop-blur-sm"
+            onClick={() => { if (!pausaGuardando) setPausaModal(null); }}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="proyecto-pausa-titulo"
+            className="relative w-full max-w-md overflow-hidden rounded-2xl border border-amber-200 bg-white shadow-2xl"
+          >
+            <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-amber-400 via-amber-400/80 to-amber-300/40" />
+            <div className="flex items-start gap-3 border-b border-slate-100 px-5 pb-4 pt-5">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-50 text-amber-600 ring-1 ring-amber-200">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                  <rect x="6" y="5" width="4" height="14" rx="1" />
+                  <rect x="14" y="5" width="4" height="14" rx="1" />
+                </svg>
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 id="proyecto-pausa-titulo" className="text-base font-semibold text-slate-900">
+                  Pausar proyecto
+                </h2>
+                <p className="mt-1 text-xs text-slate-500">
+                  Dejá acotado por qué se pausa. Queda como comentario y el cambio va al historial.
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Cerrar"
+                onClick={() => { if (!pausaGuardando) setPausaModal(null); }}
+                className="rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
+                disabled={pausaGuardando}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2 px-5 py-4">
+              <label className="block text-xs font-medium text-slate-600">
+                Motivo de la pausa <span className="text-rose-500">*</span>
+              </label>
+              <textarea
+                autoFocus
+                rows={3}
+                value={pausaMotivo}
+                onChange={(e) => { setPausaMotivo(e.target.value); if (pausaError) setPausaError(null); }}
+                placeholder="Ej.: falta que el cliente mande el logo y los textos."
+                className="w-full resize-none rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200"
+                disabled={pausaGuardando}
+              />
+              {pausaError ? <p className="text-xs text-red-600">{pausaError}</p> : null}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-5 py-3">
+              <button
+                type="button"
+                onClick={() => { if (!pausaGuardando) setPausaModal(null); }}
+                disabled={pausaGuardando}
+                className="rounded-lg px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmarPausa()}
+                disabled={pausaGuardando || !pausaMotivo.trim()}
+                className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-amber-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
+              >
+                {pausaGuardando ? "Pausando…" : "Pausar proyecto"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {deleteModalOpen ? (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Cerrar"
+            className="absolute inset-0 bg-slate-900/55 backdrop-blur-sm"
+            onClick={() => { if (!deleting) setDeleteModalOpen(false); }}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="proyecto-eliminar-titulo"
+            className="relative w-full max-w-md overflow-hidden rounded-2xl border border-red-200 bg-white shadow-2xl"
+          >
+            <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-red-500 via-red-500/80 to-red-400/40" />
+            <div className="flex items-start gap-3 border-b border-slate-100 px-5 pb-4 pt-5">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-50 text-red-600 ring-1 ring-red-200">
+                <AlertTriangle className="h-5 w-5" aria-hidden="true" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 id="proyecto-eliminar-titulo" className="text-base font-semibold text-slate-900">
+                  Eliminar proyecto definitivamente
+                </h2>
+                <p className="mt-1 text-xs text-slate-500">Esta acción no se puede deshacer.</p>
+              </div>
+              <button
+                type="button"
+                aria-label="Cerrar"
+                onClick={() => { if (!deleting) setDeleteModalOpen(false); }}
+                className="rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
+                disabled={deleting}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 px-5 py-4 text-sm text-slate-700">
+              <p>
+                Vas a eliminar el proyecto{" "}
+                <strong className="font-semibold text-slate-900">
+                  {String(data?.proyecto?.titulo ?? "")}
+                </strong>
+                . Esto borra el proyecto y en cascada todas sus tareas, comentarios, archivos e historial.
+              </p>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">
+                  Para confirmar, escribí el título exacto:
+                </label>
+                <input
+                  type="text"
+                  autoFocus
+                  value={deleteConfirmText}
+                  onChange={(e) => { setDeleteConfirmText(e.target.value); if (deleteError) setDeleteError(null); }}
+                  onKeyDown={(e) => { if (e.key === "Enter") void confirmarEliminacion(); }}
+                  placeholder={String(data?.proyecto?.titulo ?? "")}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-red-400 focus:outline-none focus:ring-2 focus:ring-red-200"
+                  disabled={deleting}
+                />
+                {deleteError ? (
+                  <p className="mt-1.5 text-xs text-red-600">{deleteError}</p>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50 px-5 py-3">
+              <button
+                type="button"
+                onClick={() => setDeleteModalOpen(false)}
+                disabled={deleting}
+                className="rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmarEliminacion()}
+                disabled={deleting || deleteConfirmText.trim() !== String(data?.proyecto?.titulo ?? "").trim()}
+                className="rounded-lg bg-red-600 px-3.5 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-red-300"
+              >
+                {deleting ? "Eliminando…" : "Eliminar definitivamente"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Agrupador de campos dentro de "Datos". Antes todos los campos venían en una
+ * sola grilla continua y no se distinguía qué era del cliente, qué de la
+ * asignación y qué del brief.
+ */
+function BloqueDatos({ titulo, children }: { titulo: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded-xl border border-slate-200 bg-slate-50/50 p-3.5">
+      <h3 className="mb-2.5 flex items-center gap-2 text-[12px] font-semibold uppercase tracking-[0.06em] text-slate-500">
+        <span aria-hidden="true" className="h-3 w-1 rounded-full bg-[#4FAEB2]" />
+        {titulo}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
+/**
+ * Texto con botón de copiar. Nació para el nombre y el contacto del cliente:
+ * son los datos que se pasan a WhatsApp para escribirle, y seleccionarlos a
+ * mano dentro de una ficha con scroll es incómodo y propenso a cortar de más.
+ */
+function CopiarTexto({ valor, etiqueta }: { valor: string | null | undefined; etiqueta: string }) {
+  const [copiado, setCopiado] = useState(false);
+  const limpio = (valor ?? "").trim();
+  if (!limpio || limpio === "—") return <span className="text-slate-400">—</span>;
+
+  async function copiar() {
+    try {
+      await navigator.clipboard.writeText(limpio);
+      setCopiado(true);
+      window.setTimeout(() => setCopiado(false), 1600);
+    } catch {
+      // Sin portapapeles (permiso denegado, contexto inseguro) el texto sigue
+      // a la vista y se puede seleccionar a mano: no se muestra un error.
+    }
+  }
+
+  return (
+    <span className="group inline-flex items-start gap-1.5">
+      <span className="min-w-0">{limpio}</span>
+      <button
+        type="button"
+        onClick={() => void copiar()}
+        aria-label={`Copiar ${etiqueta}`}
+        title={copiado ? "¡Copiado!" : `Copiar ${etiqueta}`}
+        className={`mt-0.5 shrink-0 rounded p-0.5 transition-colors ${
+          copiado ? "text-emerald-600" : "text-slate-300 hover:text-[#3F8E91] group-hover:text-slate-400"
+        }`}
+      >
+        {copiado ? (
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden="true">
+            <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        ) : (
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+            <rect x="9" y="9" width="12" height="12" rx="2" />
+            <path d="M5 15V5a2 2 0 0 1 2-2h10" strokeLinecap="round" />
+          </svg>
+        )}
+      </button>
+    </span>
+  );
+}
+
+/**
+ * Campo del resumen: etiqueta arriba y valor abajo, en dos columnas.
+ *
+ * Antes era etiqueta a la izquierda y valor pegado a la derecha, y con nombres
+ * largos el valor se partía en dos líneas dejando un hueco raro en el medio.
+ * Apilado, cada campo ocupa el ancho de su columna y se lee de corrido.
+ */
+function DatoResumen({
+  etiqueta,
+  ancho,
+  children,
+}: {
+  etiqueta: string;
+  /** Ocupa las dos columnas: para valores largos (dominios, listas de módulos). */
+  ancho?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={ancho ? "sm:col-span-2" : undefined}>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-400">{etiqueta}</p>
+      <div className="mt-0.5 break-words text-[13px] font-medium text-slate-900">{children}</div>
+    </div>
+  );
+}
+
+/** Tarjeta de un tramo de SLA. El tono separa "nuestro tiempo" del "del cliente". */
+function TileSla({
+  etiqueta,
+  valor,
+  tono,
+}: {
+  etiqueta: string;
+  valor: string | undefined;
+  tono: "teal" | "ambar" | "gris";
+}) {
+  const estilos = {
+    teal: "border-[#4FAEB2]/25 bg-[#4FAEB2]/8 text-[#2F6E71]",
+    ambar: "border-amber-200 bg-amber-50 text-amber-700",
+    gris: "border-slate-200 bg-slate-50 text-slate-500",
+  }[tono];
+  return (
+    <div className={`flex items-baseline justify-between gap-2 rounded-xl border px-3 py-2.5 ${estilos}`}>
+      <span className="text-[11px] font-medium">{etiqueta}</span>
+      <span className="text-[15px] font-bold tabular-nums text-slate-900">{valor ?? "—"}</span>
+    </div>
+  );
+}

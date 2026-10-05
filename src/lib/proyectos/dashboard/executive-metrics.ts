@@ -1,0 +1,328 @@
+import "server-only";
+
+/**
+ * Dashboard Ejecutivo — la lectura de Directorio.
+ *
+ * Responde "¿cómo está funcionando la cartera?", así que es RESUMEN: nada de
+ * listas operativas largas ni de cycle time técnico (eso vive en el Dashboard
+ * PM, que es la pantalla de acción).
+ */
+
+import { BLOQUEO_CATEGORIAS, BLOQUEO_TIPO_LABEL, categoriaBloqueo } from "./config";
+import { resumirQa } from "./qa-metrics";
+import { nivelWip } from "./semaforo";
+import { calcularWip } from "./workload";
+import { bucketsDeProyecto, cuentaParaWip, kpisComunes, type Dataset, type ProyectoMetrica } from "./shared";
+
+/** Estados que Dirección mira en "Tiempo promedio en cada estado". */
+const ESTADOS_DESTACADOS = ["cola_produccion", "desarrollo", "qa", "enviado_cliente", "pausado"];
+
+/**
+ * Tiempo en HORAS laborales.
+ *
+ * Antes esto iba en jornadas y no servía: "0,3 j", "1 j", "0,1 j" — con una
+ * jornada de nueve horas, todo lo que dura menos de un día se aplasta contra
+ * cero y las barras dejan de distinguirse entre sí.
+ */
+function horas(ms: number | null): number | null {
+  if (ms == null || !Number.isFinite(ms)) return null;
+  return Math.round((ms / 3600_000) * 10) / 10;
+}
+
+function filaCritica(p: ProyectoMetrica) {
+  return {
+    id: p.id,
+    titulo: p.titulo,
+    cliente: p.cliente,
+    estado_nombre: p.estado_nombre,
+    estado_color: p.estado_color,
+    tecnico: p.tecnico,
+    fecha_prometida: p.fecha_prometida,
+    dias_restantes: p.dias_restantes,
+    motivo: p.motivos[0]?.label ?? "—",
+    motivo_codigo: p.motivos[0]?.codigo ?? null,
+    semaforo:
+      p.dias_restantes != null && p.dias_restantes < 0
+        ? "vencido"
+        : p.bloqueado || p.estancado
+          ? "critico"
+          : "en_riesgo",
+  };
+}
+
+export function construirDashboardEjecutivo(ds: Dataset) {
+  const { proyectos, estados, wipLimite } = ds;
+  const activos = proyectos.filter((p) => !p.entregado && !p.cancelado);
+
+  const wip = calcularWip(
+    proyectos.filter(cuentaParaWip).map((p) => ({
+      responsable_tecnico_id: p.responsable_tecnico_id,
+      estado_id: p.estado_id,
+    })),
+    () => true,
+    ds.nombreUsuario,
+    wipLimite
+  );
+  const wipAlto = wip.filter((w) => nivelWip(w.wip, wipLimite) === "sobre_limite").length;
+
+  // ---- A. Proyectos por estado --------------------------------------------
+  const conteo = new Map<string, number>();
+  for (const p of proyectos) {
+    if (p.estado_id) conteo.set(p.estado_id, (conteo.get(p.estado_id) ?? 0) + 1);
+  }
+  const por_estado = estados
+    .map((e) => ({
+      estado_id: e.id,
+      nombre: e.nombre ?? "—",
+      color: e.color ?? "#94a3b8",
+      cantidad: conteo.get(e.id) ?? 0,
+    }))
+    .filter((e) => e.cantidad > 0);
+
+  // ---- B. Cumplimiento de fecha prometida ----------------------------------
+  // Denominador: entregados CON fecha prometida. Los cancelados y los que nunca
+  // tuvieron fecha quedan afuera — no se puede incumplir una fecha que no existe.
+  const entregadosConFecha = proyectos.filter(
+    (p) => p.entregado && !p.cancelado && p.entregado_a_tiempo != null
+  );
+  const enFecha = entregadosConFecha.filter((p) => p.entregado_a_tiempo === true).length;
+  const conAtraso = entregadosConFecha.length - enFecha;
+  const cumplimiento = {
+    pct: entregadosConFecha.length > 0 ? Math.round((enFecha / entregadosConFecha.length) * 100) : null,
+    en_fecha: enFecha,
+    con_atraso: conAtraso,
+    en_curso: activos.length,
+  };
+
+  // ---- C. Lead time (ingreso -> primera entrega, en horas laborales) --------
+  const leads = proyectos.map((p) => p.lead_time_ms).filter((x): x is number => x != null);
+  const lead_time_horas =
+    leads.length > 0 ? horas(leads.reduce((a, b) => a + b, 0) / leads.length) : null;
+
+  // ---- E. Tiempo promedio en cada estado -----------------------------------
+  const tiempo_por_estado = estados
+    .filter((e) => ESTADOS_DESTACADOS.includes(e.codigo ?? ""))
+    .map((e) => {
+      const agg = ds.msPorEstado.get(e.id);
+      return {
+        estado_id: e.id,
+        nombre: e.nombre ?? "—",
+        color: e.color ?? "#94a3b8",
+        horas: agg && agg.n > 0 ? horas(agg.total / agg.n) : null,
+      };
+    })
+    .filter((e) => e.horas != null);
+
+  // ---- F. Calidad del desarrollo -------------------------------------------
+  const calidad = resumirQa(proyectos.map((p) => p.qa));
+
+  // ---- G. Proyectos críticos ------------------------------------------------
+  // El orden lo da el score central (vencidos > bloqueados > estancados…), no
+  // un `sort` improvisado en la tabla.
+  const criticos = activos
+    .filter((p) => p.motivos.length > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 25)
+    .map((p) => ({
+      ...filaCritica(p),
+      pm: ds.nombreUsuario(p.project_manager_id ?? ""),
+      tiempo_en_estado_ms: p.tiempo_en_estado_ms,
+    }));
+
+  // Cartera del PERÍODO: activos + entregados (sin cancelados). Es lo que se ve
+  // en la tabla y en "por estado" — el Director quiere ver TODO, no sólo lo vivo.
+  // Cada fila lleva la etiqueta de a qué tarjetas pertenece para el filtro por
+  // click. Los entregados NO entran en las señales de riesgo (buckets vacío) ni
+  // se marcan demorados: un proyecto entregado ya no está "vencido" ni "detenido".
+  // Se ordena por score para que lo más urgente quede arriba y lo entregado abajo.
+  const periodo = proyectos.filter((p) => !p.cancelado);
+  const proyectos_periodo = [...periodo]
+    .sort((a, b) => b.score - a.score)
+    .map((p) => ({
+      ...filaCritica(p),
+      pm: ds.nombreUsuario(p.project_manager_id ?? ""),
+      // Asesor comercial responsable (columna nueva del tablero).
+      asesor: ds.nombreUsuario(p.responsable_comercial_id ?? ""),
+      // Deuda del proyecto = saldo de su factura asociada (columna nueva).
+      sin_factura: p.sin_factura,
+      deuda_pendiente: p.deuda_pendiente,
+      deuda_monto: p.deuda_monto,
+      tiempo_en_estado_ms: p.tiempo_en_estado_ms,
+      estado_id: p.estado_id,
+      tipo_id: p.tipo_id,
+      // Tipo de proyecto (Web / SaaS-ERP / Mixto…) para la columna del tablero.
+      tipo_nombre: p.tipo_nombre,
+      responsable_tecnico_id: p.responsable_tecnico_id,
+      // PM del proyecto (para filtrar la tabla desde las cards "Por PM").
+      project_manager_id: p.project_manager_id,
+      entregado: p.entregado,
+      demorado: !p.entregado && p.estancado,
+      buckets: p.entregado ? [] : bucketsDeProyecto(p),
+    }));
+
+  // ---- Cartera por tipo de proyecto (del período) --------------------------
+  // Web / SaaS-ERP / mixto: cuántos proyectos de cada tipo hay en el período
+  // (activos + entregados, sin cancelados). Se recorre el catálogo completo para
+  // que un tipo sin proyectos igual aparezca en cero, no que desaparezca la
+  // tarjeta. Cada una se puede apretar para ver esos proyectos en la tabla.
+  const porTipoProyecto = new Map<string, number>();
+  for (const p of periodo) {
+    if (p.tipo_id) porTipoProyecto.set(p.tipo_id, (porTipoProyecto.get(p.tipo_id) ?? 0) + 1);
+  }
+  // Orden fijo y legible: Web, SaaS/ERP, mixto; cualquier código nuevo al final.
+  const ORDEN_TIPO: Record<string, number> = { web: 0, saas: 1, web_saas: 2 };
+  const por_tipo = ds.tipos
+    .map((t) => ({
+      tipo_id: t.id,
+      nombre: t.nombre,
+      codigo: t.codigo,
+      cantidad: porTipoProyecto.get(t.id) ?? 0,
+    }))
+    .sort((a, b) => (ORDEN_TIPO[a.codigo ?? ""] ?? 99) - (ORDEN_TIPO[b.codigo ?? ""] ?? 99));
+
+  // ---- Cartera por estado (del período), con cuántos van demorados ------------
+  // Responde "¿cuántos proyectos tengo en cada estado, y cuántos ya llevan
+  // demasiado tiempo?". Incluye el estado de entrega (los entregados), pero un
+  // entregado nunca cuenta como demorado. `umbral_horas` es el tiempo máximo que
+  // ese estado tolera antes de marcar demorado: el número que el Director define.
+  const distrib = new Map<string, { cantidad: number; demorados: number }>();
+  for (const p of periodo) {
+    if (!p.estado_id) continue;
+    const cur = distrib.get(p.estado_id) ?? { cantidad: 0, demorados: 0 };
+    cur.cantidad += 1;
+    if (!p.entregado && p.estancado) cur.demorados += 1;
+    distrib.set(p.estado_id, cur);
+  }
+  const estados_periodo = estados
+    .map((e) => ({
+      estado_id: e.id,
+      nombre: e.nombre ?? "—",
+      color: e.color ?? "#94a3b8",
+      cantidad: distrib.get(e.id)?.cantidad ?? 0,
+      demorados: distrib.get(e.id)?.demorados ?? 0,
+      umbral_horas: e.sla_horas_objetivo ?? null,
+    }))
+    .filter((e) => e.cantidad > 0);
+
+  const total_activos = activos.length;
+  const demorados_total = activos.filter((p) => p.estancado).length;
+
+  // ---- Resumen por programador ---------------------------------------------
+  // Cuántos proyectos tiene cada técnico en el período: activos + entregados,
+  // sin los cancelados (un cancelado no es carga de nadie). Es la base de las
+  // tarjetas "Por programador"; por ahora sólo el total, después se enriquece.
+  // total del mes + desglose: entregados, en proceso y pausados por separado
+  // (un pausado no es "en proceso": está detenido esperando algo).
+  const porTecnico = new Map<string, { total: number; entregados: number; pausados: number }>();
+  for (const p of proyectos) {
+    if (p.cancelado || !p.responsable_tecnico_id) continue;
+    const cur = porTecnico.get(p.responsable_tecnico_id) ?? { total: 0, entregados: 0, pausados: 0 };
+    cur.total += 1;
+    if (p.entregado) cur.entregados += 1;
+    else if (p.pausado) cur.pausados += 1;
+    porTecnico.set(p.responsable_tecnico_id, cur);
+  }
+  const tecnicos_resumen = [...porTecnico.entries()]
+    .map(([usuario_id, c]) => ({
+      usuario_id,
+      nombre: ds.nombreUsuario(usuario_id),
+      total: c.total,
+      entregados: c.entregados,
+      pausados: c.pausados,
+      en_proceso: c.total - c.entregados - c.pausados,
+    }))
+    .filter((t) => t.nombre !== "—")
+    .sort((a, b) => b.total - a.total);
+
+  // ---- Resumen por PM (mismo criterio que "Por programador") ----------------
+  // Cuántos proyectos tiene cada Project Manager en el período (activos +
+  // entregados, sin cancelados), con el mismo desglose entregados / en proceso /
+  // pausados. El PM del proyecto ya viene resuelto (el del proyecto, o el del
+  // cliente si no tiene uno propio).
+  const porPm = new Map<string, { total: number; entregados: number; pausados: number }>();
+  for (const p of proyectos) {
+    if (p.cancelado || !p.project_manager_id) continue;
+    const cur = porPm.get(p.project_manager_id) ?? { total: 0, entregados: 0, pausados: 0 };
+    cur.total += 1;
+    if (p.entregado) cur.entregados += 1;
+    else if (p.pausado) cur.pausados += 1;
+    porPm.set(p.project_manager_id, cur);
+  }
+  const pms_resumen = [...porPm.entries()]
+    .map(([usuario_id, c]) => ({
+      usuario_id,
+      nombre: ds.nombreUsuario(usuario_id),
+      total: c.total,
+      entregados: c.entregados,
+      pausados: c.pausados,
+      en_proceso: c.total - c.entregados - c.pausados,
+    }))
+    .filter((t) => t.nombre !== "—")
+    .sort((a, b) => b.total - a.total);
+
+  // ---- H. Bloqueos por tipo -------------------------------------------------
+  const bloqueados = activos.filter((p) => p.bloqueado);
+  const porTipo = new Map<string, number>();
+  for (const p of bloqueados) {
+    const cat = categoriaBloqueo(p);
+    porTipo.set(cat, (porTipo.get(cat) ?? 0) + 1);
+  }
+  const bloqueos_por_tipo = BLOQUEO_CATEGORIAS.map((t) => ({
+    tipo: t,
+    label: BLOQUEO_TIPO_LABEL[t],
+    cantidad: porTipo.get(t) ?? 0,
+  })).filter((b) => b.cantidad > 0);
+
+  // El detalle, no sólo el conteo: con cuatro proyectos detenidos, saber CUÁLES
+  // y por qué vale más que un anillo de un solo color.
+  const bloqueos_detalle = [...bloqueados]
+    .sort((a, b) => (b.tiempo_en_estado_ms ?? 0) - (a.tiempo_en_estado_ms ?? 0))
+    .slice(0, 12)
+    .map((p) => {
+      const tipo = categoriaBloqueo(p);
+      return {
+        id: p.id,
+        titulo: p.titulo,
+        cliente: p.cliente,
+        tipo,
+        tipo_label: BLOQUEO_TIPO_LABEL[tipo],
+        motivo: p.bloqueo_motivo,
+        estado_nombre: p.estado_nombre,
+        desde: p.estado_desde,
+        tiempo_ms: p.tiempo_en_estado_ms,
+      };
+    });
+
+  return {
+    vista: "ejecutivo" as const,
+    kpis: kpisComunes(proyectos, wipAlto),
+    total_tecnicos: wip.length,
+    wip_limite: wipLimite,
+    por_estado,
+    total_proyectos: proyectos.length,
+    cumplimiento,
+    lead_time_horas,
+    wip,
+    tiempo_por_estado,
+    calidad,
+    criticos,
+    proyectos_periodo,
+    estados_periodo,
+    total_activos,
+    demorados_total,
+    por_tipo,
+    tecnicos_resumen,
+    pms_resumen,
+    bloqueos_por_tipo,
+    bloqueos_detalle,
+    bloqueados_total: bloqueados.length,
+    opciones: {
+      tipos: ds.tipos.map((t) => ({ id: t.id, nombre: t.nombre })),
+      estados: estados.map((e) => ({ id: e.id, nombre: e.nombre ?? "—", color: e.color })),
+      tecnicos: ds.tecnicosOpciones,
+    },
+    atribucion_parcial: ds.atribucionParcial,
+  };
+}
+
+export type DashboardEjecutivo = ReturnType<typeof construirDashboardEjecutivo>;

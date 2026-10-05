@@ -1,0 +1,1511 @@
+"use client";
+
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Calendar,
+  ChevronDown,
+  ChevronUp,
+  Printer,
+  Receipt,
+  SlidersHorizontal,
+  X,
+} from "lucide-react";
+import { RecibosFacturaModal } from "@/components/recibos/RecibosFacturaModal";
+import { ModalCambioPlanGestion } from "@/components/gestion-clientes/ModalCambioPlanGestion";
+import { ModalHistorialClienteGestion } from "@/components/gestion-clientes/ModalHistorialClienteGestion";
+import { ModalContactosCliente } from "@/components/gestion-clientes/ModalContactosCliente";
+import { ProyectosClienteGestion } from "@/components/gestion-clientes/ProyectosClienteGestion";
+import { RegistrarPagoModal } from "@/components/pagos/RegistrarPagoModal";
+import FacturarVentaModal from "@/components/facturacion/FacturarVentaModal";
+import { SifenEstadoBadge } from "@/components/sifen/SifenEstadoBadge";
+import { useFacturaSifenEstados } from "@/hooks/useFacturaSifenEstados";
+import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
+import EdgeScrollArea from "@/components/ui/EdgeScrollArea";
+import { getClientes, clienteNombre } from "@/lib/clientes/storage";
+import { etiquetaVisibleTipoServicio } from "@/lib/clientes/tipo-servicio-catalogo";
+import { useMapNombreTipoServicioCatalogo } from "@/lib/clientes/use-map-nombre-tipo-servicio";
+import { toCalendarDateStr } from "@/lib/fechas/calendario";
+import { getFacturas } from "@/lib/gestion-clientes/storage";
+import { estadoFacturaParaUi } from "@/lib/gestion-clientes/estado-factura-ui";
+import type { Cliente } from "@/lib/clientes/types";
+import type { EstadoFactura, Factura } from "@/lib/gestion-clientes/types";
+
+// ── Estilos ────────────────────────────────────────────────────────────────────
+
+const fInputClass =
+  "w-full border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm bg-white shadow-sm transition-colors placeholder:text-slate-400 hover:border-[#4FAEB2]/60 focus:border-[#4FAEB2] focus:outline-none focus:ring-2 focus:ring-[#4FAEB2]/20";
+const fLabelClass = "mb-0.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400";
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function formatGs(n: number) {
+  return n.toLocaleString("es-PY");
+}
+
+function formatFecha(str: string) {
+  if (!str) return "—";
+  const [y, m, d] = str.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+function formatFechaIso(iso: string) {
+  try {
+    const d = new Date(iso);
+    return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+  } catch { return ""; }
+}
+
+function textoTipoClienteGestion(c: Cliente, mapNombreTipo: Record<string, string>) {
+  const base = c.tipo_cliente === "empresa" ? "Empresa" : "Persona";
+  const slug = (c.tipo_servicio_cliente ?? "").trim();
+  if (!slug) return base;
+  return `${base} · ${etiquetaVisibleTipoServicio(slug, mapNombreTipo)}`;
+}
+
+/** Misma lógica que en Pagos: solo cobro si hay saldo y el estado de la factura lo permite. */
+function facturaPermiteCobro(f: Factura) {
+  if (f.saldo <= 0) return false;
+  if (f.estado === "Anulado" || f.estado === "Corregida NC") return false;
+  return true;
+}
+
+// ── Badges ────────────────────────────────────────────────────────────────────
+
+function BadgeEstado({ estado }: { estado: Cliente["estado"] }) {
+  const activo = estado === "activo";
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+        activo
+          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+          : "border-slate-200 bg-slate-50 text-slate-500"
+      }`}
+    >
+      <span
+        aria-hidden="true"
+        className={`h-1.5 w-1.5 rounded-full ${activo ? "bg-emerald-500" : "bg-slate-400"}`}
+      />
+      {activo ? "Activo" : "Inactivo"}
+    </span>
+  );
+}
+
+function BadgeFactura({ estado }: { estado: string }) {
+  const cfg: Record<string, { cls: string; dot: string }> = {
+    Pagado: {
+      cls: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      dot: "bg-emerald-500",
+    },
+    Pendiente: {
+      cls: "border-amber-200 bg-amber-50 text-amber-700",
+      dot: "bg-amber-500",
+    },
+    Vencido: {
+      cls: "border-red-200 bg-red-50 text-red-700",
+      dot: "bg-red-500",
+    },
+    Anulado: {
+      cls: "border-slate-200 bg-slate-50 text-slate-500",
+      dot: "bg-slate-400",
+    },
+    "Corregida NC": {
+      cls: "border-[#4FAEB2]/30 bg-[#4FAEB2]/10 text-[#3F8E91]",
+      dot: "bg-[#4FAEB2]",
+    },
+  };
+  const it = cfg[estado] ?? cfg.Anulado;
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${it.cls}`}
+    >
+      <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${it.dot}`} />
+      {estado === "Corregida NC" ? "Corregida (NC SET)" : estado}
+    </span>
+  );
+}
+
+function BadgeTipo({ tipo }: { tipo: string }) {
+  const cfg: Record<string, { cls: string; dot: string }> = {
+    contado: {
+      cls: "border-slate-200 bg-slate-50 text-slate-600",
+      dot: "bg-slate-400",
+    },
+    credito: {
+      cls: "border-[#4FAEB2]/30 bg-[#4FAEB2]/10 text-[#3F8E91]",
+      dot: "bg-[#4FAEB2]",
+    },
+    suscripcion: {
+      cls: "border-violet-200 bg-violet-50 text-violet-700",
+      dot: "bg-violet-500",
+    },
+  };
+  const it = cfg[tipo] ?? cfg.contado;
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold capitalize ${it.cls}`}
+    >
+      <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${it.dot}`} />
+      {tipo}
+    </span>
+  );
+}
+
+function FacturaRowAccionesSifen({
+  facturaId,
+  puedeCobrar,
+  onCobrar,
+  sifenAprobado,
+  tienePago,
+  onVerRecibos,
+}: {
+  facturaId: string;
+  sifenAprobado: boolean;
+  puedeCobrar: boolean;
+  onCobrar?: () => void;
+  /** La factura tiene al menos un cobro registrado (saldo < monto o pagada). */
+  tienePago: boolean;
+  onVerRecibos?: () => void;
+}) {
+  const btnBase =
+    "inline-flex items-center justify-center w-8 h-8 rounded-lg border border-transparent transition-colors text-slate-500 hover:border-[#4FAEB2]/40 hover:text-[#3F8E91] hover:bg-[#4FAEB2]/10";
+  const disabledCls = "text-slate-200 cursor-not-allowed opacity-45 pointer-events-none";
+
+  return (
+    <div className="flex flex-wrap items-center justify-center gap-1.5">
+      {tienePago && onVerRecibos ? (
+        <button
+          type="button"
+          onClick={onVerRecibos}
+          className={btnBase}
+          title="Recibos de esta factura"
+        >
+          <Receipt className="w-4 h-4" strokeWidth={1.75} />
+        </button>
+      ) : (
+        <button type="button" disabled title="Sin cobros registrados" className={`${btnBase} ${disabledCls}`}>
+          <Receipt className="w-4 h-4" strokeWidth={1.75} />
+        </button>
+      )}
+      {sifenAprobado ? (
+        <a
+          href={`/api/facturas/${facturaId}/sifen/kude`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={btnBase}
+          title="Imprimir factura (KuDE)"
+        >
+          <Printer className="w-4 h-4" strokeWidth={1.75} />
+        </a>
+      ) : (
+        <button type="button" disabled title="KuDE solo si SIFEN aprobado" className={`${btnBase} ${disabledCls}`}>
+          <Printer className="w-4 h-4" strokeWidth={1.75} />
+        </button>
+      )}
+      {puedeCobrar && onCobrar ? (
+        <button
+          type="button"
+          onClick={onCobrar}
+          className="ml-0.5 inline-flex items-center gap-1 whitespace-nowrap rounded-lg bg-[#4FAEB2] px-2.5 py-1 text-[11px] font-semibold text-white shadow-sm shadow-[#4FAEB2]/20 transition-colors hover:bg-[#3F8E91]"
+          title="Registrar cobro (mismo formulario que en Pagos)"
+        >
+          Cobrar
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+// ── Botón operativo ───────────────────────────────────────────────────────────
+
+function BotonOperativo({
+  label,
+  icon,
+  iconNode,
+  activo = false,
+  href,
+  onClick,
+}: {
+  label:    string;
+  icon:     string;
+  iconNode?: React.ReactNode;
+  activo?:  boolean;
+  href?:    string;
+  onClick?: () => void;
+}) {
+  const base =
+    "flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors";
+  const activeClass =
+    "border-[#4FAEB2] bg-[#4FAEB2] text-white shadow-sm shadow-[#4FAEB2]/20 hover:bg-[#3F8E91] hover:border-[#3F8E91]";
+  const disabledClass = "border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed";
+  const iconEl = iconNode ?? <span>{icon}</span>;
+
+  if (activo && href) {
+    return (
+      <Link href={href} className={`${base} ${activeClass}`}>
+        {iconEl}
+        {label}
+      </Link>
+    );
+  }
+  if (activo && onClick) {
+    return (
+      <button type="button" onClick={onClick} className={`${base} ${activeClass}`}>
+        {iconEl}
+        {label}
+      </button>
+    );
+  }
+  return (
+    <button type="button" disabled className={`${base} ${disabledClass}`}>
+      {iconEl}
+      {label}
+    </button>
+  );
+}
+
+// ── Etiqueta de sección (UI compacta) ─────────────────────────────────────────
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span
+        aria-hidden="true"
+        className="inline-block h-1.5 w-1.5 rounded-full bg-[#4FAEB2] shadow-[0_0_0_3px_rgba(79,174,178,0.18)]"
+      />
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#4FAEB2]">{children}</p>
+    </div>
+  );
+}
+
+/** Normaliza para búsqueda: minúsculas + sin acentos/diacríticos (marilia == Marília). */
+function normalizarBusqueda(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+}
+
+function matchesClienteBusqueda(c: Cliente, raw: string) {
+  const q = normalizarBusqueda(raw.trim());
+  if (!q) return true;
+  // Un solo campo cubre nombre, razón social, RUC, teléfonos, correos, documento y código.
+  const campos = [
+    c.empresa,
+    c.nombre_contacto,
+    c.razon_social,
+    c.ruc,
+    c.ruc_factura,
+    c.telefono,
+    c.telefono_secundario,
+    c.email,
+    c.email_secundario,
+    c.documento,
+    c.codigo_cliente,
+  ];
+  return campos.some((campo) => campo && normalizarBusqueda(String(campo)).includes(q));
+}
+
+// ── Modal Estado de Facturación ─────────────────────────────────────────────
+
+const MESES_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+
+function formatMesLabel(mes: string) {
+  const [y, m] = mes.split("-").map(Number);
+  return `${MESES_ES[m - 1]} ${y}`;
+}
+
+function ModalFacturacion({
+  clienteId,
+  clienteNombre: nombreCliente,
+  onClose,
+}: {
+  clienteId: string;
+  clienteNombre: string;
+  onClose: () => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [data, setData] = useState<{
+    facturacion: { mes: string; estado: string; badge_estado: string; factura_id: string | null; precio: number; moneda: string }[];
+    suscripcion: { id: string; precio: number; moneda: string; fecha_inicio: string; duracion_meses: number; plan_pendiente_desde?: string | null; precio_pendiente?: number | null } | null;
+  } | null>(null);
+  const [emitiendo, setEmitiendo] = useState<string | null>(null);
+  const [errorEmitir, setErrorEmitir] = useState<string | null>(null);
+
+  async function cargar() {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetchWithSupabaseSession(`/api/clientes/${clienteId}/facturacion`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error ?? "Error al cargar");
+      setData(json.data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error al cargar facturación");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    cargar();
+  }, [clienteId]);
+
+  async function handleEmitir(mes: string) {
+    setEmitiendo(mes);
+    setErrorEmitir(null);
+    try {
+      const res = await fetchWithSupabaseSession(`/api/clientes/${clienteId}/facturacion/emitir`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mes }),
+      });
+      const json = await res.json();
+      if (res.status === 409) {
+        setErrorEmitir("Ya existe una factura para este mes");
+        return;
+      }
+      if (!res.ok) throw new Error(json?.error ?? "Error al emitir");
+      await cargar();
+    } catch (e) {
+      setErrorEmitir(e instanceof Error ? e.message : "Error al emitir factura");
+    } finally {
+      setEmitiendo(null);
+    }
+  }
+
+  const badgeClass: Record<string, { cls: string; dot: string; label: string }> = {
+    emitida: {
+      cls: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      dot: "bg-emerald-500",
+      label: "Emitida",
+    },
+    proyectada: {
+      cls: "border-slate-200 bg-slate-50 text-slate-600",
+      dot: "bg-slate-400",
+      label: "Proyectada",
+    },
+    vencida: {
+      cls: "border-red-200 bg-red-50 text-red-700",
+      dot: "bg-red-500",
+      label: "Vencida",
+    },
+    pendiente: {
+      cls: "border-amber-200 bg-amber-50 text-amber-700",
+      dot: "bg-amber-500",
+      label: "Pendiente",
+    },
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="relative flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl shadow-[#4FAEB2]/10 ring-1 ring-[#4FAEB2]/15"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 top-0 z-10 h-1 bg-gradient-to-r from-[#4FAEB2] via-[#4FAEB2]/80 to-[#4FAEB2]/40"
+        />
+
+        <div className="shrink-0 border-b border-slate-100 bg-white px-6 py-4">
+          <div className="flex items-center gap-2">
+            <span
+              aria-hidden="true"
+              className="inline-block h-1.5 w-1.5 rounded-full bg-[#4FAEB2] shadow-[0_0_0_3px_rgba(79,174,178,0.18)]"
+            />
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#4FAEB2]">
+              Estado de facturación
+            </p>
+          </div>
+          <h3 className="mt-1 text-lg font-bold tracking-tight text-slate-900">{nombreCliente}</h3>
+          {data?.suscripcion && (
+            <p className="mt-2 inline-flex items-center gap-2 rounded-full border border-[#4FAEB2]/30 bg-[#4FAEB2]/10 px-3 py-0.5 text-xs font-semibold text-[#3F8E91]">
+              Suscripción mensual ·{" "}
+              <span className="tabular-nums">
+                {data.suscripcion.moneda === "USD" ? "USD" : "Gs."}{" "}
+                {data.suscripcion.precio.toLocaleString("es-PY")}
+              </span>
+            </p>
+          )}
+          {data?.suscripcion?.plan_pendiente_desde && (
+            <p className="mt-1.5 inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
+              <span aria-hidden="true">🗓️</span>
+              Cambio de plan programado desde el {data.suscripcion.plan_pendiente_desde}
+              {data.suscripcion.precio_pendiente != null
+                ? ` · nuevo precio ${data.suscripcion.moneda === "USD" ? "USD" : "Gs."} ${data.suscripcion.precio_pendiente.toLocaleString("es-PY")}`
+                : ""}
+            </p>
+          )}
+        </div>
+
+        <div className="flex-1 overflow-y-auto bg-slate-50/50 px-6 py-4">
+          {loading ? (
+            <div className="py-12 text-center text-sm text-slate-500">Cargando…</div>
+          ) : error ? (
+            <div className="py-12 text-center text-sm text-red-600">{error}</div>
+          ) : !data?.suscripcion ? (
+            <div className="py-12 text-center text-sm text-slate-500">
+              Este cliente no tiene suscripción activa para proyectar facturación.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {errorEmitir && (
+                <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  <span aria-hidden="true">⚠</span>
+                  <span>{errorEmitir}</span>
+                </div>
+              )}
+              <div className="space-y-2">
+                {data.facturacion.map((item) => {
+                  const cfg = badgeClass[item.badge_estado] ?? badgeClass.proyectada;
+                  return (
+                    <div
+                      key={item.mes}
+                      className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm transition-colors hover:border-[#4FAEB2]/40 hover:bg-[#4FAEB2]/[0.04]"
+                    >
+                      <div>
+                        <p className="text-sm font-semibold tracking-tight text-slate-800">
+                          {formatMesLabel(item.mes)}
+                        </p>
+                        <span
+                          className={`mt-1 inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${cfg.cls}`}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={`h-1.5 w-1.5 rounded-full ${cfg.dot}`}
+                          />
+                          {cfg.label}
+                        </span>
+                      </div>
+                      <div className="shrink-0 text-sm font-semibold tabular-nums text-slate-700">
+                        {item.moneda === "USD" ? "USD" : "Gs."}{" "}
+                        {(item.precio ?? 0).toLocaleString("es-PY")}
+                      </div>
+                      <div className="shrink-0">
+                        {item.estado === "proyectada" && (
+                          <button
+                            type="button"
+                            disabled={emitiendo === item.mes}
+                            onClick={() => handleEmitir(item.mes)}
+                            className="rounded-lg bg-[#4FAEB2] px-3 py-1.5 text-xs font-semibold text-white shadow-sm shadow-[#4FAEB2]/20 transition-colors hover:bg-[#3F8E91] disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {emitiendo === item.mes ? "Emitiendo…" : "Emitir factura"}
+                          </button>
+                        )}
+                        {item.factura_id && (
+                          <Link
+                            href={`/facturas/${item.factura_id}`}
+                            className="inline-flex items-center gap-1 rounded-lg border border-[#4FAEB2]/40 bg-white px-3 py-1.5 text-xs font-semibold text-[#3F8E91] transition-colors hover:bg-[#4FAEB2]/10"
+                          >
+                            Ver factura
+                          </Link>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="shrink-0 border-t border-slate-100 bg-white px-6 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-full rounded-xl border border-slate-200 bg-white py-2.5 text-sm font-medium text-slate-700 transition-colors hover:border-[#4FAEB2]/60 hover:text-[#4FAEB2]"
+          >
+            Cerrar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Búsqueda global de cliente (barra única, misma lógica de coincidencia en cliente) ─
+
+function IconoLupa({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+    </svg>
+  );
+}
+
+function ClienteBusquedaGlobal({
+  clientes,
+  selected,
+  onSelect,
+  onClear,
+  variant,
+}: {
+  clientes: Cliente[];
+  selected: Cliente | null;
+  onSelect: (c: Cliente) => void;
+  onClear: () => void;
+  variant: "landing" | "toolbar";
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const resultados = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const base = q
+      ? clientes.filter((c) => matchesClienteBusqueda(c, q))
+      : [...clientes].sort((a, b) =>
+          clienteNombre(a).localeCompare(clienteNombre(b), "es", { sensitivity: "base" })
+        );
+    return base.slice(0, q ? 50 : 24);
+  }, [clientes, query]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onMouseDown(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        if (variant === "toolbar") setQuery("");
+      }
+    }
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, [open, variant]);
+
+  useEffect(() => {
+    if (open) setTimeout(() => inputRef.current?.focus(), 0);
+  }, [open]);
+
+  function handleSelect(c: Cliente) {
+    onSelect(c);
+    setOpen(false);
+    setQuery("");
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Escape") {
+      setOpen(false);
+      setQuery("");
+    } else if (e.key === "Enter" && resultados.length > 0) {
+      handleSelect(resultados[0]);
+    }
+  }
+
+  if (variant === "toolbar" && selected && !open) {
+    return (
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setQuery("");
+            setOpen(true);
+          }}
+          className="inline-flex max-w-full min-w-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-left text-xs font-medium text-slate-800 shadow-sm transition-colors hover:border-[#4FAEB2]/60 hover:bg-[#4FAEB2]/[0.04]"
+          title="Buscar otro cliente"
+        >
+          <IconoLupa className="h-3.5 w-3.5 shrink-0 text-[#4FAEB2]" />
+          <span className="min-w-0 truncate">{clienteNombre(selected)}</span>
+          <span className="shrink-0 rounded-full bg-[#4FAEB2]/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#3F8E91]">
+            Cambiar
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={onClear}
+          className="shrink-0 rounded-md p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
+          title="Quitar cliente"
+        >
+          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    );
+  }
+
+  const shellClass =
+    variant === "landing"
+      ? "w-full rounded-xl border border-slate-200 bg-white shadow-sm ring-1 ring-[#4FAEB2]/15 transition focus-within:border-[#4FAEB2] focus-within:ring-2 focus-within:ring-[#4FAEB2]/20"
+      : "w-full min-w-[200px] rounded-lg border border-slate-200 bg-white shadow-lg ring-1 ring-[#4FAEB2]/15 transition focus-within:border-[#4FAEB2] focus-within:ring-2 focus-within:ring-[#4FAEB2]/20";
+
+  return (
+    <div
+      ref={containerRef}
+      className={`relative ${variant === "landing" ? "mx-auto w-full max-w-2xl" : "min-w-0 flex-1"}`}
+    >
+      <div className={shellClass}>
+        <div className="flex items-center gap-2 px-3 py-2 sm:py-2.5">
+          <IconoLupa className="h-4 w-4 shrink-0 text-[#4FAEB2]" />
+          <input
+            ref={inputRef}
+            type="search"
+            autoComplete="off"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onFocus={() => setOpen(true)}
+            placeholder="Nombre, RUC, teléfono, correo, documento, código…"
+            className="min-w-0 flex-1 border-0 bg-transparent text-sm text-slate-900 outline-none placeholder:text-slate-400"
+            aria-label="Buscar cliente"
+          />
+          {query ? (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
+            >
+              Limpiar
+            </button>
+          ) : null}
+          {variant === "toolbar" && selected && open ? (
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setQuery("");
+              }}
+              className="shrink-0 text-[11px] font-semibold text-[#3F8E91] transition-colors hover:text-[#4FAEB2]"
+            >
+              Listo
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {open && (
+        <div className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl ring-1 ring-[#4FAEB2]/15">
+          <div className="max-h-64 overflow-y-auto overscroll-y-contain">
+            {resultados.length === 0 ? (
+              <div className="px-4 py-8 text-center text-xs text-slate-400">
+                {query.trim() ? <>Sin resultados para &ldquo;{query.trim()}&rdquo;</> : <>Sin clientes cargados</>}
+              </div>
+            ) : (
+              resultados.map((c, i) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => handleSelect(c)}
+                  className={`w-full border-b border-slate-100 px-3 py-2 text-left transition-colors last:border-0 hover:bg-[#4FAEB2]/[0.06] ${
+                    i === 0 && query.trim() ? "bg-[#4FAEB2]/10" : ""
+                  }`}
+                >
+                  <p className="truncate text-xs font-semibold text-slate-900">{clienteNombre(c)}</p>
+                  <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5">
+                    <span className="font-mono text-[10px] text-slate-400">{c.codigo_cliente}</span>
+                    {c.ruc ? <span className="text-[10px] text-slate-500">RUC {c.ruc}</span> : null}
+                    {c.telefono ? <span className="text-[10px] text-slate-500">{c.telefono}</span> : null}
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-100 bg-slate-50 px-3 py-1.5 text-[10px] text-slate-400">
+            <span className="inline-flex items-center gap-1">
+              <kbd className="rounded border border-slate-200 bg-white px-1 py-0.5 font-mono text-[9px] leading-none">↵</kbd>
+              primer resultado
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <kbd className="rounded border border-slate-200 bg-white px-1 py-0.5 font-mono text-[9px] leading-none">Esc</kbd>
+              cerrar
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Página principal ──────────────────────────────────────────────────────────
+
+function GestionClientesPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [clientes,  setClientes]  = useState<Cliente[]>([]);
+  const [selected,  setSelected]  = useState<Cliente | null>(null);
+  /** Si el cliente seleccionado tiene una suscripción activa (para reflejarlo en "Condición"). */
+  const [selectedTieneSuscripcion, setSelectedTieneSuscripcion] = useState<boolean>(false);
+  const [facturas,  setFacturas]  = useState<Factura[]>([]);
+  const [modalFacturacion, setModalFacturacion] = useState(false);
+  const [modalCambioPlan, setModalCambioPlan] = useState(false);
+  const [modalFacturarVenta, setModalFacturarVenta] = useState(false);
+  const [modalHistorialCliente, setModalHistorialCliente] = useState(false);
+  const [modalProyectos, setModalProyectos] = useState(false);
+  const [modalContactos, setModalContactos] = useState(false);
+  const [facturaCobroModal, setFacturaCobroModal] = useState<Factura | null>(null);
+  const [recibosFactura, setRecibosFactura] = useState<Factura | null>(null);
+  const [facturasDetalleAbierto, setFacturasDetalleAbierto] = useState(true);
+  const [panelFiltrosFacturas, setPanelFiltrosFacturas] = useState(false);
+  /** Evita carrera: al limpiar, `?cliente=` aún no se quitó y el efecto URL→estado reabría la ficha. */
+  const omitirUrlASeleccion = useRef(false);
+  /**
+   * Qué cliente está abierto, para el efecto URL→estado.
+   *
+   * Va en un ref y no en las dependencias a propósito: `router.replace()` no
+   * actualiza `searchParams` en el acto —la App Router va al servidor por el
+   * payload—, así que si el efecto se dispara al cambiar `selected` lee el
+   * `?cliente=` VIEJO y vuelve a abrir el cliente anterior. Eso era "busco otro
+   * cliente y no cambia": cambiaba, y medio segundo después volvía solo.
+   */
+  const idAbierto = useRef<string | null>(null);
+  const mapNombreTipoCatalogo = useMapNombreTipoServicioCatalogo(clientes);
+
+  // Al seleccionar un cliente, consultamos si tiene suscripción activa (endpoint de facturación ya
+  // existente) para reflejarlo en "Condición" del encabezado. Best-effort: no bloquea la ficha.
+  useEffect(() => {
+    const id = selected?.id;
+    if (!id) {
+      setSelectedTieneSuscripcion(false);
+      return;
+    }
+    let cancel = false;
+    setSelectedTieneSuscripcion(false);
+    (async () => {
+      try {
+        const res = await fetchWithSupabaseSession(`/api/clientes/${id}/facturacion`);
+        const json = (await res.json().catch(() => null)) as { data?: { suscripcion?: unknown } } | null;
+        if (!cancel && res.ok) setSelectedTieneSuscripcion(Boolean(json?.data?.suscripcion));
+      } catch {
+        /* best-effort */
+      }
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, [selected?.id]);
+
+  const [filters, setFilters] = useState({
+    fecha_desde:             "",
+    fecha_hasta:             "",
+    vencimiento_desde:       "",
+    vencimiento_hasta:       "",
+    incluir_saldo_cero:      true,
+    incluir_factura_contado: true,
+    moneda:                  "" as "" | "GS" | "USD",
+  });
+
+  useEffect(() => {
+    getClientes().then(setClientes);
+  }, []);
+
+  /** Al elegir cliente: misma API que la ficha (`/api/facturas?cliente_id=`) y filtros de período en blanco para no ocultar filas. */
+  const selectCliente = useCallback(
+    (c: Cliente) => {
+      idAbierto.current = c.id;
+      setSelected(c);
+      setFilters({
+        fecha_desde: "",
+        fecha_hasta: "",
+        vencimiento_desde: "",
+        vencimiento_hasta: "",
+        moneda: "",
+        incluir_saldo_cero: true,
+        incluir_factura_contado: true,
+      });
+      setPanelFiltrosFacturas(false);
+      getFacturas(c.id).then(setFacturas);
+      router.replace(`/gestion-clientes?cliente=${encodeURIComponent(c.id)}`, { scroll: false });
+    },
+    [router]
+  );
+
+  useEffect(() => {
+    const cid = searchParams?.get("cliente")?.trim() || null;
+    if (omitirUrlASeleccion.current) {
+      if (!cid) omitirUrlASeleccion.current = false;
+      return;
+    }
+    if (!cid || clientes.length === 0) return;
+    if (idAbierto.current === cid) return;
+    const c = clientes.find((x) => x.id === cid);
+    if (!c) return;
+    const t = window.setTimeout(() => {
+      selectCliente(c);
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, [searchParams, clientes, selectCliente]);
+
+  function handleChange(e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) {
+    const { name, value, type } = e.target;
+    const checked = (e.target as HTMLInputElement).checked;
+    setFilters((prev) => ({
+      ...prev,
+      [name]: type === "checkbox" ? checked : value,
+    }));
+  }
+
+  function limpiarFiltrosFacturas() {
+    setFilters({
+      fecha_desde: "",
+      fecha_hasta: "",
+      vencimiento_desde: "",
+      vencimiento_hasta: "",
+      incluir_saldo_cero: true,
+      incluir_factura_contado: true,
+      moneda: "",
+    });
+  }
+
+  // Handlers del lookup
+  function handleSelectFromLookup(c: Cliente) {
+    selectCliente(c);
+  }
+
+  function handleClearLookup() {
+    omitirUrlASeleccion.current = true;
+    idAbierto.current = null;
+    setSelected(null);
+    setFacturas([]);
+    setFacturaCobroModal(null);
+    limpiarFiltrosFacturas();
+    setPanelFiltrosFacturas(false);
+    router.replace("/gestion-clientes", { scroll: false });
+  }
+
+  const filtrosFacturasActivos = useMemo(() => {
+    return Boolean(
+      filters.fecha_desde.trim() ||
+        filters.fecha_hasta.trim() ||
+        filters.vencimiento_desde.trim() ||
+        filters.vencimiento_hasta.trim() ||
+        filters.moneda ||
+        !filters.incluir_saldo_cero ||
+        !filters.incluir_factura_contado
+    );
+  }, [filters]);
+
+  // ── Filtrado de facturas ─────────────────────────────────────────────────
+
+  const facturasFiltradas = useMemo(() => {
+    const fd = toCalendarDateStr(filters.fecha_desde) || filters.fecha_desde.trim();
+    const fh = toCalendarDateStr(filters.fecha_hasta) || filters.fecha_hasta.trim();
+    const vd = toCalendarDateStr(filters.vencimiento_desde) || filters.vencimiento_desde.trim();
+    const vh = toCalendarDateStr(filters.vencimiento_hasta) || filters.vencimiento_hasta.trim();
+    return facturas.filter((f) => {
+      const fEmi = toCalendarDateStr(f.fecha) || String(f.fecha).slice(0, 10);
+      const fVen = toCalendarDateStr(f.fecha_vencimiento) || String(f.fecha_vencimiento).slice(0, 10);
+      if (fd && fEmi < fd) return false;
+      if (fh && fEmi > fh) return false;
+      if (vd && fVen < vd) return false;
+      if (vh && fVen > vh) return false;
+      if (!filters.incluir_saldo_cero && f.saldo === 0) return false;
+      if (!filters.incluir_factura_contado && f.tipo === "contado") return false;
+      if (filters.moneda) {
+        const mon = String(f.moneda ?? "").toUpperCase() === "USD" ? "USD" : "GS";
+        if (mon !== filters.moneda) return false;
+      }
+      return true;
+    });
+  }, [facturas, filters.fecha_desde, filters.fecha_hasta, filters.vencimiento_desde, filters.vencimiento_hasta, filters.incluir_saldo_cero, filters.incluir_factura_contado, filters.moneda]);
+
+  // ── Fecha de hoy para mora/estado automático ─────────────────────────────
+
+  const hoyStr = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }, []);
+
+  // ── Facturas enriquecidas: estado efectivo + días mora + ordenadas DESC ───
+
+  const facturasOrdenadas = useMemo(() => {
+    return [...facturasFiltradas]
+      .sort((a, b) => {
+        const av = toCalendarDateStr(a.fecha_vencimiento) || String(a.fecha_vencimiento).slice(0, 10);
+        const bv = toCalendarDateStr(b.fecha_vencimiento) || String(b.fecha_vencimiento).slice(0, 10);
+        return bv.localeCompare(av);
+      })
+      .map((f) => {
+        const fv = toCalendarDateStr(f.fecha_vencimiento) || String(f.fecha_vencimiento).slice(0, 10);
+        const estadoEfectivo = estadoFacturaParaUi(f, hoyStr) as EstadoFactura;
+        const diasMora =
+          estadoEfectivo === "Vencido" && fv.length >= 10
+            ? Math.floor(
+                (new Date().getTime() - new Date(`${fv}T00:00:00`).getTime()) /
+                  86_400_000
+              )
+            : 0;
+        return { ...f, _estadoEfectivo: estadoEfectivo, _diasMora: diasMora };
+      });
+  }, [facturasFiltradas, hoyStr]);
+
+  // ── Totales de facturas ──────────────────────────────────────────────────
+
+  const totalMonto    = facturasOrdenadas.reduce((s, f) => s + f.monto, 0);
+  const totalSaldo    = facturasOrdenadas.reduce((s, f) => s + f.saldo, 0);
+  const cntVencidas     = facturasOrdenadas.filter((f) => f._estadoEfectivo === "Vencido").length;
+  const cntPendientes   = facturasOrdenadas.filter((f) => f._estadoEfectivo === "Pendiente").length;
+  const cntPagadas      = facturasOrdenadas.filter((f) => f._estadoEfectivo === "Pagado").length;
+  const cntCorregidaNc  = facturasOrdenadas.filter((f) => f._estadoEfectivo === "Corregida NC").length;
+
+  const sifenPorFactura = useFacturaSifenEstados(facturasOrdenadas.map((f) => f.id));
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
+      <header className="shrink-0 border-b border-slate-200/80 pb-2">
+        <div className="flex flex-wrap items-end justify-between gap-2">
+          <div>
+            <div className="flex items-center gap-2">
+              <span
+                aria-hidden="true"
+                className="inline-block h-1.5 w-1.5 rounded-full bg-[#4FAEB2] shadow-[0_0_0_3px_rgba(79,174,178,0.18)]"
+              />
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#4FAEB2]">
+                Gestión
+              </p>
+            </div>
+            <h1 className="mt-0.5 text-lg font-semibold tracking-tight text-slate-900">
+              Gestión del Cliente
+            </h1>
+            <p className="text-[11px] text-slate-500">Panel operativo · consultas y tipificaciones</p>
+          </div>
+          {clientes.length > 0 ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-[#4FAEB2]/30 bg-[#4FAEB2]/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#3F8E91] tabular-nums">
+              <span aria-hidden="true" className="h-1 w-1 rounded-full bg-[#4FAEB2]" />
+              {clientes.length} en cartera
+            </span>
+          ) : null}
+        </div>
+      </header>
+
+      <div
+        className="flex shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm ring-1 ring-[#4FAEB2]/15"
+        // Alto fijo al de la pantalla (sin flex-1: con flex-basis 0 el alto se
+        // ignoraba y la tarjeta quedaba del tamaño del contenido, cortando el
+        // desplegable del buscador). Así la zona del cliente tiene su propio scroll.
+        style={{ height: "max(560px, calc(100dvh - 10.5rem))" }}
+      >
+        {selected === null ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-5 px-4 py-8">
+            <div className="space-y-2 text-center">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-[#4FAEB2]/30 bg-[#4FAEB2]/10 text-[#4FAEB2]">
+                <IconoLupa className="h-5 w-5" />
+              </div>
+              <p className="text-sm font-semibold tracking-tight text-slate-800">Buscá un cliente</p>
+              <p className="mx-auto max-w-md text-xs leading-relaxed text-slate-500">
+                Un solo campo cubre nombre, razón social, RUC, teléfonos, correos, documento y código interno.
+              </p>
+            </div>
+            <ClienteBusquedaGlobal
+              variant="landing"
+              clientes={clientes}
+              selected={null}
+              onSelect={handleSelectFromLookup}
+              onClear={handleClearLookup}
+            />
+          </div>
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="shrink-0 border-b border-slate-200/80 bg-slate-50/70">
+              <div className="flex flex-wrap items-center gap-2 px-3 py-2 sm:px-4">
+                <ClienteBusquedaGlobal
+                  variant="toolbar"
+                  clientes={clientes}
+                  selected={selected}
+                  onSelect={handleSelectFromLookup}
+                  onClear={handleClearLookup}
+                />
+                <button
+                  type="button"
+                  onClick={() => setPanelFiltrosFacturas((v) => !v)}
+                  aria-expanded={panelFiltrosFacturas}
+                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
+                    panelFiltrosFacturas || filtrosFacturasActivos
+                      ? "border-[#4FAEB2]/45 bg-[#4FAEB2]/10 text-[#3F8E91]"
+                      : "border-slate-200 bg-white text-slate-600 hover:border-[#4FAEB2]/60 hover:text-[#3F8E91]"
+                  }`}
+                >
+                  <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden />
+                  Filtros facturas
+                  {filtrosFacturasActivos ? (
+                    <span className="ml-0.5 inline-flex h-1.5 w-1.5 rounded-full bg-[#4FAEB2]" title="Hay filtros aplicados" />
+                  ) : null}
+                </button>
+              </div>
+              {panelFiltrosFacturas ? (
+                <div className="space-y-3 border-t border-slate-200/70 bg-white px-3 py-3 sm:px-4">
+                  <SectionLabel>Filtros sobre el listado de facturas</SectionLabel>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <div>
+                      <label className={fLabelClass}>Fecha emisión desde</label>
+                      <input type="date" name="fecha_desde" value={filters.fecha_desde} onChange={handleChange} className={fInputClass} />
+                    </div>
+                    <div>
+                      <label className={fLabelClass}>Fecha emisión hasta</label>
+                      <input type="date" name="fecha_hasta" value={filters.fecha_hasta} onChange={handleChange} className={fInputClass} />
+                    </div>
+                    <div>
+                      <label className={fLabelClass}>Vencimiento desde</label>
+                      <input type="date" name="vencimiento_desde" value={filters.vencimiento_desde} onChange={handleChange} className={fInputClass} />
+                    </div>
+                    <div>
+                      <label className={fLabelClass}>Vencimiento hasta</label>
+                      <input type="date" name="vencimiento_hasta" value={filters.vencimiento_hasta} onChange={handleChange} className={fInputClass} />
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-4 border-t border-slate-100 pt-3">
+                    <label className="flex cursor-pointer items-center gap-2">
+                      <input
+                        type="checkbox"
+                        name="incluir_saldo_cero"
+                        checked={filters.incluir_saldo_cero}
+                        onChange={handleChange}
+                        className="h-4 w-4 rounded border-slate-300 text-[#4FAEB2] accent-[#4FAEB2] focus:ring-[#4FAEB2]/30"
+                      />
+                      <span className="text-xs text-slate-600">Incluir saldo cero</span>
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-2">
+                      <input
+                        type="checkbox"
+                        name="incluir_factura_contado"
+                        checked={filters.incluir_factura_contado}
+                        onChange={handleChange}
+                        className="h-4 w-4 rounded border-slate-300 text-[#4FAEB2] accent-[#4FAEB2] focus:ring-[#4FAEB2]/30"
+                      />
+                      <span className="text-xs text-slate-600">Incluir factura contado</span>
+                    </label>
+                    <div className="min-w-[10rem] flex-1">
+                      <label className={fLabelClass}>Moneda</label>
+                      <select name="moneda" value={filters.moneda} onChange={handleChange} className={fInputClass}>
+                        <option value="">Todas</option>
+                        <option value="GS">Guaraníes (GS)</option>
+                        <option value="USD">Dólares (USD)</option>
+                      </select>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={limpiarFiltrosFacturas}
+                      className="self-end rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition-colors hover:border-[#4FAEB2]/60 hover:text-[#3F8E91]"
+                    >
+                      Restablecer filtros
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain">
+              <section className="border-b border-slate-200/80 px-3 py-3 sm:px-5 sm:py-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 space-y-1">
+                    <h2 className="text-base font-semibold tracking-tight text-slate-900 sm:text-lg">
+                      {clienteNombre(selected)}
+                    </h2>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500">
+                      <span className="font-mono text-slate-400">{selected.codigo_cliente}</span>
+                      {selected.ruc ? <span>· RUC {selected.ruc}</span> : null}
+                      {selected.documento && !selected.ruc ? <span>· Doc. {selected.documento}</span> : null}
+                    </div>
+                  </div>
+                  <BadgeEstado estado={selected.estado} />
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                  {[
+                    { label: "RUC", value: selected.ruc ?? "—" },
+                    { label: "Contacto", value: selected.nombre_contacto },
+                    { label: "Correo", value: selected.email ?? "—" },
+                    { label: "Teléfono", value: selected.telefono ?? "—" },
+                    { label: "Dirección", value: selected.direccion ?? "—" },
+                    { label: "Tipo de cliente", value: textoTipoClienteGestion(selected, mapNombreTipoCatalogo) },
+                    // Datos que el sistema usa para la factura legal (más útiles a la vista que
+                    // ciudad/moneda): razón social fiscal y el RUC con el que se emite (fallback al RUC).
+                    { label: "Razón social", value: selected.razon_social ?? "—" },
+                    { label: "RUC factura", value: selected.ruc_factura ?? selected.ruc ?? "—" },
+                    // Condición: si el cliente tiene una suscripción activa, ya no es "contado" puntual
+                    // sino un cliente recurrente → lo reflejamos (antes quedaba el valor del alta).
+                    { label: "Condición", value: selectedTieneSuscripcion ? "Suscripción activa" : (selected.condicion_pago ?? "—") },
+                    { label: "Fecha alta", value: formatFechaIso(selected.created_at) },
+                  ].map((item) => (
+                    <div key={item.label} className="min-w-0">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">{item.label}</p>
+                      <p className="mt-0.5 truncate text-xs font-medium text-slate-800" title={item.value}>
+                        {item.value}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-3 flex flex-wrap gap-1.5 border-t border-slate-100 pt-3">
+                  <BotonOperativo label="Tipificación" icon="📋" activo href={`/clientes/${selected.id}/tipificacion`} />
+                  <BotonOperativo label="Contactos" icon="👥" activo onClick={() => setModalContactos(true)} />
+                  <BotonOperativo
+                    label="Facturación"
+                    icon="📄"
+                    iconNode={<Calendar className="h-3.5 w-3.5" />}
+                    activo
+                    onClick={() => setModalFacturacion(true)}
+                  />
+                  <BotonOperativo
+                    label="Facturar venta"
+                    icon="🧾"
+                    activo
+                    onClick={() => setModalFacturarVenta(true)}
+                  />
+                  <BotonOperativo label="Servicios asociados" icon="🔗" />
+                  <BotonOperativo
+                    label="Cambio de plan"
+                    icon="🔄"
+                    activo
+                    onClick={() => setModalCambioPlan(true)}
+                  />
+                  <BotonOperativo label="Cambio fecha venc." icon="📅" />
+                  <BotonOperativo
+                    label="Historial cliente"
+                    icon="🕐"
+                    activo
+                    onClick={() => setModalHistorialCliente(true)}
+                  />
+                  <BotonOperativo
+                    label="Proyectos"
+                    icon="📁"
+                    activo
+                    onClick={() => setModalProyectos(true)}
+                  />
+                </div>
+              </section>
+
+              <section>
+                <button
+                  type="button"
+                  onClick={() => setFacturasDetalleAbierto((v) => !v)}
+                  className="flex w-full items-center justify-between gap-2 border-b border-slate-200/60 bg-slate-50/90 px-3 py-2.5 text-left transition-colors hover:bg-[#4FAEB2]/[0.04] sm:px-4"
+                >
+                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1.5">
+                    <span className="inline-flex shrink-0 text-[#4FAEB2]" aria-hidden>
+                      {facturasDetalleAbierto ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                    </span>
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#4FAEB2]">Facturas</span>
+                    <span className="hidden text-[10px] font-normal text-slate-400 sm:inline">del cliente</span>
+                    {facturasFiltradas.length !== facturas.length ? (
+                      <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+                        {facturasFiltradas.length}/{facturas.length} con filtros
+                      </span>
+                    ) : null}
+                    <span className="hidden h-3 w-px bg-slate-200 sm:inline" />
+                    <span className="rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-slate-700">
+                      {facturasOrdenadas.length} docs
+                    </span>
+                    <span className="rounded-md border border-[#4FAEB2]/30 bg-[#4FAEB2]/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[#3F8E91]">
+                      Saldo Gs. {formatGs(totalSaldo)}
+                    </span>
+                    {cntVencidas > 0 ? (
+                      <span className="rounded-md border border-red-200 bg-red-50 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">
+                        {cntVencidas} venc.
+                      </span>
+                    ) : null}
+                  </div>
+                  <span className="shrink-0 text-[10px] font-semibold text-[#3F8E91]">
+                    {facturasDetalleAbierto ? "Ocultar detalle" : "Ver detalle"}
+                  </span>
+                </button>
+
+                {facturasDetalleAbierto ? (
+                  <div>
+                    {facturasOrdenadas.length > 0 ? (
+                      <div className="grid grid-cols-2 gap-1.5 border-b border-slate-100 bg-slate-50/50 p-2 sm:grid-cols-3 lg:grid-cols-7">
+                        <div className="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Facturas</p>
+                          <p className="text-sm font-bold tabular-nums text-slate-800">{facturasOrdenadas.length}</p>
+                        </div>
+                        <div className="rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Monto total</p>
+                          <p className="text-[11px] font-bold tabular-nums leading-snug text-slate-800">Gs. {formatGs(totalMonto)}</p>
+                        </div>
+                        <div className="rounded-lg border border-[#4FAEB2]/30 bg-[#4FAEB2]/8 px-2 py-1.5">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#3F8E91]">Saldo pend.</p>
+                          <p
+                            className={`text-[11px] font-bold tabular-nums leading-snug ${
+                              totalSaldo > 0 ? "text-red-600" : "text-emerald-600"
+                            }`}
+                          >
+                            Gs. {formatGs(totalSaldo)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-red-200 bg-white px-2 py-1.5">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-red-500">Vencidas</p>
+                          <p className="text-sm font-bold text-red-600">{cntVencidas}</p>
+                        </div>
+                        <div className="rounded-lg border border-amber-200 bg-white px-2 py-1.5">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-600">Pendientes</p>
+                          <p className="text-sm font-bold text-amber-700">{cntPendientes}</p>
+                        </div>
+                        <div className="rounded-lg border border-emerald-200 bg-white px-2 py-1.5">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-600">Pagadas</p>
+                          <p className="text-sm font-bold text-emerald-700">{cntPagadas}</p>
+                        </div>
+                        <div className="rounded-lg border border-[#4FAEB2]/30 bg-white px-2 py-1.5">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#3F8E91]">NC (SET)</p>
+                          <p className="text-sm font-bold text-[#3F8E91]">{cntCorregidaNc}</p>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {facturasOrdenadas.length === 0 ? (
+                      <div className="space-y-2 px-4 py-10 text-center text-sm text-slate-400">
+                        <p>No hay facturas para los filtros seleccionados.</p>
+                        {facturas.length > 0 ? (
+                          <p className="text-xs text-amber-700">
+                            Hay {facturas.length} factura(s) cargadas; revisá período, moneda o «Incluir factura contado».
+                          </p>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <EdgeScrollArea>
+                        <table className="w-full min-w-[1040px] text-sm">
+                          <thead className="sticky top-0 z-[1] border-b border-slate-200 bg-slate-50 shadow-sm">
+                            <tr>
+                              {[
+                                "Tipo",
+                                "Nro. Factura",
+                                "Fecha emisión",
+                                "Fecha vencimiento",
+                                "Monto",
+                                "Saldo",
+                                "Días mora",
+                                "Estado",
+                                "Pago registrado",
+                                "SIFEN",
+                                "Operación",
+                              ].map((h) => (
+                                <th
+                                  key={h}
+                                  className={`whitespace-nowrap px-2 py-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 sm:px-3 ${
+                                    h === "Operación" ? "text-center" : "text-left"
+                                  }`}
+                                >
+                                  {h}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {facturasOrdenadas.map((f) => (
+                              <tr
+                                key={f.id}
+                                className={`transition-colors ${
+                                  f._estadoEfectivo === "Vencido"
+                                    ? "bg-red-50/50 hover:bg-red-50/80"
+                                    : "hover:bg-[#4FAEB2]/[0.04]"
+                                }`}
+                              >
+                                <td className="px-2 py-2 sm:px-3">
+                                  <BadgeTipo tipo={f.tipo} />
+                                </td>
+                                <td className="px-2 py-2 sm:px-3">
+                                  <Link
+                                    href={`/facturas/${f.id}`}
+                                    className="font-mono text-xs font-semibold text-[#3F8E91] transition-colors hover:text-[#4FAEB2] hover:underline"
+                                  >
+                                    {f.numero_factura}
+                                  </Link>
+                                </td>
+                                <td className="whitespace-nowrap px-2 py-2 text-xs text-slate-500 sm:px-3">{formatFecha(f.fecha)}</td>
+                                <td
+                                  className={`whitespace-nowrap px-2 py-2 text-xs font-medium sm:px-3 ${
+                                    f._estadoEfectivo === "Vencido" ? "text-red-600" : "text-slate-600"
+                                  }`}
+                                >
+                                  {formatFecha(f.fecha_vencimiento)}
+                                </td>
+                                <td className="whitespace-nowrap px-2 py-2 text-xs tabular-nums text-slate-800 sm:px-3">
+                                  {f.moneda === "GS" ? `Gs. ${formatGs(f.monto)}` : `USD ${f.monto.toLocaleString("en-US")}`}
+                                </td>
+                                <td
+                                  className={`whitespace-nowrap px-2 py-2 text-xs tabular-nums font-semibold sm:px-3 ${
+                                    f.saldo > 0 ? "text-red-600" : "text-slate-400"
+                                  }`}
+                                >
+                                  {f.moneda === "GS" ? `Gs. ${formatGs(f.saldo)}` : `USD ${f.saldo.toLocaleString("en-US")}`}
+                                </td>
+                                <td className="px-2 py-2 text-center text-xs sm:px-3">
+                                  {f._diasMora > 0 ? (
+                                    <span className="font-bold tabular-nums text-red-600">{f._diasMora}</span>
+                                  ) : (
+                                    <span className="text-slate-300">—</span>
+                                  )}
+                                </td>
+                                <td className="px-2 py-2 sm:px-3">
+                                  <BadgeFactura estado={f._estadoEfectivo} />
+                                </td>
+                                <td className="whitespace-nowrap px-2 py-2 text-xs text-slate-600 sm:px-3">
+                                  {f.fecha_pago_registro ? formatFecha(f.fecha_pago_registro) : "—"}
+                                </td>
+                                <td className="align-middle px-2 py-2.5 sm:px-3">
+                                  <div className="flex items-center min-h-[2rem]">
+                                    <SifenEstadoBadge
+                                      estadoSifen={sifenPorFactura[f.id]?.estado_sifen ?? null}
+                                      mostrarPistaEnvioSet={false}
+                                    />
+                                  </div>
+                                </td>
+                                <td className="align-middle px-2 py-2.5 sm:px-3">
+                                  <FacturaRowAccionesSifen
+                                    facturaId={f.id}
+                                    sifenAprobado={sifenPorFactura[f.id]?.estado_sifen === "aprobado"}
+                                    puedeCobrar={facturaPermiteCobro(f)}
+                                    onCobrar={() => setFacturaCobroModal(f)}
+                                    tienePago={f.saldo < f.monto || f._estadoEfectivo === "Pagado"}
+                                    onVerRecibos={() => setRecibosFactura(f)}
+                                  />
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </EdgeScrollArea>
+                    )}
+
+                    {facturasOrdenadas.length > 0 ? (
+                      <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 bg-slate-50/60 px-3 py-2 text-[11px] text-slate-500 sm:px-4">
+                        <span className="tabular-nums">
+                          <span className="font-semibold text-slate-700">{facturasOrdenadas.length}</span> facturas
+                          {facturasFiltradas.length !== facturas.length ? <span className="text-slate-400"> (filtradas)</span> : null}
+                        </span>
+                        <span className="tabular-nums">
+                          Total: <span className="font-semibold text-slate-700">Gs. {formatGs(totalMonto)}</span>
+                        </span>
+                        <span className="tabular-nums">
+                          Saldo:{" "}
+                          <span className={`font-semibold ${totalSaldo > 0 ? "text-red-600" : "text-emerald-700"}`}>Gs. {formatGs(totalSaldo)}</span>
+                        </span>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </section>
+            </div>
+          </div>
+        )}
+      </div>
+      {/* Modal Estado de Facturación */}
+      {modalFacturacion && selected && (
+        <ModalFacturacion
+          clienteId={selected.id}
+          clienteNombre={clienteNombre(selected)}
+          onClose={() => setModalFacturacion(false)}
+        />
+      )}
+      {modalCambioPlan && selected && (
+        <ModalCambioPlanGestion
+          clienteId={selected.id}
+          clienteNombre={clienteNombre(selected)}
+          onClose={() => setModalCambioPlan(false)}
+          onExito={async () => {
+            if (selected) {
+              getFacturas(selected.id).then(setFacturas);
+              getClientes().then(setClientes);
+            }
+          }}
+        />
+      )}
+      {modalContactos && selected && (
+        <ModalContactosCliente
+          clienteId={selected.id}
+          clienteNombre={clienteNombre(selected)}
+          onClose={() => setModalContactos(false)}
+        />
+      )}
+      {modalHistorialCliente && selected && (
+        <ModalHistorialClienteGestion
+          clienteId={selected.id}
+          clienteNombre={clienteNombre(selected)}
+          onClose={() => setModalHistorialCliente(false)}
+        />
+      )}
+      {modalProyectos && selected && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Cerrar"
+            className="absolute inset-0 bg-slate-900/55 backdrop-blur-sm"
+            onClick={() => setModalProyectos(false)}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="relative flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+              <div className="min-w-0">
+                <h2 className="text-base font-semibold text-slate-900">Proyectos del cliente</h2>
+                <p className="mt-0.5 truncate text-xs text-slate-500">{clienteNombre(selected)}</p>
+              </div>
+              <button
+                type="button"
+                aria-label="Cerrar"
+                onClick={() => setModalProyectos(false)}
+                className="rounded-md p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="overflow-y-auto px-3 py-3 sm:px-4">
+              <ProyectosClienteGestion key={selected.id} clienteId={selected.id} sinCabecera />
+            </div>
+          </div>
+        </div>
+      )}
+      {modalFacturarVenta && selected && (
+        <FacturarVentaModal
+          clienteId={selected.id}
+          clienteNombre={clienteNombre(selected)}
+          moneda={selected.moneda_preferida === "USD" ? "USD" : "GS"}
+          onClose={() => setModalFacturarVenta(false)}
+          onCreated={() => {
+            getFacturas(selected.id).then(setFacturas);
+          }}
+        />
+      )}
+      <RegistrarPagoModal
+        open={!!facturaCobroModal}
+        factura={
+          facturaCobroModal
+            ? {
+                id: facturaCobroModal.id,
+                numero_factura: facturaCobroModal.numero_factura,
+                saldo: facturaCobroModal.saldo,
+                moneda: facturaCobroModal.moneda,
+                cliente_id: selected?.id ?? "",
+                cliente_label: selected ? clienteNombre(selected) : undefined,
+              }
+            : null
+        }
+        onClose={() => setFacturaCobroModal(null)}
+        onExito={async () => {
+          if (selected) getFacturas(selected.id).then(setFacturas);
+        }}
+      />
+
+      <RecibosFacturaModal
+        open={!!recibosFactura}
+        factura={
+          recibosFactura
+            ? {
+                id: recibosFactura.id,
+                numero_factura: recibosFactura.numero_factura,
+                moneda: recibosFactura.moneda,
+              }
+            : null
+        }
+        onClose={() => setRecibosFactura(null)}
+      />
+    </div>
+  );
+}
+
+export default function GestionClientesPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-[35vh] flex items-center justify-center text-sm text-slate-400">
+          Cargando gestión de clientes…
+        </div>
+      }
+    >
+      <GestionClientesPageInner />
+    </Suspense>
+  );
+}

@@ -1,0 +1,13 @@
+"use client";
+
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+
+/** Compat: la edición ahora se hace desde el listado (modal). Redirige a /gastos. */
+export default function EditarGastoPage() {
+  const router = useRouter();
+  useEffect(() => {
+    router.replace("/gastos");
+  }, [router]);
+  return null;
+}

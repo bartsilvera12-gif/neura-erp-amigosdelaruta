@@ -1,0 +1,132 @@
+import "server-only";
+import type { AppSupabaseClient } from "@/lib/supabase/schema";
+
+export async function cerrarSegmentoHistorialAbierto(
+  sb: AppSupabaseClient,
+  empresaId: string,
+  proyectoId: string
+): Promise<void> {
+  const { data: open, error } = await sb
+    .from("proyecto_estado_historial")
+    .select("id, entered_at")
+    .eq("empresa_id", empresaId)
+    .eq("proyecto_id", proyectoId)
+    .is("exited_at", null)
+    .order("entered_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !open || typeof open !== "object") return;
+  const o = open as { id: string; entered_at: string };
+  const entered = Date.parse(o.entered_at);
+  const duration = Number.isFinite(entered) ? Math.floor((Date.now() - entered) / 1000) : 0;
+
+  await sb
+    .from("proyecto_estado_historial")
+    .update({ exited_at: new Date().toISOString(), duration_seconds: duration })
+    .eq("id", o.id)
+    .eq("empresa_id", empresaId);
+}
+
+/**
+ * Registra en el historial la reasignación del responsable técnico como un evento
+ * puntual (entrada = salida, sin duración). Va en la misma tabla que los cambios de
+ * estado pero con `estado_*` en null y `metadata.tipo = "reasignacion_tecnico"`, así
+ * queda en la misma línea de tiempo del proyecto sin interferir con los segmentos de
+ * estado (al tener `exited_at` seteado, `cerrarSegmentoHistorialAbierto` lo ignora).
+ */
+export async function insertHistorialReasignacionTecnico(input: {
+  sb: AppSupabaseClient;
+  empresaId: string;
+  proyectoId: string;
+  deTecnicoId: string | null;
+  aTecnicoId: string | null;
+  changedBy: string | null;
+}): Promise<void> {
+  const { sb, empresaId, proyectoId, deTecnicoId, aTecnicoId, changedBy } = input;
+  const ahora = new Date().toISOString();
+  const { error } = await sb.from("proyecto_estado_historial").insert({
+    empresa_id: empresaId,
+    proyecto_id: proyectoId,
+    estado_anterior_id: null,
+    estado_nuevo_id: null,
+    changed_by: changedBy,
+    changed_at: ahora,
+    entered_at: ahora,
+    exited_at: ahora,
+    duration_seconds: 0,
+    metadata: { tipo: "reasignacion_tecnico", de: deTecnicoId, a: aTecnicoId },
+    responsable_tecnico_id: aTecnicoId,
+  });
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Registra en el historial un cambio de sub-etapa de desarrollo como evento puntual
+ * (entrada = salida, sin duración), igual que la reasignación de técnico. Va en la
+ * misma tabla con `estado_*` en null y `metadata.tipo = "subestado_desarrollo"` (más
+ * los códigos `de`/`a`), así queda en la línea de tiempo sin cerrar el segmento de
+ * estado abierto. `de`/`a` son códigos del catálogo (no ids), se resuelven a nombre
+ * en el enriquecido.
+ */
+export async function insertHistorialSubestadoDesarrollo(input: {
+  sb: AppSupabaseClient;
+  empresaId: string;
+  proyectoId: string;
+  deCodigo: string | null;
+  aCodigo: string | null;
+  changedBy: string | null;
+}): Promise<void> {
+  const { sb, empresaId, proyectoId, deCodigo, aCodigo, changedBy } = input;
+  const ahora = new Date().toISOString();
+  const { error } = await sb.from("proyecto_estado_historial").insert({
+    empresa_id: empresaId,
+    proyecto_id: proyectoId,
+    estado_anterior_id: null,
+    estado_nuevo_id: null,
+    changed_by: changedBy,
+    changed_at: ahora,
+    entered_at: ahora,
+    exited_at: ahora,
+    duration_seconds: 0,
+    metadata: { tipo: "subestado_desarrollo", de: deCodigo, a: aCodigo },
+  });
+  if (error) throw new Error(error.message);
+}
+
+export async function insertHistorialCambioEstado(input: {
+  sb: AppSupabaseClient;
+  empresaId: string;
+  proyectoId: string;
+  estadoAnteriorId: string | null;
+  estadoNuevoId: string;
+  tipoSlaSnapshot: string;
+  changedBy: string | null;
+  /**
+   * Snapshot del técnico asignado al proyecto al momento del cambio de estado.
+   * Se usa para reportes históricos ("proyectos entregados por técnico") que
+   * no deben verse alterados si el técnico cambia después.
+   */
+  responsableTecnicoId?: string | null;
+}): Promise<void> {
+  const {
+    sb,
+    empresaId,
+    proyectoId,
+    estadoAnteriorId,
+    estadoNuevoId,
+    tipoSlaSnapshot,
+    changedBy,
+    responsableTecnicoId = null,
+  } = input;
+  const { error } = await sb.from("proyecto_estado_historial").insert({
+    empresa_id: empresaId,
+    proyecto_id: proyectoId,
+    estado_anterior_id: estadoAnteriorId,
+    estado_nuevo_id: estadoNuevoId,
+    changed_by: changedBy,
+    tipo_sla_snapshot: tipoSlaSnapshot,
+    responsable_tecnico_id: responsableTecnicoId,
+  });
+  if (error) throw new Error(error.message);
+}
