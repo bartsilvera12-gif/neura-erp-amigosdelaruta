@@ -65,24 +65,31 @@ Exposed schemas).
 
 ### 2 · Coolify
 
-App nueva apuntando a este repo, branch `main`, FQDN
-`http://amigosdelaruta.neura.com.py`. Build por Nixpacks (ya está `nixpacks.toml`
-con `ffmpeg-full`).
+App: `neura-erp-amigosdelaruta`, uuid `atj1neqbesmov1vhi0xnwlvk`, proyecto
+`neura`, server `localhost`, entorno `production`, branch `main`, FQDN
+`http://amigosdelaruta.neura.com.py`, puerto 3000, build pack **Dockerfile**
+(igual que sistemas-propio): el `Dockerfile` del repo hace el build multi-stage
+de Next, instala ffmpeg a nivel sistema y expone 3000.
+
+Las `NEXT_PUBLIC_*` no necesitan marcarse como build variable: el `Dockerfile`
+ya las declara como `ARG`/`ENV` en el stage builder, y Coolify pasa las
+variables de la app como build args. Si agregás una `NEXT_PUBLIC_*` nueva, hay
+que sumarla a esa lista de `ARG`/`ENV` o Next la compila vacía.
 
 Variables de entorno — copiar de la app **neura-erp-sistemas-propio**, que corre
 este mismo código:
 
 ```
-# Propias de esta instancia (NO copiar, poner estos valores)
+# Propias de esta instancia — YA CARGADAS en la app
 APP_DB_SCHEMA=amigosdelarutaerp
 NEXT_PUBLIC_APP_URL=http://amigosdelaruta.neura.com.py
 
-# Iguales a sistemas-propio (misma instancia de Supabase)
+# Iguales a sistemas-propio (misma instancia de Supabase) — FALTAN
 NEXT_PUBLIC_SUPABASE_URL
 NEXT_PUBLIC_SUPABASE_ANON_KEY
 SUPABASE_SERVICE_ROLE_KEY
 SUPABASE_DB_URL
-NIXPACKS_NODE_VERSION
+# NIXPACKS_NODE_VERSION no hace falta: el build es por Dockerfile
 
 # Secretos de la app (se pueden compartir o rotar para esta instancia)
 SIFEN_SECRETS_KEY        # si se rota, los certificados ya guardados no se descifran
