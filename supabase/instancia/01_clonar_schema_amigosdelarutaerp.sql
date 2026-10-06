@@ -960,62 +960,65 @@ SELECT 'FK a otro schema', c.relname, k.conname, pg_get_constraintdef(k.oid)
 -- Si aparece un UNIQUE o un indice con nombre auto-generado del estilo
 -- `tabla_col1_col2_key`, es que 4b no lo pudo emparejar: pasalo y lo vemos.
 -- =============================================================================
-SELECT 'falta en el nuevo' AS donde, tipo, tabla, nombre, definicion FROM (
-  SELECT CASE k.contype WHEN 'f' THEN 'FK' WHEN 'c' THEN 'CHECK' WHEN 'p' THEN 'PK'
-                        WHEN 'u' THEN 'UNIQUE' WHEN 'x' THEN 'EXCLUDE'
-                        ELSE k.contype::text END AS tipo,
-         c.relname AS tabla, k.conname AS nombre, pg_get_constraintdef(k.oid) AS definicion
-    FROM pg_constraint k
-    JOIN pg_class c ON c.oid = k.conrelid
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-   WHERE n.nspname = 'neura'
-     AND NOT EXISTS (
-           SELECT 1 FROM pg_constraint x
-             JOIN pg_class xc ON xc.oid = x.conrelid
-             JOIN pg_namespace xn ON xn.oid = xc.relnamespace
-            WHERE xn.nspname = 'amigosdelarutaerp'
-              AND xc.relname = c.relname AND x.conname = k.conname)
-  UNION ALL
-  SELECT 'INDICE', m.relname, i.relname, pg_get_indexdef(i.oid)
-    FROM pg_index x
-    JOIN pg_class i ON i.oid = x.indexrelid
-    JOIN pg_class m ON m.oid = x.indrelid
-    JOIN pg_namespace n ON n.oid = m.relnamespace
-   WHERE n.nspname = 'neura'
-     AND NOT EXISTS (
-           SELECT 1 FROM pg_class y
-             JOIN pg_namespace yn ON yn.oid = y.relnamespace
-            WHERE yn.nspname = 'amigosdelarutaerp' AND y.relname = i.relname)
-) q
+SELECT 'falta en el nuevo' AS donde,
+       CASE k.contype WHEN 'f' THEN 'FK' WHEN 'c' THEN 'CHECK' WHEN 'p' THEN 'PK'
+                      WHEN 'u' THEN 'UNIQUE' WHEN 'x' THEN 'EXCLUDE'
+                      ELSE k.contype::text END AS tipo,
+       c.relname AS tabla, k.conname AS nombre,
+       pg_get_constraintdef(k.oid) AS definicion
+  FROM pg_constraint k
+  JOIN pg_class c ON c.oid = k.conrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = 'neura'
+   AND NOT EXISTS (
+         SELECT 1 FROM pg_constraint x
+           JOIN pg_class xc ON xc.oid = x.conrelid
+           JOIN pg_namespace xn ON xn.oid = xc.relnamespace
+          WHERE xn.nspname = 'amigosdelarutaerp'
+            AND xc.relname = c.relname AND x.conname = k.conname)
+
 UNION ALL
-SELECT 'sobra en el nuevo', tipo, tabla, nombre, definicion FROM (
-  SELECT CASE k.contype WHEN 'f' THEN 'FK' WHEN 'c' THEN 'CHECK' WHEN 'p' THEN 'PK'
-                        WHEN 'u' THEN 'UNIQUE' WHEN 'x' THEN 'EXCLUDE'
-                        ELSE k.contype::text END,
-         c.relname, k.conname, pg_get_constraintdef(k.oid)
-    FROM pg_constraint k
-    JOIN pg_class c ON c.oid = k.conrelid
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-   WHERE n.nspname = 'amigosdelarutaerp'
-     AND NOT EXISTS (
-           SELECT 1 FROM pg_constraint x
-             JOIN pg_class xc ON xc.oid = x.conrelid
-             JOIN pg_namespace xn ON xn.oid = xc.relnamespace
-            WHERE xn.nspname = 'neura'
-              AND xc.relname = c.relname AND x.conname = k.conname)
-  UNION ALL
-  SELECT 'INDICE', m.relname, i.relname, pg_get_indexdef(i.oid)
-    FROM pg_index x
-    JOIN pg_class i ON i.oid = x.indexrelid
-    JOIN pg_class m ON m.oid = x.indrelid
-    JOIN pg_namespace n ON n.oid = m.relnamespace
-   WHERE n.nspname = 'amigosdelarutaerp'
-     AND NOT EXISTS (
-           SELECT 1 FROM pg_class y
-             JOIN pg_namespace yn ON yn.oid = y.relnamespace
-            WHERE yn.nspname = 'neura' AND y.relname = i.relname)
-) q2
-ORDER BY 1, 2, 3, 4;
+SELECT 'falta en el nuevo', 'INDICE', m.relname, i.relname, pg_get_indexdef(i.oid)
+  FROM pg_index x
+  JOIN pg_class i ON i.oid = x.indexrelid
+  JOIN pg_class m ON m.oid = x.indrelid
+  JOIN pg_namespace n ON n.oid = m.relnamespace
+ WHERE n.nspname = 'neura'
+   AND NOT EXISTS (
+         SELECT 1 FROM pg_class y
+           JOIN pg_namespace yn ON yn.oid = y.relnamespace
+          WHERE yn.nspname = 'amigosdelarutaerp' AND y.relname = i.relname)
+
+UNION ALL
+SELECT 'sobra en el nuevo',
+       CASE k.contype WHEN 'f' THEN 'FK' WHEN 'c' THEN 'CHECK' WHEN 'p' THEN 'PK'
+                      WHEN 'u' THEN 'UNIQUE' WHEN 'x' THEN 'EXCLUDE'
+                      ELSE k.contype::text END,
+       c.relname, k.conname, pg_get_constraintdef(k.oid)
+  FROM pg_constraint k
+  JOIN pg_class c ON c.oid = k.conrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = 'amigosdelarutaerp'
+   AND NOT EXISTS (
+         SELECT 1 FROM pg_constraint x
+           JOIN pg_class xc ON xc.oid = x.conrelid
+           JOIN pg_namespace xn ON xn.oid = xc.relnamespace
+          WHERE xn.nspname = 'neura'
+            AND xc.relname = c.relname AND x.conname = k.conname)
+
+UNION ALL
+SELECT 'sobra en el nuevo', 'INDICE', m.relname, i.relname, pg_get_indexdef(i.oid)
+  FROM pg_index x
+  JOIN pg_class i ON i.oid = x.indexrelid
+  JOIN pg_class m ON m.oid = x.indrelid
+  JOIN pg_namespace n ON n.oid = m.relnamespace
+ WHERE n.nspname = 'amigosdelarutaerp'
+   AND NOT EXISTS (
+         SELECT 1 FROM pg_class y
+           JOIN pg_namespace yn ON yn.oid = y.relnamespace
+          WHERE yn.nspname = 'neura' AND y.relname = i.relname)
+
+ ORDER BY 1, 2, 3, 4;
 
 -- Y que no haya quedado NI UNA fila de datos en el destino.
 SELECT c.relname AS tabla_con_datos,
