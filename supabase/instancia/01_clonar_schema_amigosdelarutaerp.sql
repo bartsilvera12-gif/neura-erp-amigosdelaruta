@@ -3,6 +3,7 @@
 --
 -- Qué hace:
 --   tipos (enum/dominio/compuesto) · secuencias · funciones y procedimientos ·
+--   nombres originales de constraints e indices ·
 --   tablas (columnas, defaults, NOT NULL, CHECK, PK, UNIQUE, índices, identity,
 --   generated, comentarios, storage, reloptions) · FK internas · vistas ·
 --   vistas materializadas (WITH NO DATA) · triggers · RLS y políticas ·
@@ -23,9 +24,10 @@
 -- `\M` son límites de palabra, así que toca `neura.tabla` y `search_path = neura`
 -- pero NO `neura_algo`, `zentra_neura` ni `public.neura_fn`.
 --
--- Orden de creacion (importa): tipos -> secuencias -> tablas -> funciones y
--- vistas (juntas, con reintentos) -> defaults -> FK -> indices de matviews ->
--- triggers -> RLS -> permisos -> comentarios. Las funciones van despues de las
+-- Orden de creacion (importa): tipos -> secuencias -> tablas -> nombres de
+-- constraints e indices -> funciones y vistas (juntas, con reintentos) ->
+-- defaults -> FK -> indices de matviews -> triggers -> RLS -> permisos ->
+-- comentarios. Las funciones van despues de las
 -- tablas porque una puede devolver `SETOF tabla`, y ese tipo de retorno se
 -- resuelve al crearla.
 --
@@ -226,6 +228,128 @@ BEGIN
                      array_to_string(r.reloptions, ', '));
     END IF;
     RAISE NOTICE '[4] tabla %.%: creada', v_dst, r.relname;
+  END LOOP;
+
+  -- -------------------------------------------------------------------------
+  -- 4b) Nombres de constraints e indices que `LIKE` regenero.
+  --
+  --     `INCLUDING ALL` recrea los PK/UNIQUE y los indices, pero les pone el
+  --     nombre POR DEFECTO de Postgres en lugar del original: un
+  --     `asientos_numero_uk` del origen aparece como
+  --     `asientos_contables_empresa_id_numero_asiento_key` en el destino.
+  --     Funcionalmente es lo mismo, pero no es un clon exacto y rompe cosas:
+  --       · el codigo matchea nombres de constraint en los mensajes de error
+  --         (ver `esErrorNumeroDuplicado` en src/lib/proyectos/qa-shared.ts y
+  --         `uq_nota_credito_factura_estado_activo` en create-nota-credito.ts);
+  --       · una migracion futura con `DROP CONSTRAINT <nombre>` fallaria solo
+  --         en esta instancia.
+  --
+  --     El emparejamiento es por DEFINICION, no por nombre: para constraints
+  --     (tabla, tipo, definicion) y para indices (unique, y el texto del
+  --     CREATE INDEX desde ' ON ' -- o sea tabla, columnas/expresion y WHERE --,
+  --     que es justo todo menos el nombre).
+  --
+  --     Va en lazo con reintentos porque el nombre por defecto que Postgres le
+  --     puso a un objeto puede ser el nombre original de OTRO: ahi el primer
+  --     rename choca y sale bien en la pasada siguiente, cuando el que ocupaba
+  --     el nombre ya se movio.
+  -- -------------------------------------------------------------------------
+  v_pend := -1;
+  v_pasada := 0;
+  LOOP
+    v_prev   := v_pend;
+    v_pend   := 0;
+    v_pasada := v_pasada + 1;
+    v_nf     := 0;
+
+    -- 4b.1) Constraints (PK, UNIQUE, CHECK, EXCLUDE).
+    FOR r IN
+      WITH s AS (
+        SELECT c.relname AS tabla, k.conname, k.contype,
+               regexp_replace(pg_get_constraintdef(k.oid), '\m' || v_src || '\M', v_dst, 'g') AS def,
+               row_number() OVER (
+                 PARTITION BY c.relname, k.contype,
+                              regexp_replace(pg_get_constraintdef(k.oid), '\m' || v_src || '\M', v_dst, 'g')
+                 ORDER BY k.conname) AS rn
+          FROM pg_constraint k
+          JOIN pg_class c ON c.oid = k.conrelid
+         WHERE c.relnamespace = v_src_oid AND k.contype IN ('p', 'u', 'c', 'x')
+      ), d AS (
+        SELECT c.relname AS tabla, k.conname, k.contype,
+               pg_get_constraintdef(k.oid) AS def,
+               row_number() OVER (
+                 PARTITION BY c.relname, k.contype, pg_get_constraintdef(k.oid)
+                 ORDER BY k.conname) AS rn
+          FROM pg_constraint k
+          JOIN pg_class c ON c.oid = k.conrelid
+         WHERE c.relnamespace = v_dst_oid AND k.contype IN ('p', 'u', 'c', 'x')
+      )
+      SELECT d.tabla, d.conname AS actual, s.conname AS original
+        FROM d
+        JOIN s ON s.tabla = d.tabla AND s.contype = d.contype
+              AND s.def = d.def AND s.rn = d.rn
+       WHERE d.conname <> s.conname
+       ORDER BY d.tabla, d.conname
+    LOOP
+      BEGIN
+        EXECUTE format('ALTER TABLE %I.%I RENAME CONSTRAINT %I TO %I',
+                       v_dst, r.tabla, r.actual, r.original);
+        v_nf := v_nf + 1;
+      EXCEPTION WHEN others THEN
+        v_pend := v_pend + 1;
+        v_err  := format('constraint %s.%s: %s -> %s: %s',
+                         v_dst, r.tabla, r.actual, r.original, SQLERRM);
+      END;
+    END LOOP;
+
+    -- 4b.2) Indices que NO respaldan un constraint (esos ya se renombraron
+    --       solos en 4b.1, porque RENAME CONSTRAINT renombra su indice).
+    FOR r IN
+      WITH s AS (
+        SELECT i.relname AS idx, x.indisunique,
+               regexp_replace(substring(pg_get_indexdef(i.oid) from position(' ON ' in pg_get_indexdef(i.oid))), '\m' || v_src || '\M', v_dst, 'g') AS firma,
+               row_number() OVER (PARTITION BY x.indisunique, regexp_replace(substring(pg_get_indexdef(i.oid) from position(' ON ' in pg_get_indexdef(i.oid))), '\m' || v_src || '\M', v_dst, 'g')
+                                  ORDER BY i.relname) AS rn
+          FROM pg_index x
+          JOIN pg_class i ON i.oid = x.indexrelid
+          JOIN pg_class m ON m.oid = x.indrelid
+         WHERE m.relnamespace = v_src_oid
+           AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conindid = i.oid)
+      ), d AS (
+        SELECT i.relname AS idx, x.indisunique,
+               substring(pg_get_indexdef(i.oid) from position(' ON ' in pg_get_indexdef(i.oid))) AS firma,
+               row_number() OVER (PARTITION BY x.indisunique, substring(pg_get_indexdef(i.oid) from position(' ON ' in pg_get_indexdef(i.oid)))
+                                  ORDER BY i.relname) AS rn
+          FROM pg_index x
+          JOIN pg_class i ON i.oid = x.indexrelid
+          JOIN pg_class m ON m.oid = x.indrelid
+         WHERE m.relnamespace = v_dst_oid
+           AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conindid = i.oid)
+      )
+      SELECT d.idx AS actual, s.idx AS original
+        FROM d
+        JOIN s ON s.indisunique = d.indisunique AND s.firma = d.firma AND s.rn = d.rn
+       WHERE d.idx <> s.idx
+       ORDER BY d.idx
+    LOOP
+      BEGIN
+        EXECUTE format('ALTER INDEX %I.%I RENAME TO %I', v_dst, r.actual, r.original);
+        v_nf := v_nf + 1;
+      EXCEPTION WHEN others THEN
+        v_pend := v_pend + 1;
+        v_err  := format('indice %s.%s -> %s: %s', v_dst, r.actual, r.original, SQLERRM);
+      END;
+    END LOOP;
+
+    RAISE NOTICE '[4b] pasada %: % renombrado(s), % pendiente(s)',
+                 v_pasada, v_nf, v_pend;
+
+    EXIT WHEN v_pend = 0;
+    IF v_pend = v_prev THEN
+      RAISE EXCEPTION
+        '[4b] quedaron % rename(s) sin aplicar y la ultima pasada no avanzo. Ultimo error: %',
+        v_pend, v_err;
+    END IF;
   END LOOP;
 
   -- -------------------------------------------------------------------------
@@ -805,6 +929,74 @@ SELECT 'FK a otro schema', c.relname, k.conname, pg_get_constraintdef(k.oid)
  WHERE n.nspname = 'amigosdelarutaerp' AND k.contype = 'f'
    AND f.relnamespace <> n.oid
  ORDER BY 1, 2, 3;
+
+-- =============================================================================
+-- Diff de NOMBRES de constraints e indices, origen vs destino.
+--
+-- Lo esperado: solo filas 'falta en el nuevo' de tipo FK, y solo las que apuntan
+-- a otro schema (`auth.users`), que el paso 7 omite a proposito. El paso 4b se
+-- encarga de devolverle el nombre original a todo PK/UNIQUE/CHECK e indice que
+-- `LIKE INCLUDING ALL` haya renombrado.
+--
+-- Si aparece un UNIQUE o un indice con nombre auto-generado del estilo
+-- `tabla_col1_col2_key`, es que 4b no lo pudo emparejar: pasalo y lo vemos.
+-- =============================================================================
+SELECT 'falta en el nuevo' AS donde, tipo, tabla, nombre, definicion FROM (
+  SELECT CASE k.contype WHEN 'f' THEN 'FK' WHEN 'c' THEN 'CHECK' WHEN 'p' THEN 'PK'
+                        WHEN 'u' THEN 'UNIQUE' WHEN 'x' THEN 'EXCLUDE'
+                        ELSE k.contype::text END AS tipo,
+         c.relname AS tabla, k.conname AS nombre, pg_get_constraintdef(k.oid) AS definicion
+    FROM pg_constraint k
+    JOIN pg_class c ON c.oid = k.conrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'neura'
+     AND NOT EXISTS (
+           SELECT 1 FROM pg_constraint x
+             JOIN pg_class xc ON xc.oid = x.conrelid
+             JOIN pg_namespace xn ON xn.oid = xc.relnamespace
+            WHERE xn.nspname = 'amigosdelarutaerp'
+              AND xc.relname = c.relname AND x.conname = k.conname)
+  UNION ALL
+  SELECT 'INDICE', m.relname, i.relname, pg_get_indexdef(i.oid)
+    FROM pg_index x
+    JOIN pg_class i ON i.oid = x.indexrelid
+    JOIN pg_class m ON m.oid = x.indrelid
+    JOIN pg_namespace n ON n.oid = m.relnamespace
+   WHERE n.nspname = 'neura'
+     AND NOT EXISTS (
+           SELECT 1 FROM pg_class y
+             JOIN pg_namespace yn ON yn.oid = y.relnamespace
+            WHERE yn.nspname = 'amigosdelarutaerp' AND y.relname = i.relname)
+) q
+UNION ALL
+SELECT 'sobra en el nuevo', tipo, tabla, nombre, definicion FROM (
+  SELECT CASE k.contype WHEN 'f' THEN 'FK' WHEN 'c' THEN 'CHECK' WHEN 'p' THEN 'PK'
+                        WHEN 'u' THEN 'UNIQUE' WHEN 'x' THEN 'EXCLUDE'
+                        ELSE k.contype::text END,
+         c.relname, k.conname, pg_get_constraintdef(k.oid)
+    FROM pg_constraint k
+    JOIN pg_class c ON c.oid = k.conrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'amigosdelarutaerp'
+     AND NOT EXISTS (
+           SELECT 1 FROM pg_constraint x
+             JOIN pg_class xc ON xc.oid = x.conrelid
+             JOIN pg_namespace xn ON xn.oid = xc.relnamespace
+            WHERE xn.nspname = 'neura'
+              AND xc.relname = c.relname AND x.conname = k.conname)
+  UNION ALL
+  SELECT 'INDICE', m.relname, i.relname, pg_get_indexdef(i.oid)
+    FROM pg_index x
+    JOIN pg_class i ON i.oid = x.indexrelid
+    JOIN pg_class m ON m.oid = x.indrelid
+    JOIN pg_namespace n ON n.oid = m.relnamespace
+   WHERE n.nspname = 'amigosdelarutaerp'
+     AND NOT EXISTS (
+           SELECT 1 FROM pg_class y
+             JOIN pg_namespace yn ON yn.oid = y.relnamespace
+            WHERE yn.nspname = 'neura' AND y.relname = i.relname)
+) q2
+ORDER BY 1, 2, 3, 4;
 
 -- Y que no haya quedado NI UNA fila de datos en el destino.
 SELECT c.relname AS tabla_con_datos,
