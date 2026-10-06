@@ -23,6 +23,12 @@
 -- `\M` son límites de palabra, así que toca `neura.tabla` y `search_path = neura`
 -- pero NO `neura_algo`, `zentra_neura` ni `public.neura_fn`.
 --
+-- Orden de creacion (importa): tipos -> secuencias -> tablas -> funciones y
+-- vistas (juntas, con reintentos) -> defaults -> FK -> indices de matviews ->
+-- triggers -> RLS -> permisos -> comentarios. Las funciones van despues de las
+-- tablas porque una puede devolver `SETOF tabla`, y ese tipo de retorno se
+-- resuelve al crearla.
+--
 -- Todo va en UNA transacción: si algo falla, no queda nada a medias.
 -- Es re-ejecutable: cada objeto se saltea si ya existe en el destino.
 --
@@ -52,6 +58,9 @@ DECLARE
   v_cols    text;
   v_pend    int;
   v_prev    int;
+  v_pasada  int;
+  v_nf      int;
+  v_nv      int;
   v_err     text;
 BEGIN
   SELECT oid INTO v_src_oid FROM pg_namespace WHERE nspname = v_src;
@@ -67,6 +76,14 @@ BEGIN
   IF v_n > 0 THEN
     RAISE EXCEPTION
       'El schema % tiene % tabla(s) particionada(s)/foranea(s). Corre el script 00 para verlas: hay que replicarlas a mano.',
+      v_src, v_n;
+  END IF;
+
+  SELECT count(*) INTO v_n
+    FROM pg_proc WHERE pronamespace = v_src_oid AND prokind NOT IN ('f', 'p');
+  IF v_n > 0 THEN
+    RAISE EXCEPTION
+      'El schema % tiene % agregado(s) o funcion(es) ventana. pg_get_functiondef no los sabe emitir: hay que replicarlos a mano con CREATE AGGREGATE.',
       v_src, v_n;
   END IF;
 
@@ -179,29 +196,10 @@ BEGIN
   END LOOP;
 
   -- -------------------------------------------------------------------------
-  -- 4) Funciones y procedimientos. `check_function_bodies = off` arriba permite
-  --    crearlas aunque las tablas del destino todavia no existan.
-  -- -------------------------------------------------------------------------
-  FOR r IN
-    SELECT p.oid, p.proname, pg_get_function_identity_arguments(p.oid) AS args
-      FROM pg_proc p
-     WHERE p.pronamespace = v_src_oid
-       AND NOT EXISTS (                       -- no viene de una extension
-             SELECT 1 FROM pg_depend d
-              WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid
-                AND d.deptype = 'e')
-     ORDER BY p.proname
-  LOOP
-    -- pg_get_functiondef ya emite CREATE OR REPLACE, asi que es idempotente.
-    v_def := regexp_replace(pg_get_functiondef(r.oid), '\m' || v_src || '\M', v_dst, 'g');
-    EXECUTE v_def;
-    RAISE NOTICE '[4] funcion %.%(%): creada', v_dst, r.proname, r.args;
-  END LOOP;
-
-  -- -------------------------------------------------------------------------
-  -- 5) Tablas. `INCLUDING ALL` trae columnas, defaults, NOT NULL, CHECK, PK,
+  -- 4) Tablas. `INCLUDING ALL` trae columnas, defaults, NOT NULL, CHECK, PK,
   --    UNIQUE, indices, IDENTITY, GENERATED, comentarios, storage y estadisticas.
   --    No trae FK, triggers ni RLS: eso va en los pasos 7, 9 y 10.
+  --    Van ANTES de las funciones: una funcion puede devolver `SETOF tabla`.
   -- -------------------------------------------------------------------------
   FOR r IN
     SELECT c.relname, c.relpersistence, c.reloptions
@@ -220,7 +218,89 @@ BEGIN
       EXECUTE format('ALTER TABLE %I.%I SET (%s)', v_dst, r.relname,
                      array_to_string(r.reloptions, ', '));
     END IF;
-    RAISE NOTICE '[5] tabla %.%: creada', v_dst, r.relname;
+    RAISE NOTICE '[4] tabla %.%: creada', v_dst, r.relname;
+  END LOOP;
+
+  -- -------------------------------------------------------------------------
+  -- 5) Funciones, procedimientos y vistas, en UN solo lazo con reintentos.
+  --
+  --    Van todos juntos y DESPUES de las tablas porque las dependencias cruzan
+  --    en los dos sentidos: una funcion puede devolver `SETOF tabla` o
+  --    `SETOF vista`, y el tipo de retorno se resuelve al CREAR la funcion,
+  --    que es justo lo que `check_function_bodies = off` NO cubre. A la vez,
+  --    una vista puede llamar a una funcion. El lazo repite hasta que una
+  --    pasada completa no logra crear nada nuevo.
+  --
+  --    Las funciones se reintentan todas en cada pasada: pg_get_functiondef
+  --    emite CREATE OR REPLACE, asi que volver a crear una que ya esta es
+  --    inofensivo y ahorra comparar firmas entre schemas distintos.
+  -- -------------------------------------------------------------------------
+  v_pend := -1;
+  v_pasada := 0;
+  LOOP
+    v_prev   := v_pend;
+    v_pend   := 0;
+    v_pasada := v_pasada + 1;
+    v_nf     := 0;
+    v_nv     := 0;
+
+    -- 5a) funciones y procedimientos
+    FOR r IN
+      SELECT p.oid, p.proname, pg_get_function_identity_arguments(p.oid) AS args
+        FROM pg_proc p
+       WHERE p.pronamespace = v_src_oid
+         AND p.prokind IN ('f', 'p')
+         AND NOT EXISTS (                     -- no viene de una extension
+               SELECT 1 FROM pg_depend d
+                WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid
+                  AND d.deptype = 'e')
+       ORDER BY p.proname
+    LOOP
+      BEGIN
+        EXECUTE regexp_replace(pg_get_functiondef(r.oid), '\m' || v_src || '\M', v_dst, 'g');
+        v_nf := v_nf + 1;
+      EXCEPTION WHEN others THEN
+        v_pend := v_pend + 1;
+        v_err  := format('funcion %s.%s(%s): %s', v_dst, r.proname, r.args, SQLERRM);
+      END;
+    END LOOP;
+
+    -- 5b) vistas y vistas materializadas (estas si se saltean si ya existen)
+    FOR r IN
+      SELECT c.oid, c.relname, c.relkind
+        FROM pg_class c
+       WHERE c.relnamespace = v_src_oid AND c.relkind IN ('v', 'm')
+         AND NOT EXISTS (
+               SELECT 1 FROM pg_class x
+                WHERE x.relnamespace = v_dst_oid AND x.relname = c.relname
+                  AND x.relkind IN ('v', 'm'))
+       ORDER BY c.relname
+    LOOP
+      BEGIN
+        v_def := regexp_replace(pg_get_viewdef(r.oid, true), '\m' || v_src || '\M', v_dst, 'g');
+        IF r.relkind = 'v' THEN
+          EXECUTE format('CREATE VIEW %I.%I AS %s', v_dst, r.relname, v_def);
+        ELSE
+          -- WITH NO DATA: la instancia nueva arranca sin datos.
+          EXECUTE format('CREATE MATERIALIZED VIEW %I.%I AS %s WITH NO DATA',
+                         v_dst, r.relname, v_def);
+        END IF;
+        v_nv := v_nv + 1;
+      EXCEPTION WHEN others THEN
+        v_pend := v_pend + 1;
+        v_err  := format('vista %s.%s: %s', v_dst, r.relname, SQLERRM);
+      END;
+    END LOOP;
+
+    RAISE NOTICE '[5] pasada %: % funcion(es), % vista(s), % pendiente(s)',
+                 v_pasada, v_nf, v_nv, v_pend;
+
+    EXIT WHEN v_pend = 0;
+    IF v_pend = v_prev THEN
+      RAISE EXCEPTION
+        '[5] quedaron % objeto(s) sin crear y la ultima pasada no avanzo. Ultimo error: %',
+        v_pend, v_err;
+    END IF;
   END LOOP;
 
   -- -------------------------------------------------------------------------
@@ -295,43 +375,9 @@ BEGIN
   END LOOP;
 
   -- -------------------------------------------------------------------------
-  -- 8) Vistas y vistas materializadas. Con reintentos: una vista puede apoyarse
-  --    en otra. Las materializadas van WITH NO DATA (sin datos, como pediste).
+  -- 8) Indices de las vistas materializadas. Las vistas en si se crearon en
+  --    el paso 5; los indices de tablas ya vinieron con LIKE INCLUDING ALL.
   -- -------------------------------------------------------------------------
-  v_pend := -1;
-  LOOP
-    v_prev := v_pend;
-    v_pend := 0;
-    FOR r IN
-      SELECT c.oid, c.relname, c.relkind
-        FROM pg_class c
-       WHERE c.relnamespace = v_src_oid AND c.relkind IN ('v', 'm')
-         AND NOT EXISTS (
-               SELECT 1 FROM pg_class x
-                WHERE x.relnamespace = v_dst_oid AND x.relname = c.relname
-                  AND x.relkind IN ('v', 'm'))
-       ORDER BY c.relname
-    LOOP
-      BEGIN
-        v_def := regexp_replace(pg_get_viewdef(r.oid, true), '\m' || v_src || '\M', v_dst, 'g');
-        IF r.relkind = 'v' THEN
-          EXECUTE format('CREATE VIEW %I.%I AS %s', v_dst, r.relname, v_def);
-        ELSE
-          EXECUTE format('CREATE MATERIALIZED VIEW %I.%I AS %s WITH NO DATA', v_dst, r.relname, v_def);
-        END IF;
-        RAISE NOTICE '[8] vista %.%: creada', v_dst, r.relname;
-      EXCEPTION WHEN others THEN
-        v_pend := v_pend + 1;
-        v_err  := SQLERRM;
-      END;
-    END LOOP;
-    EXIT WHEN v_pend = 0;
-    IF v_pend = v_prev THEN
-      RAISE EXCEPTION '[8] no se pudieron crear % vista(s). Ultimo error: %', v_pend, v_err;
-    END IF;
-  END LOOP;
-
-  -- Indices de las vistas materializadas (los de tablas ya vinieron con LIKE).
   FOR r IN
     SELECT i.relname AS idxname, pg_get_indexdef(i.oid) AS def
       FROM pg_index x
@@ -604,6 +650,91 @@ SELECT objeto,
        max(cantidad) FILTER (WHERE schema = 'neura')             AS neura,
        max(cantidad) FILTER (WHERE schema = 'amigosdelarutaerp') AS amigosdelarutaerp
   FROM conteo GROUP BY objeto ORDER BY objeto;
+
+-- =============================================================================
+-- Auditoria de independencia: busca CUALQUIER referencia a `neura` que haya
+-- quedado dentro de `amigosdelarutaerp`.
+--
+-- Lo esperado es CERO FILAS. El paso 6 reescribe los defaults de columna, pero
+-- `LIKE` tambien copia literalmente los CHECK, las expresiones de indice y las
+-- columnas generadas: si alguno de esos llama a una funcion de `neura`, aparece
+-- aca y hay que arreglarlo a mano (DROP + ADD con el nombre reescrito).
+--
+-- Si aparecen filas de tipo 'funcion' cuyo cuerpo menciona `neura` dentro de un
+-- literal (p. ej. una migracion que itera schemas), revisalas pero puede estar
+-- bien. Las de tipo 'check', 'indice' y 'columna generada' no: esas son
+-- dependencias reales y rompen la independencia.
+-- =============================================================================
+SELECT 'check' AS tipo, c.relname AS objeto, k.conname AS detalle,
+       pg_get_constraintdef(k.oid) AS definicion
+  FROM pg_constraint k
+  JOIN pg_class c ON c.oid = k.conrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = 'amigosdelarutaerp' AND k.contype = 'c'
+   AND pg_get_constraintdef(k.oid) ~ '\mneura\M'
+UNION ALL
+SELECT 'indice', m.relname, i.relname, pg_get_indexdef(i.oid)
+  FROM pg_index x
+  JOIN pg_class i ON i.oid = x.indexrelid
+  JOIN pg_class m ON m.oid = x.indrelid
+  JOIN pg_namespace n ON n.oid = m.relnamespace
+ WHERE n.nspname = 'amigosdelarutaerp' AND pg_get_indexdef(i.oid) ~ '\mneura\M'
+UNION ALL
+SELECT 'columna generada', c.relname, a.attname,
+       pg_get_expr(ad.adbin, ad.adrelid)
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_attrdef ad ON ad.adrelid = c.oid AND ad.adnum = a.attnum
+ WHERE n.nspname = 'amigosdelarutaerp' AND a.attgenerated <> ''
+   AND pg_get_expr(ad.adbin, ad.adrelid) ~ '\mneura\M'
+UNION ALL
+SELECT 'default', c.relname, a.attname, pg_get_expr(ad.adbin, ad.adrelid)
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_attrdef ad ON ad.adrelid = c.oid AND ad.adnum = a.attnum
+ WHERE n.nspname = 'amigosdelarutaerp' AND a.attgenerated = ''
+   AND pg_get_expr(ad.adbin, ad.adrelid) ~ '\mneura\M'
+UNION ALL
+SELECT 'politica RLS', c.relname, p.polname,
+       coalesce(pg_get_expr(p.polqual, p.polrelid), '') || ' | ' ||
+       coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')
+  FROM pg_policy p
+  JOIN pg_class c ON c.oid = p.polrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = 'amigosdelarutaerp'
+   AND (coalesce(pg_get_expr(p.polqual, p.polrelid), '') || ' ' ||
+        coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')) ~ '\mneura\M'
+UNION ALL
+SELECT 'trigger', c.relname, g.tgname, pg_get_triggerdef(g.oid)
+  FROM pg_trigger g
+  JOIN pg_class c ON c.oid = g.tgrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = 'amigosdelarutaerp' AND NOT g.tgisinternal
+   AND pg_get_triggerdef(g.oid) ~ '\mneura\M'
+UNION ALL
+SELECT 'vista', c.relname, '', left(pg_get_viewdef(c.oid, true), 400)
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = 'amigosdelarutaerp' AND c.relkind IN ('v', 'm')
+   AND pg_get_viewdef(c.oid, true) ~ '\mneura\M'
+UNION ALL
+SELECT 'funcion', p.proname, pg_get_function_identity_arguments(p.oid),
+       left(pg_get_functiondef(p.oid), 400)
+  FROM pg_proc p
+  JOIN pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname = 'amigosdelarutaerp' AND p.prokind IN ('f', 'p')
+   AND pg_get_functiondef(p.oid) ~ '\mneura\M'
+UNION ALL
+SELECT 'FK a otro schema', c.relname, k.conname, pg_get_constraintdef(k.oid)
+  FROM pg_constraint k
+  JOIN pg_class c ON c.oid = k.conrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_class f ON f.oid = k.confrelid
+ WHERE n.nspname = 'amigosdelarutaerp' AND k.contype = 'f'
+   AND f.relnamespace <> n.oid
+ ORDER BY 1, 2, 3;
 
 -- Y que no haya quedado NI UNA fila de datos en el destino.
 SELECT c.relname AS tabla_con_datos,
