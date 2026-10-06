@@ -51,8 +51,9 @@ En el SQL editor del Supabase self-hosted, en este orden:
 |---|---|
 | `supabase/instancia/00_preflight_schema_neura.sql` | Solo lee. Inventario de `neura` y aviso de lo que el clonador no sabe replicar. |
 | `supabase/instancia/01_clonar_schema_amigosdelarutaerp.sql` | Crea `amigosdelarutaerp` como clon estructural de `neura`, sin una sola fila. |
-| `supabase/instancia/02_seed_empresa_y_admin.sql` | Empresa, catálogos, usuario admin y los 14 módulos. |
-| `supabase/instancia/03_catalogos_pendientes.sql` | Opcional. Lista otras tablas de referencia que quedaron vacías. |
+| `supabase/instancia/02_seed_empresa_y_admin.sql` | Empresa, catálogos globales, usuario admin y los 14 módulos. |
+| `supabase/instancia/04_catalogos_por_empresa.sql` | Catálogos por empresa de Proyectos: estados, tipos, prioridades, objetivos SLV. Sin esto el Kanban abre vacío. |
+| `supabase/instancia/03_catalogos_pendientes.sql` | Opcional, al final. Lista otras tablas de referencia que quedaron vacías. |
 
 Entre el 01 y el 02 hay que crear el usuario de login: Studio →
 Authentication → Users → Add user → `admin@amigosdelaruta.com`, con *Auto
@@ -127,3 +128,28 @@ escucha en http y Cloudflare sirve https hacia afuera.
 El resto del código quedó igual al madre a propósito, para que un `git diff`
 contra `neura-erp-sistemas-propio` siga siendo legible y se puedan traer
 arreglos de allá sin conflictos.
+
+## Al traer cambios del repo madre
+
+Hay una trampa que no se ve en el código. Muchas migraciones del madre se
+aplican a varios schemas de una y los enumeran por patrón:
+
+| Patrón | Migraciones |
+|---|---|
+| `nspname ~ '^er_[0-9a-f]{32}$'` | 110 |
+| `nspname LIKE 'erp\_%'` | 87 |
+| `nspname IN ('public', 'zentra_erp')` | 59 |
+| `nspname IN ('public', 'zentra_erp', 'neura')` | 28 |
+
+**`amigosdelarutaerp` no coincide con ninguno.** Una migración nueva que agregue
+una columna o una tabla "a todos los tenants" no va a tocar esta instancia, y el
+ERP va a fallar en runtime contra un schema viejo — sin error en el deploy, nada
+más una API que explota.
+
+Así que por cada migración multi-schema que traigas hay que correrla con
+`amigosdelarutaerp` sumado al patrón, o aplicarla a mano a este schema. Lo mismo
+le pasa a `neura`, que tampoco entra en los patrones de las 110 + 87.
+
+Para verificar que el schema no quedó atrás, el script 01 sirve de diff: corrélo
+y mirá el resumen origen vs destino y el diff de nombres. Si aparecen tablas,
+columnas o constraints que están en `neura` y no acá, es drift.
