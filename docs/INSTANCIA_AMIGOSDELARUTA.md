@@ -12,9 +12,10 @@ Coolify, schema propio en Postgres y su propio id de empresa.
 | Id de empresa | `80349bf4-7735-41a4-ac10-fbed4ce013a8` |
 | Usuario admin | `admin@amigosdelaruta.com` |
 
-No comparte nada con `neura` ni con ningún otro schema, salvo las funciones base
-de `public` (`puede_acceder_empresa`, `set_updated_at`) y `auth.users`, que son
-de la instancia de Supabase y se usan igual en todos los ERP.
+No comparte nada con `neura` ni con ningún otro schema de datos. Lo único
+compartido es la infraestructura de Supabase, igual que en todos los ERP: las
+funciones base de `public` (`puede_acceder_empresa`, `set_updated_at`) y
+`auth.users`, al que apuntan 9 foreign keys con `ON DELETE SET NULL`.
 
 ## Módulos habilitados
 

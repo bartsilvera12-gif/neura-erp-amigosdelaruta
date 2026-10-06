@@ -13,11 +13,11 @@
 --   · NO copia ni una fila de datos.
 --   · NO toca `neura`, `public`, `auth`, `storage` ni ningún otro schema. Solo
 --     los LEE del catálogo. Lo único que escribe es dentro de `amigosdelarutaerp`.
---   · NO crea las FK que desde `neura` apuntan a otros schemas (p. ej. a
---     `public.empresas`): una FK así instala un trigger de integridad sobre la
---     tabla referenciada, o sea escribiría en public. Si las querés igual,
---     poné `v_fk_cross_schema := true` más abajo, y revisá antes la salida 3
---     del script 00 para saber cuáles son.
+--   · NO toca `public`. Las 9 FK de `neura` que salen del schema apuntan todas
+--     a `auth.users`, no a `public`, y se replican (ver `v_fk_cross_schema`).
+--     Una FK instala un trigger de integridad sobre la tabla referenciada, así
+--     que esas 9 sí escriben en `auth.users`, que es infraestructura compartida
+--     de Supabase. Con el flag en false el schema no referencia nada afuera.
 --   · NO expone el schema en PostgREST (eso lo hacés aparte, como dijiste).
 --
 -- Cómo reescribe los nombres: `regexp_replace(def, '\mneura\M', ...)`. `\m` y
@@ -55,8 +55,22 @@ DECLARE
   v_src  text := 'neura';
   v_dst  text := 'amigosdelarutaerp';
 
-  -- Ver la nota sobre FK cross-schema en la cabecera.
-  v_fk_cross_schema boolean := false;
+  -- FK que apuntan fuera del schema. En `neura` son 9 y TODAS van a
+  -- `auth.users(id) ON DELETE SET NULL` (verificado contra las migraciones:
+  -- usuarios.auth_user_id, pagos.usuario_id, clientes.created_by_user_id,
+  -- clientes.deleted_by_user_id, clientes.baja_operativa_by_user_id,
+  -- marketing_tasks.responsable_user_id, nota_credito.created_by_user_id,
+  -- nota_credito_evento.actor_user_id, cliente_historial.creado_por_auth_user_id).
+  -- Ninguna va a `public`.
+  --
+  -- Se crean, igual que en `neura`: `auth.users` es infraestructura compartida
+  -- de Supabase y ya tiene FK de todas las instancias. Sin ellas el
+  -- ON DELETE SET NULL no dispara y borrar un usuario en Authentication deja
+  -- UUIDs huerfanos en esas 9 columnas.
+  --
+  -- Poner en false si el objetivo es que el schema no referencie NADA afuera.
+  -- Antes de hacerlo, mira la salida 3 del script 00.
+  v_fk_cross_schema boolean := true;
 
   v_src_oid oid;
   v_dst_oid oid;
@@ -538,7 +552,9 @@ BEGIN
   END LOOP;
 
   -- -------------------------------------------------------------------------
-  -- 7) Foreign keys internas del schema (y las cross-schema si se habilito).
+  -- 7) Foreign keys. Las internas se reescriben al schema destino; las que
+  --    salen afuera (las 9 a `auth.users`) se copian tal cual si
+  --    `v_fk_cross_schema` esta en true.
   -- -------------------------------------------------------------------------
   FOR r IN
     SELECT c.relname, k.conname, pg_get_constraintdef(k.oid) AS def,
@@ -786,9 +802,9 @@ $CLONE$;
 COMMIT;
 
 -- =============================================================================
--- Resumen: origen vs destino. Lo unico que deberia diferir son los
--- `constraints`, por las FK cross-schema que se omitieron a proposito (las ves
--- en la salida 3 del script 00).
+-- Resumen: origen vs destino. Con `v_fk_cross_schema` en true tienen que dar
+-- IGUAL en todo. Si `constraints` difiere, mira el diff de nombres de mas abajo
+-- para ver exactamente cual falta.
 -- =============================================================================
 WITH conteo AS (
   SELECT n.nspname AS schema, 'tablas' AS objeto, count(*) AS cantidad
@@ -854,10 +870,14 @@ SELECT objeto,
 -- reescribir. Esta consulta es la verificacion independiente de que no quedo
 -- ninguna fuga: si devuelve algo, es un caso que el paso 6 todavia no cubre.
 --
--- Si aparecen filas de tipo 'funcion' cuyo cuerpo menciona `neura` dentro de un
--- literal (p. ej. una migracion que itera schemas), revisalas pero puede estar
--- bien. Las de tipo 'check', 'indice' y 'columna generada' no: esas son
--- dependencias reales y rompen la independencia.
+-- Dos excepciones esperadas:
+--   · 'FK a otro schema': 9 filas hacia `auth.users`, iguales a las de `neura`
+--     (ver `v_fk_cross_schema`). Ninguna debe apuntar a `public` ni a otro
+--     schema de datos.
+--   · 'funcion' cuyo cuerpo menciona `neura` dentro de un literal (p. ej. una
+--     migracion que itera schemas): revisalas, pero puede estar bien.
+-- Las de tipo 'check', 'indice', 'default' y 'columna generada' no tienen
+-- excusa: son dependencias reales y rompen la independencia.
 -- =============================================================================
 SELECT 'check' AS tipo, c.relname AS objeto, k.conname AS detalle,
        pg_get_constraintdef(k.oid) AS definicion
@@ -933,10 +953,9 @@ SELECT 'FK a otro schema', c.relname, k.conname, pg_get_constraintdef(k.oid)
 -- =============================================================================
 -- Diff de NOMBRES de constraints e indices, origen vs destino.
 --
--- Lo esperado: solo filas 'falta en el nuevo' de tipo FK, y solo las que apuntan
--- a otro schema (`auth.users`), que el paso 7 omite a proposito. El paso 4b se
--- encarga de devolverle el nombre original a todo PK/UNIQUE/CHECK e indice que
--- `LIKE INCLUDING ALL` haya renombrado.
+-- Lo esperado con `v_fk_cross_schema` en true: CERO FILAS. El paso 4b le devuelve
+-- el nombre original a todo PK/UNIQUE/CHECK e indice que `LIKE INCLUDING ALL`
+-- haya renombrado, y el paso 7 crea todas las FK.
 --
 -- Si aparece un UNIQUE o un indice con nombre auto-generado del estilo
 -- `tabla_col1_col2_key`, es que 4b no lo pudo emparejar: pasalo y lo vemos.
