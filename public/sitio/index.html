@@ -1,0 +1,1280 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Amigos de la Ruta</title>
+<link rel="icon" href="/sitio/assets/adr-emblema.jpeg" />
+<script src="/sitio/support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
+<link href="https://fonts.googleapis.com/css2?family=Roboto+Condensed:ital,wght@0,400;0,500;0,700;1,400&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: #0B0A0A; color: #E2E3E3; font-family: "Roboto Condensed", Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+  * { box-sizing: border-box; }
+  a { color: #D7C80B; text-decoration: none; }
+  a:hover { color: #E2E3E3; }
+  input, select { font-family: inherit; }
+  ::selection { background: #D7C80B; color: #0B0A0A; }
+  @keyframes adrPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+  @keyframes adrMarquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+  @keyframes adrSlideA { from { opacity: 0; transform: translateY(26px); } to { opacity: 1; transform: none; } }
+  @keyframes adrSlideB { from { opacity: 0; transform: translateY(26px); } to { opacity: 1; transform: none; } }
+  @keyframes adrZoomA { from { opacity: 0; transform: scale(1.06); } to { opacity: 1; transform: scale(1); } }
+  @keyframes adrZoomB { from { opacity: 0; transform: scale(1.06); } to { opacity: 1; transform: scale(1); } }
+  @keyframes adrViewA { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+  @keyframes adrViewB { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+  @keyframes adrSlideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+  @keyframes adrFadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes adrPopIn { from { opacity: 0; transform: translateY(18px) scale(0.985); } to { opacity: 1; transform: none; } }
+</style>
+</helmet>
+
+<div style="background:#0B0A0A;min-height:100vh;overflow-x:hidden">
+
+  <div style="position:sticky;top:0;zIndex:50;background:rgba(11,10,10,0.94);backdropFilter:blur(10px);borderBottom:1px solid #201C1C">
+    <div style="maxWidth:1340px;margin:0 auto;padding:10px clamp(14px,2.4vw,24px);display:flex;align-items:center;gap:14px 22px;flexWrap:wrap">
+      <div onClick="{{ goHome }}" style="display:flex;align-items:center;gap:12px;flex-shrink:0;cursor:pointer">
+        <div style="width:clamp(42px,4.4vw,52px);height:clamp(42px,4.4vw,52px);borderRadius:12px;background:linear-gradient(160deg,#E2E3E3,#A6A7A7);display:flex;align-items:center;justify-content:center;border:1px solid #757676;flex-shrink:0;overflow:hidden">
+          <img src="/sitio/assets/adr-emblema.jpeg" alt="Amigos de Ruta" style="width:100%;height:100%;objectFit:contain;mixBlendMode:multiply" />
+        </div>
+        <div style="lineHeight:1">
+          <div style="font-size:clamp(15px,1.5vw,19px);font-weight:700;letterSpacing:0.06em;color:#E2E3E3;textTransform:uppercase">Amigos de Ruta</div>
+          <div style="font-size:11px;font-weight:700;letterSpacing:0.24em;color:#D7C80B;textTransform:uppercase;marginTop:4px">Encuentro Internacional</div>
+        </div>
+      </div>
+      <div style="flex:1;min-width:0"></div>
+      <div style="display:flex;align-items:center;gap:12px 22px;flexWrap:wrap;justify-content:flex-end">
+        <sc-for list="{{ nav }}" as="n" hint-placeholder-count="5">
+          <div onClick="{{ n.go }}" style="font-size:clamp(12px,1.1vw,14px);font-weight:700;letterSpacing:0.12em;textTransform:uppercase;color:{{ n.color }};cursor:pointer;paddingBottom:3px;borderBottom:2px solid {{ n.line }}" style-hover="color:#E2E3E3">{{ n.label }}</div>
+        </sc-for>
+        <div style="display:flex;border:1px solid #757676;borderRadius:999px;overflow:hidden">
+          <div onClick="{{ setEs }}" style="padding:7px 14px;font-size:12px;font-weight:700;letterSpacing:0.1em;cursor:pointer;background:{{ esBg }};color:{{ esFg }}">ES</div>
+          <div onClick="{{ setPt }}" style="padding:7px 14px;font-size:12px;font-weight:700;letterSpacing:0.1em;cursor:pointer;background:{{ ptBg }};color:{{ ptFg }}">PT</div>
+        </div>
+        <div onClick="{{ openCart }}" style="display:flex;align-items:center;gap:10px;padding:10px 20px;background:#D7C80B;color:#0B0A0A;borderRadius:999px;cursor:pointer;minHeight:44px" style-hover="background:#E2E3E3">
+          <span style="font-size:13px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase">{{ t.cart }}</span>
+          <span style="min-width:22px;height:22px;borderRadius:999px;background:#0B0A0A;color:#D7C80B;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 6px">{{ cartCount }}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="animation:{{ viewAnim }} 420ms cubic-bezier(.22,.8,.26,1) both">
+
+  <sc-if value="{{ isHome }}" hint-placeholder-val="{{ true }}">
+    <div>
+      <div style="position:relative;background:#0B0A0A;borderBottom:1px solid #201C1C;overflow:hidden">
+        <img src="https://images.pexels.com/photos/17095636/pexels-photo-17095636.png?auto=compress&cs=tinysrgb&w=1800" alt="Grupo de motociclistas en ruta" style="position:absolute;inset:0;width:100%;height:100%;objectFit:cover;filter:grayscale(0.25) contrast(1.05)" />
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(11,10,10,0.78) 0%,rgba(11,10,10,0.55) 42%,rgba(11,10,10,0.96) 100%)"></div>
+        <div style="position:relative;maxWidth:1340px;margin:0 auto;padding:0 clamp(16px,3vw,24px);min-height:min(78vh,700px);display:flex;flex-direction:column;justify-content:center">
+          <div style="padding:64px 0 0">
+            <div style="display:flex;align-items:center;gap:14px;flexWrap:wrap;marginBottom:24px">
+              <div style="display:inline-flex;align-items:center;gap:9px;padding:7px 13px;background:#D7C80B;borderRadius:999px">
+                <div style="width:6px;height:6px;borderRadius:50%;background:#0B0A0A;animation:adrPulse 1.8s ease-in-out infinite"></div>
+                <span style="font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;letterSpacing:0.2em;textTransform:uppercase;color:#0B0A0A">{{ t.heroKicker }}</span>
+              </div>
+              <span style="font-family:'JetBrains Mono',monospace;font-size:11px;letterSpacing:0.2em;textTransform:uppercase;color:#E2E3E3;textShadow:0 2px 12px rgba(0,0,0,0.9)">Agencia de viajes · Asunción, Paraguay</span>
+            </div>
+            <h1 style="margin:0;font-size:clamp(38px,6.4vw,92px);lineHeight:0.88;font-weight:700;textTransform:uppercase;letterSpacing:-0.025em;color:#E2E3E3;text-wrap:balance;textShadow:0 18px 60px rgba(0,0,0,0.55)">{{ t.heroTitle }}</h1>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:32px;align-items:end;marginTop:34px">
+              <p style="margin:0;max-width:480px;font-size:clamp(15px,1.2vw,17px);lineHeight:1.55;color:#C2C3C4;text-wrap:pretty;borderLeft:3px solid #D7C80B;paddingLeft:18px">{{ t.heroBody }}</p>
+              <div style="display:flex;gap:12px;flexWrap:wrap">
+                <div onClick="{{ goViajes }}" style="padding:17px 30px;background:#D7C80B;color:#0B0A0A;font-size:15px;font-weight:700;letterSpacing:0.16em;textTransform:uppercase;borderRadius:999px;cursor:pointer" style-hover="background:#E2E3E3">{{ t.heroCta1 }}</div>
+                <a href="#inscripcion" style="padding:17px 30px;border:1px solid #757676;color:#E2E3E3;font-size:15px;font-weight:700;letterSpacing:0.16em;textTransform:uppercase;borderRadius:999px;background:rgba(11,10,10,0.5)" style-hover="borderColor:#D7C80B;color:#D7C80B">{{ t.heroCta2 }}</a>
+              </div>
+            </div>
+            <div style="height:clamp(40px,6vw,76px)"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="eventos" style="maxWidth:1340px;margin:0 auto;padding:clamp(44px,7vw,84px) clamp(16px,3vw,24px)">
+        <div style="display:flex;align-items:flex-end;gap:32px;flexWrap:wrap;marginBottom:36px">
+          <div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letterSpacing:0.24em;textTransform:uppercase;color:#D7C80B">{{ t.navEvents }}</div>
+            <h2 style="margin:12px 0 0;font-size:clamp(32px,4.4vw,50px);lineHeight:1;font-weight:700;textTransform:uppercase;color:#E2E3E3">{{ t.eventsTitle }}</h2>
+          </div>
+          <div style="flex:1;min-width:240px">
+            <p style="margin:0;font-size:17px;lineHeight:1.5;color:#A6A7A7;text-wrap:pretty">{{ t.eventsBody }}</p>
+          </div>
+          <div onClick="{{ goViajes }}" style="padding:14px 26px;border:1px solid #757676;color:#E2E3E3;font-size:13px;font-weight:700;letterSpacing:0.16em;textTransform:uppercase;borderRadius:999px;whiteSpace:nowrap;cursor:pointer" style-hover="background:#D7C80B;color:#0B0A0A;borderColor:#D7C80B">{{ t.ctaAll }}</div>
+        </div>
+
+        <div style="position:relative;border:1px solid #201C1C;borderRadius:18px;overflow:hidden;background:#141212">
+          <div style="position:relative;min-height:clamp(300px,46vw,540px);background:#141212;display:flex;align-items:center;justify-content:center;overflow:hidden">
+            <sc-if value="{{ active.img }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute;inset:0;background-image:url({{ active.img }});background-size:cover;background-position:center;animation:{{ active.zoomAnim }} 900ms cubic-bezier(.22,.8,.26,1) both"></div>
+            </sc-if>
+            <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(11,10,10,0.35) 0%,rgba(11,10,10,0.1) 35%,rgba(11,10,10,0.92) 100%)"></div>
+            <div style="position:absolute;top:22px;left:22px;padding:6px 12px;animation:{{ active.anim }} 520ms cubic-bezier(.22,.8,.26,1) both;background:#D7C80B;color:#0B0A0A;font-size:11px;font-weight:700;letterSpacing:0.16em;textTransform:uppercase;borderRadius:999px">{{ active.badge }}</div>
+            <div style="position:absolute;left:0;right:0;bottom:0;padding:0 clamp(22px,3vw,38px) 34px;display:flex;align-items:flex-end;gap:32px;flexWrap:wrap">
+              <div style="flex:1;min-width:260px;animation:{{ active.anim }} 620ms cubic-bezier(.22,.8,.26,1) both">
+                <div style="font-family:'JetBrains Mono',monospace;font-size:11px;letterSpacing:0.2em;textTransform:uppercase;color:#D7C80B">{{ active.country }}</div>
+                <h3 style="margin:10px 0 0;font-size:clamp(34px,5.4vw,66px);lineHeight:0.92;font-weight:700;textTransform:uppercase;color:#E2E3E3">{{ active.name }}</h3>
+                <div style="display:flex;gap:28px;flexWrap:wrap;marginTop:20px">
+                  <div>
+                    <div style="font-size:11px;font-weight:700;letterSpacing:0.16em;textTransform:uppercase;color:#757676">{{ t.labelDates }}</div>
+                    <div style="font-size:17px;font-weight:700;color:#C2C3C4;marginTop:4px">{{ active.dates }}</div>
+                  </div>
+                  <div>
+                    <div style="font-size:11px;font-weight:700;letterSpacing:0.16em;textTransform:uppercase;color:#757676">{{ t.labelDuration }}</div>
+                    <div style="font-size:17px;font-weight:700;color:#C2C3C4;marginTop:4px">{{ active.duration }}</div>
+                  </div>
+                  <div>
+                    <div style="font-size:11px;font-weight:700;letterSpacing:0.16em;textTransform:uppercase;color:#757676">{{ t.labelFrom }}</div>
+                    <div style="font-size:17px;font-weight:700;color:#D7C80B;marginTop:4px">{{ active.price }}</div>
+                  </div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;gap:18px;flexWrap:wrap;animation:{{ active.anim }} 720ms cubic-bezier(.22,.8,.26,1) both">
+                <div style="font-size:14px;color:#A6A7A7">{{ active.spots }}</div>
+                <a href="#ruta66" style="padding:15px 26px;background:#D7C80B;color:#0B0A0A;font-size:13px;font-weight:700;letterSpacing:0.16em;textTransform:uppercase;borderRadius:999px" style-hover="background:#E2E3E3">{{ t.ctaDetail }}</a>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;overflow-x:auto;borderTop:1px solid #201C1C;background:#0B0A0A">
+            <sc-for list="{{ tabs }}" as="tb" hint-placeholder-count="5">
+              <div onClick="{{ tb.go }}" style="position:relative;flex:1 1 0;min-width:132px;padding:16px 16px 18px;background:#0B0A0A;borderRight:1px solid #201C1C;cursor:pointer;overflow:hidden;min-height:84px" style-hover="background:#141212">
+                <div style="position:absolute;top:0;left:0;height:3px;background:#D7C80B;transition:width 110ms linear;width:{{ tb.fill }}"></div>
+                <div style="font-size:15px;font-weight:700;letterSpacing:0.08em;textTransform:uppercase;color:{{ tb.nameFg }}">{{ tb.name }}</div>
+                <div style="font-size:13px;color:#757676;marginTop:6px">{{ tb.meta }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+
+      <div id="ruta66" style="background:#141212;borderTop:1px solid #201C1C;borderBottom:1px solid #201C1C">
+        <div style="maxWidth:1340px;margin:0 auto;padding:clamp(44px,7vw,84px) clamp(16px,3vw,24px)">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:40px;align-items:end;paddingBottom:34px;borderBottom:1px solid #201C1C">
+            <div>
+              <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letterSpacing:0.24em;textTransform:uppercase;color:#D7C80B">{{ t.navTour }}</div>
+              <h2 style="margin:12px 0 0;font-size:clamp(38px,5vw,58px);lineHeight:0.95;font-weight:700;textTransform:uppercase;color:#E2E3E3">Route 66</h2>
+              <p style="margin:18px 0 0;max-width:540px;font-size:17px;lineHeight:1.55;color:#A6A7A7;text-wrap:pretty">{{ t.tourBody }}</p>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,140px),1fr));gap:24px">
+              <sc-for list="{{ tourSpecs }}" as="sp" hint-placeholder-count="3">
+                <div>
+                  <div style="font-size:11px;font-weight:700;letterSpacing:0.18em;textTransform:uppercase;color:#757676">{{ sp.label }}</div>
+                  <div style="font-size:20px;font-weight:700;color:#E2E3E3;marginTop:6px;lineHeight:1.2">{{ sp.value }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,400px),1fr));gap:34px;marginTop:44px;align-items:start">
+            <div style="position:relative;height:100%;min-height:clamp(240px,34vw,360px);border:1px solid #201C1C;borderRadius:18px;overflow:hidden">
+              <img src="https://images.pexels.com/photos/2177200/pexels-photo-2177200.jpeg?auto=compress&cs=tinysrgb&w=1400" alt="Route 66" style="position:absolute;inset:0;width:100%;height:100%;objectFit:cover;objectPosition:50% 55%" />
+              <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(11,10,10,0.05),rgba(11,10,10,0.6))"></div>
+              <div style="position:absolute;left:22px;right:22px;bottom:20px;font-family:'JetBrains Mono',monospace;font-size:11px;letterSpacing:0.16em;textTransform:uppercase;color:#C2C3C4">Chicago → Santa Monica · 3.940 km</div>
+            </div>
+
+            <div style="border:1px solid #201C1C;borderRadius:18px;background:#0B0A0A;overflow:hidden">
+              <div style="display:flex;borderBottom:1px solid #201C1C">
+                <sc-for list="{{ tourTabs }}" as="tt" hint-placeholder-count="3">
+                  <div onClick="{{ tt.go }}" style="flex:1 1 0;padding:16px 14px;text-align:center;font-size:12px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase;cursor:pointer;borderRight:1px solid #201C1C;borderBottom:2px solid {{ tt.line }};background:{{ tt.bg }};color:{{ tt.fg }};min-height:52px">{{ tt.label }}</div>
+                </sc-for>
+              </div>
+              <sc-if value="{{ showItinerary }}" hint-placeholder-val="{{ true }}">
+                <div style="padding:8px 24px 22px">
+                  <sc-for list="{{ itinerary }}" as="it" hint-placeholder-count="6">
+                    <div style="display:grid;grid-template-columns:18px minmax(0,1fr);gap:16px;padding:16px 0;borderBottom:1px solid #1a1717">
+                      <div style="display:flex;flex-direction:column;align-items:center;gap:6px;paddingTop:5px">
+                        <div style="width:9px;height:9px;borderRadius:50%;background:#D7C80B"></div>
+                        <div style="flex:1;width:1px;background:#2c2929"></div>
+                      </div>
+                      <div>
+                        <div style="font-family:'JetBrains Mono',monospace;font-size:11px;letterSpacing:0.16em;textTransform:uppercase;color:#757676">{{ it.day }}</div>
+                        <div style="font-size:18px;font-weight:700;textTransform:uppercase;color:#E2E3E3;marginTop:4px">{{ it.place }}</div>
+                        <div style="font-size:15px;color:#A6A7A7;marginTop:4px;text-wrap:pretty">{{ it.note }}</div>
+                      </div>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+              <sc-if value="{{ showIncludes }}" hint-placeholder-val="{{ false }}">
+                <div style="padding:14px 24px 24px">
+                  <sc-for list="{{ includes }}" as="i" hint-placeholder-count="6">
+                    <div style="display:flex;gap:12px;padding:12px 0;font-size:16px;color:#C2C3C4;borderBottom:1px solid #1a1717">
+                      <span style="color:#D7C80B;font-weight:700">+</span><span>{{ i.text }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+              <sc-if value="{{ showExcludes }}" hint-placeholder-val="{{ false }}">
+                <div style="padding:14px 24px 24px">
+                  <sc-for list="{{ excludes }}" as="i" hint-placeholder-count="4">
+                    <div style="display:flex;gap:12px;padding:12px 0;font-size:16px;color:#757676;borderBottom:1px solid #1a1717">
+                      <span style="font-weight:700">−</span><span>{{ i.text }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </div>
+
+          <h3 style="margin:52px 0 18px;font-size:14px;font-weight:700;letterSpacing:0.2em;textTransform:uppercase;color:#D7C80B">{{ t.departuresTitle }}</h3>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:16px">
+            <sc-for list="{{ departures }}" as="d" hint-placeholder-count="3">
+              <div style="padding:20px;background:#0B0A0A;border:1px solid #201C1C;borderRadius:18px">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flexWrap:wrap">
+                  <div style="font-size:22px;font-weight:700;color:#E2E3E3">{{ d.date }}</div>
+                  <div style="padding:4px 11px;borderRadius:999px;font-size:10px;font-weight:700;letterSpacing:0.12em;textTransform:uppercase;background:{{ d.stateBg }};color:{{ d.stateFg }}">{{ d.state }}</div>
+                </div>
+                <div style="font-size:13px;color:#757676;marginTop:8px">{{ d.lang }}</div>
+                <div style="height:4px;background:#201C1C;borderRadius:999px;marginTop:16px;overflow:hidden">
+                  <div style="height:100%;background:#D7C80B;width:{{ d.fill }}"></div>
+                </div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#A6A7A7;marginTop:8px">{{ d.spots }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <h3 style="margin:52px 0 18px;font-size:14px;font-weight:700;letterSpacing:0.2em;textTransform:uppercase;color:#D7C80B">{{ t.packagesTitle }}</h3>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:16px">
+            <sc-for list="{{ packages }}" as="p" hint-placeholder-count="3">
+              <div style="padding:24px;background:#0B0A0A;border:1px solid #201C1C;borderRadius:18px;display:flex;flex-direction:column;gap:10px" style-hover="borderColor:#757676">
+                <div style="font-size:19px;font-weight:700;textTransform:uppercase;color:#E2E3E3;lineHeight:1.1">{{ p.name }}</div>
+                <div style="font-size:15px;color:#A6A7A7;text-wrap:pretty">{{ p.detail }}</div>
+                <div style="font-size:30px;font-weight:700;color:#D7C80B;marginTop:4px">{{ p.price }}</div>
+                <div style="flex:1"></div>
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;marginTop:12px;paddingTop:16px;borderTop:1px solid #201C1C">
+                  <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#757676">{{ p.spots }}</div>
+                  <a href="#inscripcion" style="font-size:12px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase;color:#D7C80B">{{ t.ctaSelect }} →</a>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="marginTop:28px;padding:clamp(20px,3vw,26px) clamp(20px,3vw,30px);background:#D7C80B;borderRadius:18px;display:flex;align-items:center;gap:28px;flexWrap:wrap">
+            <div>
+              <div style="font-size:12px;font-weight:700;letterSpacing:0.16em;textTransform:uppercase;color:#0B0A0A;opacity:0.72">{{ t.depositLabel }}</div>
+              <div style="font-size:34px;font-weight:700;color:#0B0A0A;lineHeight:1.1;marginTop:4px">USD 1.500</div>
+            </div>
+            <div style="flex:1;min-width:220px;font-size:15px;color:#0B0A0A;opacity:0.84;text-wrap:pretty">{{ t.depositNote }}</div>
+            <a href="#inscripcion" style="padding:16px 28px;background:#0B0A0A;color:#D7C80B;font-size:13px;font-weight:700;letterSpacing:0.16em;textTransform:uppercase;borderRadius:999px" style-hover="background:#201C1C">{{ t.ctaJoin }}</a>
+          </div>
+        </div>
+      </div>
+
+      <div id="inscripcion" style="maxWidth:1340px;margin:0 auto;padding:clamp(44px,7vw,84px) clamp(16px,3vw,24px)">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letterSpacing:0.24em;textTransform:uppercase;color:#D7C80B">{{ t.navSignup }}</div>
+        <h2 style="margin:12px 0 0;font-size:clamp(32px,4.4vw,50px);lineHeight:1;font-weight:700;textTransform:uppercase;color:#E2E3E3">{{ t.signupTitle }}</h2>
+        <p style="margin:18px 0 0;max-width:720px;font-size:18px;lineHeight:1.55;color:#A6A7A7;text-wrap:pretty">{{ t.signupBody }}</p>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:2px;marginTop:40px">
+          <sc-for list="{{ steps }}" as="s" hint-placeholder-count="4">
+            <div style="padding:clamp(20px,3vw,26px) clamp(18px,2.6vw,22px);background:#141212;border:1px solid #201C1C">
+              <div style="display:flex;align-items:center;gap:12px">
+                <span style="font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;letterSpacing:0.12em;color:#D7C80B">{{ s.n }}</span>
+                <span style="width:28px;height:2px;background:#D7C80B"></span>
+              </div>
+              <div style="font-size:19px;font-weight:700;textTransform:uppercase;color:#E2E3E3;marginTop:16px">{{ s.title }}</div>
+              <div style="font-size:15px;lineHeight:1.5;color:#A6A7A7;marginTop:8px;text-wrap:pretty">{{ s.body }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:24px;marginTop:44px">
+          <div style="padding:clamp(20px,3vw,30px);background:#141212;border:1px solid #201C1C;borderRadius:18px">
+            <h3 style="margin:0 0 22px;font-size:15px;font-weight:700;letterSpacing:0.2em;textTransform:uppercase;color:#D7C80B">{{ t.formTitle }}</h3>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:18px">
+              <div>
+                <div style="font-size:12px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase;color:#757676;marginBottom:7px">{{ t.fName }}</div>
+                <div style="padding:13px 14px;background:#0B0A0A;border:1px solid #201C1C;borderRadius:10px;font-size:16px;color:#E2E3E3">Carlos Benítez</div>
+              </div>
+              <div>
+                <div style="font-size:12px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase;color:#757676;marginBottom:7px">{{ t.fDoc }}</div>
+                <div style="padding:13px 14px;background:#0B0A0A;border:1px solid #201C1C;borderRadius:10px;font-size:16px;color:#E2E3E3">PY · 3.482.109</div>
+              </div>
+              <div>
+                <div style="font-size:12px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase;color:#757676;marginBottom:7px">{{ t.fRole }}</div>
+                <div style="padding:13px 14px;background:#0B0A0A;border:1px solid #201C1C;borderRadius:10px;font-size:16px;color:#E2E3E3">{{ t.fRoleVal }}</div>
+              </div>
+              <div>
+                <div style="font-size:12px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase;color:#757676;marginBottom:7px">{{ t.fLicense }}</div>
+                <div style="padding:13px 14px;background:#0B0A0A;border:1px solid #201C1C;borderRadius:10px;font-size:16px;color:#E2E3E3">A2 · 11/2029</div>
+              </div>
+            </div>
+            <div style="marginTop:26px">
+              <div style="font-size:12px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase;color:#757676;marginBottom:10px">{{ t.fShirt }}</div>
+              <div style="display:flex;gap:8px;flexWrap:wrap">
+                <sc-for list="{{ shirtSizes }}" as="sz" hint-placeholder-count="5">
+                  <div onClick="{{ sz.pick }}" style="min-width:52px;min-height:46px;display:flex;align-items:center;justify-content:center;border:1px solid {{ sz.border }};background:{{ sz.bg }};color:{{ sz.fg }};borderRadius:10px;font-size:15px;font-weight:700;cursor:pointer">{{ sz.label }}</div>
+                </sc-for>
+              </div>
+            </div>
+            <div style="marginTop:26px">
+              <div style="font-size:12px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase;color:#757676;marginBottom:10px">{{ t.fPay }}</div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
+                <sc-for list="{{ payments }}" as="pm" hint-placeholder-count="3">
+                  <div onClick="{{ pm.pick }}" style="padding:16px;border:1px solid {{ pm.border }};background:{{ pm.bg }};borderRadius:12px;cursor:pointer;min-height:76px">
+                    <div style="font-size:16px;font-weight:700;textTransform:uppercase;color:{{ pm.fg }}">{{ pm.label }}</div>
+                    <div style="font-size:13px;color:#757676;marginTop:5px">{{ pm.note }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:16px;flexWrap:wrap;marginTop:30px;paddingTop:24px;borderTop:1px solid #201C1C">
+              <div style="padding:16px 30px;background:#D7C80B;color:#0B0A0A;font-size:15px;font-weight:700;letterSpacing:0.16em;textTransform:uppercase;borderRadius:999px;cursor:pointer" style-hover="background:#E2E3E3">{{ t.ctaPay }}</div>
+              <div style="font-size:14px;color:#757676;max-width:280px;text-wrap:pretty">{{ t.payNote }}</div>
+            </div>
+          </div>
+
+          <div style="padding:clamp(20px,3vw,30px);background:#141212;border:1px solid #201C1C;borderRadius:18px;display:flex;flex-direction:column;gap:16px">
+            <h3 style="margin:0;font-size:15px;font-weight:700;letterSpacing:0.2em;textTransform:uppercase;color:#D7C80B">{{ t.summaryTitle }}</h3>
+            <sc-for list="{{ summary }}" as="s" hint-placeholder-count="5">
+              <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;paddingBottom:12px;borderBottom:1px solid #201C1C">
+                <div style="font-size:15px;color:#A6A7A7">{{ s.k }}</div>
+                <div style="font-size:16px;font-weight:700;color:#E2E3E3;text-align:right">{{ s.v }}</div>
+              </div>
+            </sc-for>
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px;marginTop:4px">
+              <div style="font-size:13px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase;color:#757676">{{ t.balance }}</div>
+              <div style="font-size:32px;font-weight:700;color:#D7C80B">USD 6.400</div>
+            </div>
+            <div style="height:6px;background:#201C1C;borderRadius:999px;overflow:hidden">
+              <div style="height:100%;width:19%;background:#D7C80B"></div>
+            </div>
+            <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#757676">{{ t.paidNote }}</div>
+            <div style="flex:1"></div>
+            <div style="padding:16px;background:#0B0A0A;border:1px solid #201C1C;borderRadius:12px">
+              <div style="font-size:13px;lineHeight:1.5;color:#A6A7A7;text-wrap:pretty">{{ t.kitNote }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="background:#141212;borderTop:1px solid #201C1C;borderBottom:1px solid #201C1C">
+        <div style="maxWidth:1340px;margin:0 auto;padding:clamp(44px,7vw,84px) clamp(16px,3vw,24px)">
+          <div style="display:flex;align-items:flex-end;gap:32px;flexWrap:wrap;marginBottom:34px">
+            <div>
+              <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letterSpacing:0.24em;textTransform:uppercase;color:#D7C80B">{{ t.navStore }}</div>
+              <h2 style="margin:12px 0 0;font-size:clamp(32px,4.4vw,50px);lineHeight:1;font-weight:700;textTransform:uppercase;color:#E2E3E3">{{ t.storeTitle }}</h2>
+            </div>
+            <div style="flex:1;min-width:240px">
+              <p style="margin:0;font-size:17px;lineHeight:1.5;color:#A6A7A7;text-wrap:pretty">{{ t.storeBody }}</p>
+            </div>
+            <div onClick="{{ goTienda }}" style="padding:14px 26px;border:1px solid #757676;color:#E2E3E3;font-size:13px;font-weight:700;letterSpacing:0.16em;textTransform:uppercase;borderRadius:999px;whiteSpace:nowrap;cursor:pointer" style-hover="background:#D7C80B;color:#0B0A0A;borderColor:#D7C80B">{{ t.ctaStoreAll }}</div>
+          </div>
+
+          <div style="overflow:hidden">
+            <div style="display:flex;gap:20px;transition:{{ storeTrans }};transform:translateX({{ storeShift }})">
+              <sc-for list="{{ carouselProducts }}" as="p" hint-placeholder-count="4">
+                <div onClick="{{ p.open }}" style="flex:0 0 clamp(230px,26vw,290px);background:#0B0A0A;border:1px solid #201C1C;borderRadius:18px;overflow:hidden;display:flex;flex-direction:column;cursor:pointer" style-hover="borderColor:#757676">
+                  <div style="height:230px;position:relative;overflow:hidden;background:#141212">
+                    <sc-if value="{{ p.img }}" hint-placeholder-val="{{ false }}">
+                      <div style="position:absolute;inset:0;background-image:url({{ p.img }});background-size:cover;background-position:center"></div>
+                    </sc-if>
+                  </div>
+                  <div style="padding:20px;display:flex;flex-direction:column;gap:10px;flex:1">
+                    <div style="font-size:20px;font-weight:700;textTransform:uppercase;color:#E2E3E3;lineHeight:1.1">{{ p.name }}</div>
+                    <div style="font-size:14px;color:#757676">{{ p.variants }}</div>
+                    <div style="flex:1"></div>
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+                      <div style="font-size:23px;font-weight:700;color:#D7C80B">{{ p.price }}</div>
+                      <div style="font-size:12px;font-weight:700;letterSpacing:0.12em;textTransform:uppercase;color:#C2C3C4">{{ t.ctaView }} →</div>
+                    </div>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:16px;marginTop:24px;flexWrap:wrap">
+            <div style="display:flex;gap:10px">
+              <div onClick="{{ storePrev }}" style="width:46px;height:46px;borderRadius:999px;border:1px solid #2c2929;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#C2C3C4;font-size:18px" style-hover="borderColor:#D7C80B;color:#D7C80B;background:#0B0A0A">←</div>
+              <div onClick="{{ storeNext }}" style="width:46px;height:46px;borderRadius:999px;border:1px solid #2c2929;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#C2C3C4;font-size:18px" style-hover="borderColor:#D7C80B;color:#D7C80B;background:#0B0A0A">→</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <sc-for list="{{ storeDots }}" as="d" hint-placeholder-count="4">
+                <div onClick="{{ d.go }}" style="width:{{ d.w }};height:6px;borderRadius:999px;background:{{ d.bg }};cursor:pointer;transition:width 300ms ease,background 300ms ease"></div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isViajes }}" hint-placeholder-val="{{ false }}">
+    <div>
+      <div style="position:relative;overflow:hidden;borderBottom:1px solid #201C1C">
+        <img src="https://images.pexels.com/photos/17095636/pexels-photo-17095636.png?auto=compress&cs=tinysrgb&w=1800" alt="" style="position:absolute;inset:0;width:100%;height:100%;objectFit:cover;filter:grayscale(0.3)" />
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(11,10,10,0.72),rgba(11,10,10,0.96))"></div>
+        <div style="position:relative;maxWidth:1340px;margin:0 auto;padding:clamp(36px,5vw,64px) clamp(16px,3vw,24px) clamp(32px,4.5vw,56px)">
+          <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letterSpacing:0.24em;textTransform:uppercase;color:#D7C80B">{{ t.navEvents }}</div>
+          <h1 style="margin:14px 0 0;font-size:clamp(36px,5.4vw,70px);lineHeight:0.9;font-weight:700;textTransform:uppercase;color:#E2E3E3">{{ t.tripsTitle }}</h1>
+          <p style="margin:18px 0 0;max-width:600px;font-size:17px;lineHeight:1.55;color:#C2C3C4;text-wrap:pretty;borderLeft:3px solid #D7C80B;paddingLeft:18px">{{ t.tripsBody }}</p>
+        </div>
+      </div>
+
+      <div style="maxWidth:1340px;margin:0 auto;padding:clamp(26px,4vw,40px) clamp(16px,3vw,24px) clamp(48px,7vw,84px)">
+        <div style="display:flex;gap:10px;flexWrap:wrap;marginBottom:28px">
+          <sc-for list="{{ tripFilters }}" as="fl" hint-placeholder-count="4">
+            <div onClick="{{ fl.go }}" style="padding:11px 20px;borderRadius:999px;border:1px solid {{ fl.border }};background:{{ fl.bg }};color:{{ fl.fg }};font-size:13px;font-weight:700;letterSpacing:0.12em;textTransform:uppercase;cursor:pointer;min-height:44px;display:flex;align-items:center">{{ fl.label }}</div>
+          </sc-for>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:18px">
+          <sc-for list="{{ tripCards }}" as="ev" hint-placeholder-count="6">
+            <div style="background:#141212;border:1px solid #201C1C;borderRadius:18px;overflow:hidden;display:flex;flex-direction:column" style-hover="borderColor:#757676">
+              <div style="position:relative;height:210px;overflow:hidden">
+                <sc-if value="{{ ev.img }}" hint-placeholder-val="{{ false }}">
+                  <div style="position:absolute;inset:0;background-image:url({{ ev.img }});background-size:cover;background-position:center"></div>
+                </sc-if>
+                <div style="position:absolute;top:14px;left:14px;padding:6px 12px;background:#D7C80B;color:#0B0A0A;font-size:11px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase;borderRadius:999px">{{ ev.badge }}</div>
+              </div>
+              <div style="padding:24px;display:flex;flex-direction:column;gap:14px;flex:1">
+                <div>
+                  <div style="font-family:'JetBrains Mono',monospace;font-size:11px;letterSpacing:0.18em;textTransform:uppercase;color:#D7C80B">{{ ev.country }}</div>
+                  <h3 style="margin:8px 0 0;font-size:27px;lineHeight:1.05;font-weight:700;textTransform:uppercase;color:#E2E3E3">{{ ev.name }}</h3>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;borderTop:1px solid #201C1C;borderBottom:1px solid #201C1C;padding:14px 0">
+                  <div>
+                    <div style="font-size:11px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase;color:#757676">{{ t.labelDates }}</div>
+                    <div style="font-size:15px;font-weight:700;color:#C2C3C4;marginTop:3px">{{ ev.dates }}</div>
+                  </div>
+                  <div>
+                    <div style="font-size:11px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase;color:#757676">{{ t.labelDuration }}</div>
+                    <div style="font-size:15px;font-weight:700;color:#C2C3C4;marginTop:3px">{{ ev.duration }}</div>
+                  </div>
+                </div>
+                <div style="flex:1"></div>
+                <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flexWrap:wrap">
+                  <div>
+                    <div style="font-size:11px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase;color:#757676">{{ t.labelFrom }}</div>
+                    <div style="font-size:26px;font-weight:700;color:#D7C80B;lineHeight:1.1">{{ ev.price }}</div>
+                  </div>
+                  <div onClick="{{ ev.go }}" style="padding:12px 20px;border:1px solid #757676;color:#E2E3E3;font-size:12px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase;borderRadius:999px;cursor:pointer" style-hover="background:#D7C80B;color:#0B0A0A;borderColor:#D7C80B">{{ t.ctaDetail }}</div>
+                </div>
+                <div style="font-size:13px;color:#757676">{{ ev.spots }}</div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="marginTop:32px;padding:clamp(20px,3vw,28px) clamp(20px,3vw,30px);background:#141212;border:1px solid #201C1C;borderRadius:18px;display:flex;align-items:center;gap:26px;flexWrap:wrap">
+          <div style="flex:1;min-width:240px">
+            <div style="font-size:22px;font-weight:700;textTransform:uppercase;color:#E2E3E3">{{ t.customTitle }}</div>
+            <div style="font-size:16px;color:#A6A7A7;marginTop:6px;text-wrap:pretty">{{ t.customBody }}</div>
+          </div>
+          <div onClick="{{ goContact }}" style="padding:15px 28px;background:#D7C80B;color:#0B0A0A;font-size:13px;font-weight:700;letterSpacing:0.16em;textTransform:uppercase;borderRadius:999px;cursor:pointer" style-hover="background:#E2E3E3">{{ t.ctaContact }}</div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isTienda }}" hint-placeholder-val="{{ false }}">
+    <div>
+      <div style="position:relative;overflow:hidden;borderBottom:1px solid #201C1C">
+        <div style="position:absolute;inset:0;background:repeating-linear-gradient(135deg,#232020 0px,#232020 7px,#171515 7px,#171515 16px)"></div>
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(11,10,10,0.7),rgba(11,10,10,0.96))"></div>
+        <div style="position:relative;maxWidth:1340px;margin:0 auto;padding:clamp(34px,5vw,56px) clamp(16px,3vw,24px) clamp(28px,4vw,48px)">
+          <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letterSpacing:0.24em;textTransform:uppercase;color:#D7C80B">{{ t.navStore }}</div>
+          <h1 style="margin:14px 0 0;font-size:clamp(36px,5.4vw,70px);lineHeight:0.9;font-weight:700;textTransform:uppercase;color:#E2E3E3">{{ t.shopTitle }}</h1>
+          <p style="margin:18px 0 0;max-width:580px;font-size:17px;lineHeight:1.55;color:#C2C3C4;text-wrap:pretty;borderLeft:3px solid #D7C80B;paddingLeft:18px">{{ t.shopBody }}</p>
+        </div>
+      </div>
+
+      <div style="maxWidth:1340px;margin:0 auto;padding:clamp(22px,3.5vw,32px) clamp(16px,3vw,24px) clamp(46px,7vw,80px);display:flex;flex-wrap:wrap;gap:34px;align-items:flex-start">
+        <div style="order:1;flex:1 1 230px;max-width:320px;min-width:0">
+          <div style="position:sticky;top:104px;display:flex;flex-direction:column;gap:22px">
+            <div>
+              <div style="font-size:12px;font-weight:700;letterSpacing:0.2em;textTransform:uppercase;color:#D7C80B;marginBottom:12px">{{ t.fCategory }}</div>
+              <div style="display:flex;flex-direction:column;gap:2px">
+                <sc-for list="{{ shopCats }}" as="c" hint-placeholder-count="5">
+                  <div onClick="{{ c.go }}" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 14px;borderRadius:12px;background:{{ c.bg }};color:{{ c.fg }};font-size:15px;font-weight:700;cursor:pointer;min-height:44px" style-hover="background:#201C1C;color:#D7C80B">
+                    <span>{{ c.label }}</span>
+                    <span style="font-family:'JetBrains Mono',monospace;font-size:12px;opacity:0.7">{{ c.n }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <div>
+              <div style="font-size:12px;font-weight:700;letterSpacing:0.2em;textTransform:uppercase;color:#D7C80B;marginBottom:12px">{{ t.fSize }}</div>
+              <div style="display:flex;gap:8px;flexWrap:wrap">
+                <sc-for list="{{ shopSizes }}" as="z" hint-placeholder-count="6">
+                  <div onClick="{{ z.go }}" style="min-width:50px;min-height:44px;padding:0 12px;display:flex;align-items:center;justify-content:center;border:1px solid {{ z.border }};background:{{ z.bg }};color:{{ z.fg }};borderRadius:10px;font-size:14px;font-weight:700;cursor:pointer">{{ z.label }}</div>
+                </sc-for>
+              </div>
+            </div>
+            <div>
+              <div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;marginBottom:12px">
+                <div style="font-size:12px;font-weight:700;letterSpacing:0.2em;textTransform:uppercase;color:#D7C80B">{{ t.fPrice }}</div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:12px;color:#C2C3C4">≤ USD {{ maxPrice }}</div>
+              </div>
+              <input type="range" min="10" max="120" step="2" value="{{ maxPrice }}" onChange="{{ onPrice }}" style="width:100%;accentColor:#D7C80B;cursor:pointer" />
+            </div>
+            <div style="padding:18px;background:#141212;border:1px solid #201C1C;borderRadius:16px">
+              <div style="font-size:13px;lineHeight:1.5;color:#A6A7A7;text-wrap:pretty">{{ t.stockNote }}</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="order:2;flex:999 1 420px;min-width:0">
+          <div style="display:flex;align-items:center;gap:14px;flexWrap:wrap;marginBottom:22px">
+            <input type="text" value="{{ query }}" onChange="{{ onSearch }}" placeholder="{{ t.search }}" style="flex:1;min-width:220px;padding:14px 18px;background:#141212;border:1px solid #201C1C;borderRadius:999px;color:#E2E3E3;font-size:15px;outline:none;minHeight:48px" />
+            <select onChange="{{ onSort }}" style="padding:14px 18px;background:#141212;border:1px solid #201C1C;borderRadius:999px;color:#E2E3E3;font-size:14px;outline:none;cursor:pointer;minHeight:48px">
+              <sc-for list="{{ sorts }}" as="so" hint-placeholder-count="4">
+                <option value="{{ so.value }}" selected="{{ so.selected }}">{{ so.label }}</option>
+              </sc-for>
+            </select>
+          </div>
+
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;flexWrap:wrap;marginBottom:18px">
+            <div style="font-family:'JetBrains Mono',monospace;font-size:12px;letterSpacing:0.12em;color:#757676">{{ countLabel }}</div>
+            <sc-if value="{{ hasFilters }}" hint-placeholder-val="{{ false }}">
+              <div onClick="{{ clearFilters }}" style="font-size:12px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase;color:#D7C80B;cursor:pointer">{{ t.clear }} ×</div>
+            </sc-if>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,210px),1fr));gap:18px">
+            <sc-for list="{{ shopProducts }}" as="p" hint-placeholder-count="6">
+              <div onClick="{{ p.open }}" style="background:#141212;border:1px solid #201C1C;borderRadius:18px;overflow:hidden;display:flex;flex-direction:column;cursor:pointer" style-hover="borderColor:#757676">
+                <div style="height:235px;position:relative;overflow:hidden;background:#0B0A0A">
+                  <sc-if value="{{ p.img }}" hint-placeholder-val="{{ false }}">
+                    <div style="position:absolute;inset:0;background-image:url({{ p.img }});background-size:cover;background-position:center"></div>
+                  </sc-if>
+                  <sc-if value="{{ p.lowStock }}" hint-placeholder-val="{{ false }}">
+                    <div style="position:absolute;top:12px;right:12px;padding:5px 11px;background:#D7C80B;color:#0B0A0A;borderRadius:999px;font-size:10px;font-weight:700;letterSpacing:0.12em;textTransform:uppercase">{{ p.stock }}</div>
+                  </sc-if>
+                </div>
+                <div style="padding:18px;display:flex;flex-direction:column;gap:8px;flex:1">
+                  <div style="font-family:'JetBrains Mono',monospace;font-size:10px;letterSpacing:0.18em;textTransform:uppercase;color:#757676">{{ p.cat }}</div>
+                  <div style="font-size:19px;font-weight:700;textTransform:uppercase;color:#E2E3E3;lineHeight:1.12">{{ p.name }}</div>
+                  <div style="font-size:14px;color:#A6A7A7;text-wrap:pretty">{{ p.variants }}</div>
+                  <div style="flex:1"></div>
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;marginTop:6px">
+                    <div style="font-size:23px;font-weight:700;color:#D7C80B">{{ p.price }}</div>
+                    <div style="font-size:12px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase;color:#C2C3C4">{{ t.ctaView }} →</div>
+                  </div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+          <sc-if value="{{ shopEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:46px 26px;border:1px dashed #2c2929;borderRadius:18px;text-align:center;color:#757676;font-size:16px">{{ t.noResults }}</div>
+          </sc-if>
+
+          <sc-if value="{{ hasMore }}" hint-placeholder-val="{{ false }}">
+            <div onClick="{{ showMore }}" style="marginTop:26px;padding:16px;border:1px solid #757676;borderRadius:999px;text-align:center;font-size:13px;font-weight:700;letterSpacing:0.16em;textTransform:uppercase;color:#E2E3E3;cursor:pointer;minHeight:50px;display:flex;align-items:center;justify-content:center" style-hover="borderColor:#D7C80B;color:#D7C80B">{{ t.more }}</div>
+          </sc-if>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isFaq }}" hint-placeholder-val="{{ false }}">
+    <div>
+      <div style="position:relative;overflow:hidden;borderBottom:1px solid #201C1C">
+        <img src="https://images.pexels.com/photos/26936241/pexels-photo-26936241.jpeg?auto=compress&cs=tinysrgb&w=1400" alt="" style="position:absolute;inset:0;width:100%;height:100%;objectFit:cover;filter:grayscale(0.35)" />
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(11,10,10,0.72),rgba(11,10,10,0.96))"></div>
+        <div style="position:relative;maxWidth:1340px;margin:0 auto;padding:clamp(34px,5vw,60px) clamp(16px,3vw,24px) clamp(30px,4.5vw,54px)">
+          <div style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letterSpacing:0.24em;textTransform:uppercase;color:#D7C80B">FAQ</div>
+          <h1 style="margin:14px 0 0;font-size:clamp(36px,5.4vw,70px);lineHeight:0.9;font-weight:700;textTransform:uppercase;color:#E2E3E3">{{ t.faqTitle }}</h1>
+          <p style="margin:18px 0 0;max-width:600px;font-size:17px;lineHeight:1.55;color:#C2C3C4;text-wrap:pretty;borderLeft:3px solid #D7C80B;paddingLeft:18px">{{ t.faqBody }}</p>
+        </div>
+      </div>
+
+      <div style="background:#E2E3E3;borderRadius:0 0 40px 40px">
+        <div style="maxWidth:1340px;margin:0 auto;padding:clamp(34px,5vw,54px) clamp(16px,3vw,24px) clamp(40px,6vw,68px)">
+          <div style="display:flex;gap:10px;flexWrap:wrap;marginBottom:30px">
+            <sc-for list="{{ faqCats }}" as="c" hint-placeholder-count="5">
+              <div onClick="{{ c.go }}" style="padding:11px 20px;borderRadius:999px;border:1px solid {{ c.border }};background:{{ c.bg }};color:{{ c.fg }};font-size:13px;font-weight:700;letterSpacing:0.12em;textTransform:uppercase;cursor:pointer;min-height:44px;display:flex;align-items:center">{{ c.label }}</div>
+            </sc-for>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:16px">
+            <sc-for list="{{ faqs }}" as="f" hint-placeholder-count="6">
+              <div style="padding:26px;background:#F2F2F2;border:1px solid #C2C3C4;borderRadius:20px">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span style="width:7px;height:7px;borderRadius:50%;background:#D7C80B;flex-shrink:0"></span>
+                  <span style="font-family:'JetBrains Mono',monospace;font-size:11px;letterSpacing:0.18em;textTransform:uppercase;color:#4a4848">{{ f.cat }}</span>
+                </div>
+                <div style="font-size:19px;font-weight:700;textTransform:uppercase;color:#0B0A0A;lineHeight:1.2;marginTop:8px">{{ f.q }}</div>
+                <div style="font-size:16px;lineHeight:1.55;color:#4a4848;marginTop:10px;text-wrap:pretty">{{ f.a }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  </div>
+
+  <div id="contacto" style="background:#141212;borderTop:1px solid #201C1C">
+    <div style="maxWidth:1340px;margin:0 auto;padding:clamp(40px,6vw,72px) clamp(16px,3vw,24px);display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:40px;align-items:start">
+      <div>
+        <h2 style="margin:0;font-size:clamp(30px,3.6vw,40px);lineHeight:1;font-weight:700;textTransform:uppercase;color:#E2E3E3">{{ t.contactTitle }}</h2>
+        <p style="margin:16px 0 0;max-width:420px;font-size:17px;lineHeight:1.55;color:#A6A7A7;text-wrap:pretty">{{ t.contactBody }}</p>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div style="font-size:12px;font-weight:700;letterSpacing:0.18em;textTransform:uppercase;color:#757676">{{ t.contactDirect }}</div>
+        <a href="#contacto" style="font-size:26px;font-weight:700;color:#E2E3E3">+595 981 000 000</a>
+        <a href="#contacto" style="font-size:19px;color:#C2C3C4">info@amigosderuta.com</a>
+        <div style="font-size:16px;color:#757676;marginTop:4px">Asunción · Paraguay</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="font-size:12px;font-weight:700;letterSpacing:0.18em;textTransform:uppercase;color:#757676">{{ t.contactSocial }}</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <a href="#contacto" style="font-size:17px;font-weight:700;letterSpacing:0.1em;textTransform:uppercase;color:#C2C3C4">Instagram</a>
+          <a href="#contacto" style="font-size:17px;font-weight:700;letterSpacing:0.1em;textTransform:uppercase;color:#C2C3C4">Facebook</a>
+          <a href="#contacto" style="font-size:17px;font-weight:700;letterSpacing:0.1em;textTransform:uppercase;color:#C2C3C4">YouTube</a>
+          <a href="#contacto" style="font-size:17px;font-weight:700;letterSpacing:0.1em;textTransform:uppercase;color:#C2C3C4">TikTok</a>
+        </div>
+      </div>
+    </div>
+    <div style="borderTop:1px solid #201C1C">
+      <div style="maxWidth:1340px;margin:0 auto;padding:22px clamp(16px,3vw,24px);display:flex;align-items:center;gap:20px;flexWrap:wrap">
+        <div style="font-size:13px;letterSpacing:0.1em;textTransform:uppercase;color:#757676">© 2027 Encuentro Internacional Amigos de Ruta</div>
+        <div style="flex:1"></div>
+        <div style="display:flex;align-items:center;gap:18px;flexWrap:wrap">
+          <a href="#contacto" style="font-size:13px;letterSpacing:0.08em;color:#A6A7A7" style-hover="color:#D7C80B">{{ t.privacy }}</a>
+          <span style="width:4px;height:4px;borderRadius:50%;background:#2c2929"></span>
+          <a href="https://neura.com.py" target="_blank" rel="noopener" style="font-size:13px;letterSpacing:0.08em;color:#A6A7A7" style-hover="color:#D7C80B">{{ t.byNeura }} <strong style="color:#D7C80B">Neura</strong></a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <sc-if value="{{ detail }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;zIndex:80;background:rgba(5,5,5,0.78);backdropFilter:blur(4px);display:flex;align-items:center;justify-content:center;padding:clamp(12px,2.5vw,24px);animation:adrFadeIn 220ms ease both">
+      <div onClick="{{ closeDetail }}" style="position:absolute;inset:0;cursor:pointer"></div>
+      <div style="position:relative;width:100%;max-width:980px;max-height:min(88vh,860px);overflow-y:auto;background:#0B0A0A;border:1px solid #201C1C;borderRadius:24px;animation:adrPopIn 280ms cubic-bezier(.22,.8,.26,1) both">
+        <div onClick="{{ closeDetail }}" style="position:absolute;top:16px;right:16px;zIndex:2;width:40px;height:40px;borderRadius:999px;background:rgba(11,10,10,0.85);border:1px solid #2c2929;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#E2E3E3;font-size:18px" style-hover="borderColor:#D7C80B;color:#D7C80B">×</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr))">
+          <div style="position:relative;min-height:clamp(240px,38vw,380px);background:#141212">
+            <sc-if value="{{ detail.img }}" hint-placeholder-val="{{ false }}">
+              <div style="position:absolute;inset:0;background-image:url({{ detail.img }});background-size:cover;background-position:center"></div>
+            </sc-if>
+          </div>
+          <div style="padding:clamp(22px,3.2vw,34px) clamp(18px,3vw,32px);display:flex;flex-direction:column;gap:14px">
+            <div style="font-family:'JetBrains Mono',monospace;font-size:11px;letterSpacing:0.18em;textTransform:uppercase;color:#D7C80B">{{ detail.cat }}</div>
+            <h2 style="margin:0;font-size:clamp(28px,3.4vw,40px);lineHeight:1;font-weight:700;textTransform:uppercase;color:#E2E3E3">{{ detail.name }}</h2>
+            <div style="font-size:16px;lineHeight:1.55;color:#A6A7A7;text-wrap:pretty">{{ detail.desc }}</div>
+            <div style="font-size:34px;font-weight:700;color:#D7C80B;marginTop:4px">{{ detail.price }}</div>
+            <sc-if value="{{ detail.hasSizes }}" hint-placeholder-val="{{ true }}">
+              <div>
+                <div style="font-size:12px;font-weight:700;letterSpacing:0.16em;textTransform:uppercase;color:#757676;marginBottom:10px">{{ t.pickSize }}</div>
+                <div style="display:flex;gap:8px;flexWrap:wrap">
+                  <sc-for list="{{ detailSizes }}" as="z" hint-placeholder-count="5">
+                    <div onClick="{{ z.go }}" style="min-width:52px;min-height:46px;padding:0 14px;display:flex;align-items:center;justify-content:center;border:1px solid {{ z.border }};background:{{ z.bg }};color:{{ z.fg }};borderRadius:10px;font-size:15px;font-weight:700;cursor:pointer">{{ z.label }}</div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-if>
+            <div style="display:flex;align-items:center;gap:16px;flexWrap:wrap;marginTop:8px">
+              <div style="display:flex;align-items:center;gap:12px;padding:6px;border:1px solid #201C1C;borderRadius:999px">
+                <div onClick="{{ decQty }}" style="width:38px;height:38px;borderRadius:999px;border:1px solid #2c2929;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#C2C3C4;font-weight:700" style-hover="borderColor:#D7C80B;color:#D7C80B">−</div>
+                <div style="min-width:24px;text-align:center;font-size:17px;font-weight:700;color:#E2E3E3">{{ qty }}</div>
+                <div onClick="{{ incQty }}" style="width:38px;height:38px;borderRadius:999px;border:1px solid #2c2929;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#C2C3C4;font-weight:700" style-hover="borderColor:#D7C80B;color:#D7C80B">+</div>
+              </div>
+              <div onClick="{{ addDetail }}" style="flex:1;min-width:200px;padding:16px 26px;background:#D7C80B;color:#0B0A0A;borderRadius:999px;text-align:center;font-size:13px;font-weight:700;letterSpacing:0.16em;textTransform:uppercase;cursor:pointer;minHeight:52px;display:flex;align-items:center;justify-content:center" style-hover="background:#E2E3E3">{{ t.ctaCart }}</div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px;marginTop:10px;paddingTop:16px;borderTop:1px solid #201C1C">
+              <sc-for list="{{ detail.specs }}" as="sp" hint-placeholder-count="3">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;gap:14px">
+                  <div style="font-size:14px;color:#757676">{{ sp.k }}</div>
+                  <div style="font-size:15px;font-weight:700;color:#C2C3C4;text-align:right">{{ sp.v }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ cartOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;zIndex:90;display:flex;justify-content:flex-end">
+      <div onClick="{{ closeCart }}" style="position:absolute;inset:0;background:rgba(5,5,5,0.72);backdropFilter:blur(3px);cursor:pointer;animation:adrFadeIn 200ms ease both"></div>
+      <div style="position:relative;width:min(420px,100%);height:100%;background:#0B0A0A;borderLeft:1px solid #201C1C;display:flex;flex-direction:column;animation:adrSlideIn 300ms cubic-bezier(.22,.8,.26,1) both">
+        <div style="padding:22px 24px;borderBottom:1px solid #201C1C;display:flex;align-items:center;gap:14px">
+          <div style="font-size:16px;font-weight:700;letterSpacing:0.18em;textTransform:uppercase;color:#D7C80B">{{ t.cartTitle }}</div>
+          <div style="flex:1"></div>
+          <div onClick="{{ closeCart }}" style="width:38px;height:38px;borderRadius:999px;border:1px solid #2c2929;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#E2E3E3" style-hover="borderColor:#D7C80B;color:#D7C80B">×</div>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:16px">
+          <sc-if value="{{ cartEmpty }}" hint-placeholder-val="{{ true }}">
+            <div style="padding:26px;border:1px dashed #2c2929;borderRadius:16px;font-size:15px;color:#757676;text-wrap:pretty">{{ t.cartEmpty }}</div>
+          </sc-if>
+          <sc-for list="{{ cart }}" as="c" hint-placeholder-count="0">
+            <div style="display:flex;align-items:center;gap:14px;paddingBottom:16px;borderBottom:1px solid #201C1C">
+              <div style="width:62px;height:62px;borderRadius:12px;overflow:hidden;background:#141212;flex-shrink:0;position:relative">
+                <sc-if value="{{ c.img }}" hint-placeholder-val="{{ false }}">
+                  <div style="position:absolute;inset:0;background-image:url({{ c.img }});background-size:cover;background-position:center"></div>
+                </sc-if>
+              </div>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:15px;font-weight:700;textTransform:uppercase;color:#E2E3E3;lineHeight:1.2">{{ c.name }}</div>
+                <div style="font-size:13px;color:#757676;marginTop:3px">{{ c.line }}</div>
+                <div style="display:flex;align-items:center;gap:8px;marginTop:8px">
+                  <div onClick="{{ c.dec }}" style="width:30px;height:30px;borderRadius:999px;border:1px solid #2c2929;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#C2C3C4;font-weight:700" style-hover="borderColor:#D7C80B;color:#D7C80B">−</div>
+                  <div style="min-width:18px;text-align:center;font-size:15px;font-weight:700;color:#E2E3E3">{{ c.qty }}</div>
+                  <div onClick="{{ c.inc }}" style="width:30px;height:30px;borderRadius:999px;border:1px solid #2c2929;display:flex;align-items:center;justify-content:center;cursor:pointer;color:#C2C3C4;font-weight:700" style-hover="borderColor:#D7C80B;color:#D7C80B">+</div>
+                </div>
+              </div>
+              <div style="font-size:17px;font-weight:700;color:#D7C80B;whiteSpace:nowrap">{{ c.subtotal }}</div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="padding:22px 24px;borderTop:1px solid #201C1C;display:flex;flex-direction:column;gap:14px">
+          <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
+            <div style="font-size:13px;font-weight:700;letterSpacing:0.14em;textTransform:uppercase;color:#757676">{{ t.total }}</div>
+            <div style="font-size:30px;font-weight:700;color:#D7C80B">{{ cartTotal }}</div>
+          </div>
+          <div style="padding:16px;background:#D7C80B;color:#0B0A0A;borderRadius:999px;text-align:center;font-size:13px;font-weight:700;letterSpacing:0.16em;textTransform:uppercase;cursor:pointer;minHeight:50px;display:flex;align-items:center;justify-content:center" style-hover="background:#E2E3E3">{{ t.checkout }}</div>
+          <div style="font-size:13px;lineHeight:1.5;color:#757676;text-wrap:pretty">{{ t.shipNote }}</div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <a href="#contacto" style="position:fixed;right:22px;bottom:22px;zIndex:60;display:flex;align-items:center;gap:12px;padding:14px 22px;background:#D7C80B;color:#0B0A0A;borderRadius:999px;boxShadow:0 14px 34px rgba(0,0,0,0.6);minHeight:52px;transition:opacity 260ms ease,transform 260ms ease;opacity:{{ waOpacity }};transform:{{ waTransform }};pointerEvents:{{ waEvents }}" style-hover="background:#E2E3E3">
+    <div style="width:12px;height:12px;borderRadius:50%;background:#0B0A0A;animation:adrPulse 1.8s ease-in-out infinite"></div>
+    <span style="font-size:14px;font-weight:700;letterSpacing:0.12em;textTransform:uppercase">WhatsApp</span>
+  </a>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;lang&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;es&quot;,&quot;pt&quot;],&quot;default&quot;:&quot;es&quot;,&quot;tsType&quot;:&quot;\&quot;es\&quot; | \&quot;pt\&quot;&quot;,&quot;section&quot;:&quot;Contenido&quot;},&quot;accentColor&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#D7C80B&quot;,&quot;options&quot;:[&quot;#D7C80B&quot;,&quot;#9F9410&quot;,&quot;#C2C3C4&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Marca&quot;}}">
+const px = (id, ext, w) => `https://images.pexels.com/photos/${id}/pexels-photo-${id}.${ext || "jpeg"}?auto=compress&cs=tinysrgb&w=${w || 1000}`;
+const IMG = {
+  r66: px(16330298), daytona: px(9789338), alaska: px(2177200), sturgis: px(9789339), coast: px(2887802), pata: px(35352883),
+  tee: px(8532616, "jpeg", 900), tee2: px(18186105, "jpeg", 900), tee3: px(12039633, "jpeg", 900),
+  cap: px(21820217, "jpeg", 900), cap2: px(31162881, "jpeg", 900), bag: px(3731256, "jpeg", 900), bag2: px(13697756, "jpeg", 900),
+  emblem: "assets/adr-emblema.jpeg"
+};
+
+const COPY = {
+  es: {
+    navHome: "Inicio", navEvents: "Viajes", navTour: "Tour", navSignup: "Reservar", navStore: "Tienda",
+    heroKicker: "Operador de viajes en moto · Salidas 2027",
+    heroTitle: "Viajes en moto por el mundo",
+    heroBody: "Somos una empresa de turismo especializada en viajes en motocicleta. Diseñamos el itinerario, reservamos motos y hoteles, y acompañamos al grupo en ruta con guía bilingüe y vehículo de apoyo.",
+    heroCta1: "Ver viajes", heroCta2: "Cómo reservar",
+    eventsTitle: "Próximos viajes",
+    eventsBody: "Cada viaje tiene una o varias fechas de salida, con cupos y paquetes propios. Los precios son por persona en base al paquete más económico e incluyen moto, alojamiento y asistencia en ruta.",
+    labelDates: "Fechas", labelDuration: "Duración", labelFrom: "Desde", ctaDetail: "Ver detalle", ctaAll: "Ver todos los viajes",
+    tourBody: "El clásico absoluto. Dieciséis días desde Chicago hasta el Pacífico por la carretera madre, con guía en español y portugués, soporte mecánico y vehículo de apoyo durante todo el recorrido.",
+    unitDays: "días", unitNights: "noches",
+    departuresTitle: "Fechas de salida", itineraryTitle: "Itinerario", includes: "Qué incluye", excludes: "No incluye",
+    packagesTitle: "Paquetes disponibles", ctaSelect: "Elegir",
+    depositLabel: "Seña para reservar", depositNote: "El saldo se puede abonar en cuotas hasta 45 días antes de la salida.", ctaJoin: "Reservar",
+    signupTitle: "Reservá en cuatro pasos",
+    signupBody: "La reserva se completa online. Señás tu lugar, cargás los datos de cada pasajero y seguís tu saldo desde el mismo enlace hasta el día de la salida.",
+    formTitle: "Datos del participante",
+    fName: "Nombre y apellido", fDoc: "Documento / pasaporte", fRole: "Rol en la reserva", fRoleVal: "Titular · piloto",
+    fLicense: "Licencia de conducir", fShirt: "Talle de remera del evento", fPay: "Medio de pago",
+    ctaPay: "Reservar mi lugar", payNote: "Recibís el comprobante y el acceso a tu reserva por correo y WhatsApp.",
+    summaryTitle: "Resumen de la reserva", balance: "Saldo pendiente", paidNote: "Abonado USD 1.500 de USD 7.900",
+    kitNote: "Tu reserva incluye el kit del viaje: mochila ADR, dos remeras y credencial. Los talles informados acá se usan para la producción.",
+    storeTitle: "Tienda oficial",
+    storeBody: "Merchandising oficial Amigos de Ruta. El stock que ves es el stock real: se actualiza con cada venta y con los kits reservados para cada salida.",
+    ctaStoreAll: "Ver tienda completa", ctaView: "Ver detalle",
+    contactTitle: "Armamos tu viaje a medida",
+    contactBody: "Diseñamos itinerarios privados para grupos, clubes y empresas. Contanos destino, fechas y cantidad de motos y te preparamos una cotización sin cargo.",
+    contactDirect: "Contacto directo", contactSocial: "Redes", footerNote: "Precios de referencia · Sujetos a confirmación", privacy: "Políticas de privacidad", byNeura: "Desarrollado por",
+    tripsTitle: "Todos los viajes",
+    tripsBody: "Calendario completo de salidas 2027 y 2028. Cada viaje tiene sus propias fechas, cupos y paquetes; los precios son por persona en base al paquete más económico.",
+    customTitle: "¿No encontrás tu destino?",
+    customBody: "Diseñamos itinerarios privados para grupos, clubes y empresas, con la misma logística de nuestras salidas regulares.",
+    ctaContact: "Pedir cotización",
+    tripFilters: ["Todos", "2027", "2028", "Con cupos"],
+    shopTitle: "Tienda oficial ADR",
+    shopBody: "Merchandising del Encuentro Internacional. El stock es el mismo del ERP: se descuenta con cada venta y con los kits reservados para cada salida.",
+    search: "Buscar producto o SKU", clear: "Limpiar filtros", fCategory: "Categoría", fSize: "Talle", fPrice: "Precio máximo",
+    stockNote: "El stock mostrado es en tiempo real. Los kits incluidos en una inscripción ya están reservados y no figuran disponibles.",
+    ctaCart: "Agregar al carrito", pickSize: "Elegí tu talle", noResults: "No encontramos productos con esos filtros.", more: "Mostrar más productos",
+    cart: "Carrito", cartTitle: "Tu carrito", total: "Total", checkout: "Finalizar compra",
+    cartEmpty: "Todavía no agregaste productos. Elegí algo del catálogo y lo vas a ver acá.",
+    shipNote: "Envíos a Paraguay, Brasil y Argentina. También podés retirar tu pedido en el check-in del viaje.",
+    shopCats: ["Remeras", "Gorras", "Mochilas y bolsos", "Accesorios"],
+    sorts: ["Más vendidos", "Precio: menor a mayor", "Precio: mayor a menor", "Novedades"],
+    inStock: "En stock", low: "Últimas unidades", specK: ["Material", "Producción", "Entrega"], all: "Todo",
+    faqTitle: "Preguntas frecuentes",
+    faqBody: "Todo lo que necesitás saber antes de reservar: documentación, pagos, paquetes y qué pasa el día de la salida.",
+    faqCats: ["Documentación", "Pagos", "Paquetes", "En ruta"]
+  },
+  pt: {
+    navHome: "Início", navEvents: "Viagens", navTour: "Tour", navSignup: "Reservar", navStore: "Loja",
+    heroKicker: "Operadora de viagens de moto · Saídas 2027",
+    heroTitle: "Viagens de moto pelo mundo",
+    heroBody: "Somos uma empresa de turismo especializada em viagens de motocicleta. Criamos o roteiro, reservamos motos e hotéis e acompanhamos o grupo na estrada com guia bilíngue e veículo de apoio.",
+    heroCta1: "Ver viagens", heroCta2: "Como reservar",
+    eventsTitle: "Próximas viagens",
+    eventsBody: "Cada viagem tem uma ou várias datas de saída, com vagas e pacotes próprios. Os preços são por pessoa com base no pacote mais econômico e incluem moto, hospedagem e assistência na estrada.",
+    labelDates: "Datas", labelDuration: "Duração", labelFrom: "A partir de", ctaDetail: "Ver detalhe", ctaAll: "Ver todas as viagens",
+    tourBody: "O clássico absoluto. Dezesseis dias de Chicago até o Pacífico pela estrada mãe, com guia em espanhol e português, apoio mecânico e veículo de apoio durante todo o percurso.",
+    unitDays: "dias", unitNights: "noites",
+    departuresTitle: "Datas de saída", itineraryTitle: "Itinerário", includes: "O que inclui", excludes: "Não inclui",
+    packagesTitle: "Pacotes disponíveis", ctaSelect: "Escolher",
+    depositLabel: "Sinal para reservar", depositNote: "O saldo pode ser pago em parcelas até 45 dias antes da saída.", ctaJoin: "Reservar",
+    signupTitle: "Reserve em quatro passos",
+    signupBody: "A reserva é feita online. Você garante sua vaga com um sinal, cadastra os dados de cada passageiro e acompanha seu saldo pelo mesmo link até o dia da saída.",
+    formTitle: "Dados do participante",
+    fName: "Nome e sobrenome", fDoc: "Documento / passaporte", fRole: "Papel na reserva", fRoleVal: "Titular · piloto",
+    fLicense: "Carteira de motorista", fShirt: "Tamanho da camiseta do evento", fPay: "Meio de pagamento",
+    ctaPay: "Reservar meu lugar", payNote: "Você recebe o comprovante e o acesso à sua reserva por e-mail e WhatsApp.",
+    summaryTitle: "Resumo da reserva", balance: "Saldo pendente", paidNote: "Pago USD 1.500 de USD 7.900",
+    kitNote: "Sua reserva inclui o kit da viagem: mochila ADR, duas camisetas e credencial. Os tamanhos informados aqui são usados na produção.",
+    storeTitle: "Loja oficial",
+    storeBody: "Merchandising oficial Amigos de Ruta. O estoque exibido é o estoque real: atualiza a cada venda e com os kits reservados para cada saída.",
+    ctaStoreAll: "Ver loja completa", ctaView: "Ver detalhe",
+    contactTitle: "Montamos sua viagem sob medida",
+    contactBody: "Criamos roteiros privados para grupos, clubes e empresas. Informe destino, datas e quantidade de motos e preparamos um orçamento sem custo.",
+    contactDirect: "Contato direto", contactSocial: "Redes", footerNote: "Preços de referência · Sujeitos a confirmação", privacy: "Políticas de privacidade", byNeura: "Desenvolvido por",
+    tripsTitle: "Todas as viagens",
+    tripsBody: "Calendário completo de saídas 2027 e 2028. Cada viagem tem suas datas, vagas e pacotes; os preços são por pessoa com base no pacote mais econômico.",
+    customTitle: "Não encontrou seu destino?",
+    customBody: "Criamos roteiros privados para grupos, clubes e empresas, com a mesma logística das nossas saídas regulares.",
+    ctaContact: "Pedir orçamento",
+    tripFilters: ["Todas", "2027", "2028", "Com vagas"],
+    shopTitle: "Loja oficial ADR",
+    shopBody: "Merchandising do Encontro Internacional. O estoque é o mesmo do ERP: baixa a cada venda e com os kits reservados para cada saída.",
+    search: "Buscar produto ou SKU", clear: "Limpar filtros", fCategory: "Categoria", fSize: "Tamanho", fPrice: "Preço máximo",
+    stockNote: "O estoque exibido é em tempo real. Os kits incluídos em uma inscrição já estão reservados e não aparecem disponíveis.",
+    ctaCart: "Adicionar ao carrinho", pickSize: "Escolha seu tamanho", noResults: "Não encontramos produtos com esses filtros.", more: "Mostrar mais produtos",
+    cart: "Carrinho", cartTitle: "Seu carrinho", total: "Total", checkout: "Finalizar compra",
+    cartEmpty: "Você ainda não adicionou produtos. Escolha algo do catálogo e aparecerá aqui.",
+    shipNote: "Enviamos para Paraguai, Brasil e Argentina. Você também pode retirar o pedido no check-in da viagem.",
+    shopCats: ["Camisetas", "Bonés", "Mochilas e bolsas", "Acessórios"],
+    sorts: ["Mais vendidos", "Preço: menor para maior", "Preço: maior para menor", "Novidades"],
+    inStock: "Em estoque", low: "Últimas unidades", specK: ["Material", "Produção", "Entrega"], all: "Tudo",
+    faqTitle: "Perguntas frequentes",
+    faqBody: "Tudo o que você precisa saber antes de reservar: documentação, pagamentos, pacotes e o que acontece no dia da saída.",
+    faqCats: ["Documentação", "Pagamentos", "Pacotes", "Na estrada"]
+  }
+};
+
+const EVENTS = [
+  { img: IMG.r66, year: 2027, open: true, badge: { es: "Múltiples salidas", pt: "Várias saídas" }, country: "Estados Unidos", name: "Route 66", dates: "07 · 08 / 2027", duration: { es: "16 días", pt: "16 dias" }, price: "USD 7.900", spots: { es: "3 fechas · 48 cupos en total", pt: "3 datas · 48 vagas no total" } },
+  { img: IMG.daytona, year: 2027, open: true, badge: { es: "Clásico", pt: "Clássico" }, country: "Florida, EE.UU.", name: "Daytona Bike Week", dates: "02 — 10 / 03 / 2027", duration: { es: "9 días", pt: "9 dias" }, price: "USD 4.600", spots: { es: "Single o doble · 2 motos por paquete", pt: "Single ou duplo · 2 motos por pacote" } },
+  { img: IMG.alaska, year: 2027, open: true, badge: { es: "Cupos limitados", pt: "Vagas limitadas" }, country: "Alaska · Canadá", name: "Alaska Gold Rush", dates: "06 / 2027", duration: { es: "18 días", pt: "18 dias" }, price: "USD 9.200", spots: { es: "Salida única · 14 cupos", pt: "Saída única · 14 vagas" } },
+  { img: IMG.sturgis, year: 2027, open: true, badge: { es: "Salida única", pt: "Saída única" }, country: "Dakota del Sur", name: "Sturgis Rally", dates: "08 / 2027", duration: { es: "12 días", pt: "12 dias" }, price: "USD 6.400", spots: { es: "Inscripción abierta hasta mayo", pt: "Inscrições abertas até maio" } },
+  { img: IMG.coast, year: 2028, open: false, badge: { es: "Nuevo", pt: "Novo" }, country: "Estados Unidos", name: "Coast to Coast", dates: "2028", duration: { es: "21 días", pt: "21 dias" }, price: "USD 11.500", spots: { es: "Lista de interesados abierta", pt: "Lista de interessados aberta" } },
+  { img: IMG.pata, year: 2028, open: false, badge: { es: "Próximamente", pt: "Em breve" }, country: "Argentina · Chile", name: "Patagonia Austral", dates: "02 / 2028", duration: { es: "14 días", pt: "14 dias" }, price: "USD 5.800", spots: { es: "Preventa para clientes ADR", pt: "Pré-venda para clientes ADR" } }
+];
+
+const ITINERARY = [
+  { day: { es: "Día 01", pt: "Dia 01" }, place: "Chicago, Illinois", note: { es: "Recepción, entrega de motos y briefing de seguridad.", pt: "Recepção, entrega das motos e briefing de segurança." } },
+  { day: { es: "Día 03", pt: "Dia 03" }, place: "St. Louis, Missouri", note: { es: "Cruce del Mississippi y primeros tramos originales de la 66.", pt: "Travessia do Mississippi e primeiros trechos originais da 66." } },
+  { day: { es: "Día 06", pt: "Dia 06" }, place: "Amarillo, Texas", note: { es: "Llanura, moteles históricos y noche libre.", pt: "Planície, motéis históricos e noite livre." } },
+  { day: { es: "Día 09", pt: "Dia 09" }, place: "Santa Fe, Nuevo México", note: { es: "Día de descanso y mantenimiento de motos.", pt: "Dia de descanso e manutenção das motos." } },
+  { day: { es: "Día 12", pt: "Dia 12" }, place: "Gran Cañón, Arizona", note: { es: "Desvío panorámico con parada fotográfica.", pt: "Desvio panorâmico com parada fotográfica." } },
+  { day: { es: "Día 16", pt: "Dia 16" }, place: "Santa Monica, California", note: { es: "Llegada al cartel final y cena de cierre del grupo.", pt: "Chegada à placa final e jantar de encerramento do grupo." } }
+];
+
+const INCLUDES = {
+  es: ["Motocicleta con seguro y kilometraje libre", "15 noches de hotel con desayuno", "Guía bilingüe y vehículo de apoyo", "Soporte mecánico en ruta", "Kit del viaje: mochila, 2 remeras y credencial", "Traslados aeropuerto — hotel"],
+  pt: ["Motocicleta com seguro e quilometragem livre", "15 noites de hotel com café da manhã", "Guia bilíngue e veículo de apoio", "Apoio mecânico na estrada", "Kit da viagem: mochila, 2 camisetas e credencial", "Traslados aeroporto — hotel"]
+};
+const EXCLUDES = {
+  es: ["Pasajes aéreos internacionales", "Visa, tasas y seguro médico", "Combustible y almuerzos", "Gastos personales y propinas"],
+  pt: ["Passagens aéreas internacionais", "Visto, taxas e seguro médico", "Combustível e almoços", "Gastos pessoais e gorjetas"]
+};
+
+const DEPARTURES = [
+  { date: "22/07/2027", state: { es: "Confirmada", pt: "Confirmada" }, open: true, lang: { es: "Guía ES / PT", pt: "Guia ES / PT" }, fill: "78%", spots: { es: "14 / 18 cupos", pt: "14 / 18 vagas" } },
+  { date: "12/08/2027", state: { es: "Abierta", pt: "Aberta" }, open: true, lang: { es: "Guía ES", pt: "Guia ES" }, fill: "40%", spots: { es: "8 / 20 cupos", pt: "8 / 20 vagas" } },
+  { date: "23/09/2027", state: { es: "Lista de espera", pt: "Lista de espera" }, open: false, lang: { es: "Guía PT", pt: "Guia PT" }, fill: "100%", spots: { es: "10 / 10 cupos", pt: "10 / 10 vagas" } }
+];
+
+const PACKAGES = [
+  { name: { es: "Individual", pt: "Individual" }, price: "USD 9.400", detail: { es: "1 persona · 1 moto · habitación single", pt: "1 pessoa · 1 moto · quarto single" }, spots: { es: "6 cupos", pt: "6 vagas" } },
+  { name: { es: "Dos motos", pt: "Duas motos" }, price: "USD 7.900", detail: { es: "2 personas · 2 motos · 1 habitación doble", pt: "2 pessoas · 2 motos · 1 quarto duplo" }, spots: { es: "8 cupos", pt: "8 vagas" } },
+  { name: { es: "Piloto + acompañante", pt: "Piloto + acompanhante" }, price: "USD 8.600", detail: { es: "2 personas · 1 moto · 1 habitación doble", pt: "2 pessoas · 1 moto · 1 quarto duplo" }, spots: { es: "4 cupos", pt: "4 vagas" } }
+];
+
+const STEPS = [
+  { n: "01", title: { es: "Elegí viaje y salida", pt: "Escolha viagem e saída" }, body: { es: "Cada fecha tiene su cupo, su idioma de guía y su propio estado.", pt: "Cada data tem sua vaga, idioma do guia e seu próprio status." } },
+  { n: "02", title: { es: "Elegí el paquete", pt: "Escolha o pacote" }, body: { es: "Personas, motos, habitación y adicionales como upgrades o single.", pt: "Pessoas, motos, quarto e adicionais como upgrades ou single." } },
+  { n: "03", title: { es: "Cargá los pasajeros", pt: "Cadastre os passageiros" }, body: { es: "Datos, licencia, documentación y talles de cada integrante.", pt: "Dados, carteira, documentação e tamanhos de cada integrante." } },
+  { n: "04", title: { es: "Reservá y pagá", pt: "Reserve e pague" }, body: { es: "Seña o pago total con tarjeta, transferencia o Pix.", pt: "Sinal ou pagamento total com cartão, transferência ou Pix." } }
+];
+
+const SUMMARY = [
+  { k: { es: "Viaje", pt: "Viagem" }, v: "Route 66" },
+  { k: { es: "Salida", pt: "Saída" }, v: "22/07/2027" },
+  { k: { es: "Paquete", pt: "Pacote" }, v: { es: "2 personas · 2 motos", pt: "2 pessoas · 2 motos" } },
+  { k: { es: "Pasajeros", pt: "Passageiros" }, v: "2" },
+  { k: { es: "Total contratado", pt: "Total contratado" }, v: "USD 7.900" }
+];
+
+const SIZES = ["S", "M", "L", "XL", "XXL", "U"];
+
+const PRODUCTS = [
+  { sku: "ADR-REM-001", c: 0, img: IMG.tee, price: 32, rank: 1, sizes: ["S","M","L","XL","XXL"], low: false,
+    name: { es: "Remera oficial 2027", pt: "Camiseta oficial 2027" },
+    variants: { es: "Negro · algodón peinado 180 g", pt: "Preto · algodão penteado 180 g" },
+    desc: { es: "La remera del Encuentro Internacional 2027, con el emblema bordado al frente y la ruta impresa en la espalda. Corte unisex.", pt: "A camiseta do Encontro Internacional 2027, com o emblema bordado na frente e a rota impressa nas costas. Corte unissex." },
+    specs: { es: ["Algodón peinado 180 g", "Serigrafía + bordado", "5 a 7 días hábiles"], pt: ["Algodão penteado 180 g", "Serigrafia + bordado", "5 a 7 dias úteis"] } },
+  { sku: "ADR-REM-005", c: 0, img: IMG.tee2, price: 56, rank: 4, sizes: ["S","M","L","XL"], low: false,
+    name: { es: "Pack 2 remeras ruta", pt: "Pack 2 camisetas estrada" },
+    variants: { es: "Negro + blanco · ahorro 12%", pt: "Preto + branco · economia 12%" },
+    desc: { es: "Dos remeras del kit oficial en un solo pack: una negra con el emblema completo y una blanca con la firma ADR.", pt: "Duas camisetas do kit oficial em um único pack: uma preta com o emblema completo e uma branca com a assinatura ADR." },
+    specs: { es: ["Algodón peinado 180 g", "Serigrafía", "5 a 7 días hábiles"], pt: ["Algodão penteado 180 g", "Serigrafia", "5 a 7 dias úteis"] } },
+  { sku: "ADR-REM-007", c: 0, img: IMG.tee3, price: 30, rank: 7, sizes: ["S","M","L","XL"], low: true,
+    name: { es: "Remera Route 66", pt: "Camiseta Route 66" },
+    variants: { es: "Blanco · estampa frontal", pt: "Branco · estampa frontal" },
+    desc: { es: "Edición del tour Route 66 con el mapa del recorrido Chicago — Santa Monica impreso al frente.", pt: "Edição do tour Route 66 com o mapa do percurso Chicago — Santa Monica impresso na frente." },
+    specs: { es: ["Algodón 160 g", "Serigrafía", "5 a 7 días hábiles"], pt: ["Algodão 160 g", "Serigrafia", "5 a 7 dias úteis"] } },
+  { sku: "ADR-GOR-003", c: 1, img: IMG.cap, price: 26, rank: 3, sizes: ["U"], low: true,
+    name: { es: "Gorra bordada", pt: "Boné bordado" },
+    variants: { es: "Negro · talle único · visera curva", pt: "Preto · tamanho único · aba curva" },
+    desc: { es: "Gorra negra con el emblema ADR bordado en hilo amarillo y cierre regulable metálico.", pt: "Boné preto com o emblema ADR bordado em fio amarelo e fecho regulável metálico." },
+    specs: { es: ["Gabardina de algodón", "Bordado 3D", "3 a 5 días hábiles"], pt: ["Gabardine de algodão", "Bordado 3D", "3 a 5 dias úteis"] } },
+  { sku: "ADR-GOR-008", c: 1, img: IMG.cap2, price: 24, rank: 8, sizes: ["U"], low: false,
+    name: { es: "Gorra trucker ADR", pt: "Boné trucker ADR" },
+    variants: { es: "Malla trasera · regulable", pt: "Tela traseira · ajustável" },
+    desc: { es: "Modelo trucker con frente rígido y malla trasera, pensada para los días largos de ruta.", pt: "Modelo trucker com frente rígida e tela traseira, pensado para os dias longos de estrada." },
+    specs: { es: ["Frente algodón · malla", "Parche bordado", "3 a 5 días hábiles"], pt: ["Frente algodão · tela", "Patch bordado", "3 a 5 dias úteis"] } },
+  { sku: "ADR-MOC-002", c: 2, img: IMG.bag, price: 78, rank: 2, sizes: ["U"], low: false,
+    name: { es: "Mochila de ruta 35 L", pt: "Mochila de estrada 35 L" },
+    variants: { es: "Impermeable · porta casco", pt: "Impermeável · porta capacete" },
+    desc: { es: "Mochila de 35 litros con cubierta impermeable, red porta casco y bandas reflectivas en los laterales.", pt: "Mochila de 35 litros com capa impermeável, rede porta capacete e faixas refletivas nas laterais." },
+    specs: { es: ["Poliéster 600D", "Costuras selladas", "7 a 10 días hábiles"], pt: ["Poliéster 600D", "Costuras seladas", "7 a 10 dias úteis"] } },
+  { sku: "ADR-MOC-009", c: 2, img: IMG.bag2, price: 54, rank: 6, sizes: ["U"], low: false,
+    name: { es: "Bolso de tanque 12 L", pt: "Bolsa de tanque 12 L" },
+    variants: { es: "Base magnética · visor superior", pt: "Base magnética · visor superior" },
+    desc: { es: "Bolso de tanque con base magnética reforzada, visor superior para el teléfono y expansión de 4 litros.", pt: "Bolsa de tanque com base magnética reforçada, visor superior para o telefone e expansão de 4 litros." },
+    specs: { es: ["Nylon balístico", "Imanes reforzados", "7 a 10 días hábiles"], pt: ["Nylon balístico", "Ímãs reforçados", "7 a 10 dias úteis"] } },
+  { sku: "ADR-STK-004", c: 3, img: IMG.emblem, price: 14, rank: 5, sizes: ["U"], low: false,
+    name: { es: "Set stickers + parche", pt: "Kit adesivos + patch" },
+    variants: { es: "6 piezas · vinilo y bordado", pt: "6 peças · vinil e bordado" },
+    desc: { es: "Seis piezas: cuatro stickers de vinilo resistentes a la intemperie, un parche bordado y un llavero de la edición.", pt: "Seis peças: quatro adesivos de vinil resistentes ao tempo, um patch bordado e um chaveiro da edição." },
+    specs: { es: ["Vinilo exterior", "Parche bordado", "3 a 5 días hábiles"], pt: ["Vinil externo", "Patch bordado", "3 a 5 dias úteis"] } }
+];
+
+const FAQS = [
+  { c: 0, q: { es: "¿Necesito licencia internacional?", pt: "Preciso de carteira internacional?" }, a: { es: "Sí. Te pedimos licencia vigente de categoría moto y permiso internacional de conducir; lo verificamos antes de confirmar tu lugar.", pt: "Sim. Pedimos carteira válida para moto e permissão internacional de conduzir; verificamos antes de confirmar sua vaga." } },
+  { c: 0, q: { es: "¿Qué documentación debo enviar?", pt: "Que documentos devo enviar?" }, a: { es: "Pasaporte vigente, licencia, visa cuando corresponda y seguro médico. Podés cargarlos después de reservar, desde tu enlace de reserva.", pt: "Passaporte válido, carteira, visto quando necessário e seguro médico. Você pode enviá-los depois de reservar, pelo link da sua reserva." } },
+  { c: 1, q: { es: "¿Puedo pagar en cuotas?", pt: "Posso pagar parcelado?" }, a: { es: "Reservás con la seña y después abonás en pagos parciales libres o en un plan de cuotas con vencimientos.", pt: "Você reserva com o sinal e depois paga em pagamentos parciais livres ou em um plano de parcelas com vencimentos." } },
+  { c: 1, q: { es: "¿Aceptan Pix?", pt: "Aceitam Pix?" }, a: { es: "Sí, para pasajeros de Brasil aceptamos Pix y pasarela en reales. Guardamos siempre la moneda y el importe original del pago.", pt: "Sim, para passageiros do Brasil aceitamos Pix e gateway em reais. Mantemos sempre a moeda e o valor original do pagamento." } },
+  { c: 1, q: { es: "¿Qué pasa si cancelo?", pt: "E se eu cancelar?" }, a: { es: "Cada viaje tiene su política de cancelación publicada en el detalle, con plazos y penalidades según la antelación.", pt: "Cada viagem tem sua política de cancelamento publicada no detalhe, com prazos e penalidades conforme a antecedência." } },
+  { c: 2, q: { es: "¿Puedo viajar de acompañante?", pt: "Posso viajar como acompanhante?" }, a: { es: "Sí. El paquete piloto + acompañante comparte moto y habitación, y el acompañante también recibe el kit del viaje.", pt: "Sim. O pacote piloto + acompanhante compartilha moto e quarto, e o acompanhante também recebe o kit da viagem." } },
+  { c: 2, q: { es: "¿Puedo elegir el modelo de moto?", pt: "Posso escolher o modelo da moto?" }, a: { es: "Sí, dentro de la flota disponible para cada salida. El upgrade de modelo se cotiza aparte al momento de reservar.", pt: "Sim, dentro da frota disponível para cada saída. O upgrade de modelo é cotado à parte no momento da reserva." } },
+  { c: 3, q: { es: "¿Cuándo recibo el kit?", pt: "Quando recebo o kit?" }, a: { es: "En el check-in del viaje, contra tu credencial con QR. Los talles se toman de tu reserva.", pt: "No check-in da viagem, com sua credencial com QR. Os tamanhos vêm da sua reserva." } },
+  { c: 3, q: { es: "¿Hay vehículo de apoyo?", pt: "Existe veículo de apoio?" }, a: { es: "Sí. Acompaña al grupo durante todo el recorrido con equipaje, herramientas y asistencia mecánica.", pt: "Sim. Acompanha o grupo durante todo o percurso com bagagem, ferramentas e assistência mecânica." } },
+  { c: 3, q: { es: "¿Cuántos kilómetros se hacen por día?", pt: "Quantos quilômetros por dia?" }, a: { es: "Entre 250 y 450 km según la etapa, con paradas programadas y al menos un día de descanso por viaje.", pt: "Entre 250 e 450 km conforme a etapa, com paradas programadas e pelo menos um dia de descanso por viagem." } }
+];
+
+const PAGE = 6;
+const CAROUSEL = EVENTS.slice(0, 5);
+
+class Component extends DCLogic {
+  state = {
+    lang: null, view: "home", nav: 0,
+    slide: 0, progress: 0, shop: 0, tourTab: 0,
+    size: "L", pay: 0,
+    tripFilter: "all", faqCat: -1,
+    cat: -1, shopSize: null, maxPrice: 120, query: "", sort: 0, limit: PAGE,
+    open: null, qty: 1, detailSize: null, cartOpen: false, cart: {}
+  };
+
+  componentDidMount() {
+    this.ensureTimers();
+    if (typeof IntersectionObserver !== "undefined") {
+      const el = document.getElementById("contacto");
+      if (el) {
+        this._io = new IntersectionObserver(
+          (entries) => this.setState({ atFooter: entries[0].isIntersecting }),
+          { threshold: 0.01 }
+        );
+        this._io.observe(el);
+      }
+    }
+  }
+  componentWillUnmount() {
+    clearInterval(this._tick); clearInterval(this._shop); clearTimeout(this._wrap);
+    if (this._io) { this._io.disconnect(); this._io = null; }
+    this._tick = null; this._shop = null;
+  }
+
+  ensureTimers() {
+    const STEP = 100, TOTAL = 7000;
+    if (!this._tick) {
+      this._tick = setInterval(() => {
+        this.setState((st) => {
+          const next = st.progress + (STEP / TOTAL) * 100;
+          return next >= 100 ? { progress: 0, slide: (st.slide + 1) % CAROUSEL.length } : { progress: next };
+        });
+      }, STEP);
+    }
+    if (!this._shop) this._shop = setInterval(() => this.shiftShop(1), 3800);
+  }
+
+  get lang() { return this.state.lang || this.props.lang || "es"; }
+  pick(o) { return (o && typeof o === "object" && !Array.isArray(o)) ? (o[this.lang] ?? o.es) : o; }
+
+  go(view) {
+    this.setState((s) => ({ view, nav: s.nav + 1, open: null }));
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+  anchor(view, hash) {
+    this.setState((s) => ({ view, nav: s.nav + 1, open: null }));
+    if (typeof window !== "undefined") setTimeout(() => { window.location.hash = hash; }, 60);
+  }
+
+  shiftShop(d) {
+    const N = PRODUCTS.length;
+    clearTimeout(this._wrap);
+    this.setState((s) => {
+      if (d < 0 && s.shop <= 0) {
+        this._wrap = setTimeout(() => this.setState({ shop: N - 1, shopAnim: true }), 40);
+        return { shop: N, shopAnim: false };
+      }
+      const next = s.shop + d;
+      if (next >= N) this._wrap = setTimeout(() => this.setState({ shop: next - N, shopAnim: false }), 660);
+      return { shop: next, shopAnim: true };
+    });
+  }
+
+  key(sku, size) { return size ? sku + "|" + size : sku; }
+  add(sku, size, qty) {
+    const k = this.key(sku, size);
+    this.setState((s) => ({ cart: { ...s.cart, [k]: (s.cart[k] || 0) + qty }, cartOpen: true, open: null, qty: 1 }));
+  }
+  bump(k, d) {
+    this.setState((s) => {
+      const next = { ...s.cart };
+      const q = (next[k] || 0) + d;
+      if (q <= 0) delete next[k]; else next[k] = q;
+      return { cart: next };
+    });
+  }
+
+  shopList() {
+    const q = this.state.query.trim().toLowerCase();
+    const L = this.lang;
+    let list = PRODUCTS.filter((p) =>
+      (this.state.cat === -1 || p.c === this.state.cat) &&
+      (!this.state.shopSize || p.sizes.indexOf(this.state.shopSize) >= 0) &&
+      p.price <= this.state.maxPrice &&
+      (!q || (p.name[L] + " " + p.sku + " " + p.variants[L]).toLowerCase().indexOf(q) >= 0)
+    );
+    const s = this.state.sort;
+    if (s === 1) list = list.slice().sort((a, b) => a.price - b.price);
+    else if (s === 2) list = list.slice().sort((a, b) => b.price - a.price);
+    else if (s === 3) list = list.slice().reverse();
+    else list = list.slice().sort((a, b) => a.rank - b.rank);
+    return list;
+  }
+
+  renderVals() {
+    this.ensureTimers();
+    const L = this.lang, t = COPY[L], p = (o) => this.pick(o);
+    const accent = this.props.accentColor || "#D7C80B";
+    const view = this.state.view;
+
+    const nav = [
+      { key: "home", label: t.navHome },
+      { key: "viajes", label: t.navEvents },
+      { key: "tienda", label: t.navStore },
+      { key: "faq", label: "FAQ" }
+    ].map((n) => ({
+      label: n.label,
+      go: () => this.go(n.key),
+      color: view === n.key ? accent : "#C2C3C4",
+      line: view === n.key ? accent : "transparent"
+    }));
+
+    // home — events carousel
+    const evs = CAROUSEL.map((e) => ({ ...e, badge: p(e.badge), duration: p(e.duration), spots: p(e.spots) }));
+    const idx = this.state.slide % evs.length;
+    const tabs = evs.map((e, i) => ({
+      name: e.name, meta: e.dates + " · " + e.duration,
+      nameFg: i === idx ? "#E2E3E3" : "#757676",
+      fill: i === idx ? this.state.progress + "%" : "0%",
+      go: () => this.setState({ slide: i, progress: 0 })
+    }));
+    const marqueeBase = ["Route 66", "Daytona Bike Week", "Alaska Gold Rush", "Sturgis Rally", "Coast to Coast", L === "es" ? "Viajes a medida" : "Viagens sob medida"];
+
+    // tour
+    const tourTab = this.state.tourTab;
+    const tourTabs = [t.itineraryTitle, t.includes, t.excludes].map((label, i) => ({
+      label, go: () => this.setState({ tourTab: i }),
+      bg: tourTab === i ? "#141212" : "transparent",
+      fg: tourTab === i ? "#E2E3E3" : "#757676",
+      line: tourTab === i ? accent : "transparent"
+    }));
+
+    // signup controls
+    const shirtSizes = ["S", "M", "L", "XL", "XXL"].map((s) => ({
+      label: s, pick: () => this.setState({ size: s }),
+      bg: this.state.size === s ? accent : "#0B0A0A",
+      fg: this.state.size === s ? "#0B0A0A" : "#C2C3C4",
+      border: this.state.size === s ? accent : "#201C1C"
+    }));
+    const payments = [
+      { label: { es: "Tarjeta", pt: "Cartão" }, note: { es: "USD · pasarela", pt: "USD · gateway" } },
+      { label: "Pix", note: { es: "BRL · Brasil", pt: "BRL · Brasil" } },
+      { label: { es: "Transferencia", pt: "Transferência" }, note: { es: "USD · PYG", pt: "USD · PYG" } }
+    ].map((o, i) => ({
+      label: p(o.label), note: p(o.note), pick: () => this.setState({ pay: i }),
+      bg: this.state.pay === i ? "rgba(215,200,11,0.1)" : "#0B0A0A",
+      border: this.state.pay === i ? accent : "#201C1C",
+      fg: this.state.pay === i ? accent : "#E2E3E3"
+    }));
+
+    // trips view
+    const tf = this.state.tripFilter;
+    const tripFilters = ["all", "2027", "2028", "open"].map((keyName, i) => ({
+      label: t.tripFilters[i],
+      go: () => this.setState({ tripFilter: keyName }),
+      bg: tf === keyName ? accent : "transparent",
+      fg: tf === keyName ? "#0B0A0A" : "#A6A7A7",
+      border: tf === keyName ? accent : "#201C1C"
+    }));
+    const tripCards = EVENTS.filter((e) => tf === "all" ? true : tf === "open" ? e.open : String(e.year) === tf)
+      .map((e) => ({ ...e, badge: p(e.badge), duration: p(e.duration), spots: p(e.spots), go: () => this.anchor("home", "#ruta66") }));
+
+    // shop
+    const stockTxt = (low) => low ? t.low : t.inStock;
+    const shopCats = [{ label: t.all, i: -1, n: PRODUCTS.length }].concat(
+      t.shopCats.map((label, i) => ({ label, i, n: PRODUCTS.filter((pr) => pr.c === i).length }))
+    ).map(({ label, i, n }) => ({
+      label, n, go: () => this.setState({ cat: i, limit: PAGE }),
+      bg: this.state.cat === i ? accent : "transparent",
+      fg: this.state.cat === i ? "#0B0A0A" : "#C2C3C4"
+    }));
+    const shopSizes = SIZES.map((z) => ({
+      label: z, go: () => this.setState({ shopSize: this.state.shopSize === z ? null : z, limit: PAGE }),
+      bg: this.state.shopSize === z ? accent : "transparent",
+      fg: this.state.shopSize === z ? "#0B0A0A" : "#C2C3C4",
+      border: this.state.shopSize === z ? accent : "#201C1C"
+    }));
+    const all = this.shopList();
+    const shown = all.slice(0, this.state.limit);
+    const mapProduct = (pr) => ({
+      sku: pr.sku, img: pr.img, cat: t.shopCats[pr.c], name: pr.name[L], variants: pr.variants[L],
+      price: "USD " + pr.price, stock: stockTxt(pr.low), lowStock: pr.low,
+      open: () => this.setState({ open: pr.sku, qty: 1, detailSize: pr.sizes[0] })
+    });
+
+    // product detail
+    const d = this.state.open ? PRODUCTS.find((x) => x.sku === this.state.open) : null;
+    const detail = d ? {
+      sku: d.sku, img: d.img, cat: t.shopCats[d.c], name: d.name[L], desc: d.desc[L],
+      price: "USD " + d.price, hasSizes: d.sizes.length > 1,
+      specs: d.specs[L].map((v, i) => ({ k: t.specK[i], v }))
+    } : null;
+    const detailSizes = d ? d.sizes.map((z) => ({
+      label: z, go: () => this.setState({ detailSize: z }),
+      bg: this.state.detailSize === z ? accent : "transparent",
+      fg: this.state.detailSize === z ? "#0B0A0A" : "#C2C3C4",
+      border: this.state.detailSize === z ? accent : "#2c2929"
+    })) : [];
+
+    // cart
+    const cart = Object.entries(this.state.cart).map(([k, qty]) => {
+      const pr = PRODUCTS.find((x) => x.sku === k.split("|")[0]);
+      const size = k.split("|")[1];
+      return {
+        name: pr.name[L], img: pr.img, qty,
+        line: "USD " + pr.price + (size && size !== "U" ? " · " + size : ""),
+        subtotal: "USD " + pr.price * qty,
+        inc: () => this.bump(k, 1), dec: () => this.bump(k, -1)
+      };
+    });
+    const count = cart.reduce((n, c) => n + c.qty, 0);
+    const total = Object.entries(this.state.cart).reduce((n, [k, q]) => n + q * PRODUCTS.find((x) => x.sku === k.split("|")[0]).price, 0);
+
+    // faq
+    const fc = this.state.faqCat;
+    const faqCats = [{ label: t.all, i: -1 }].concat(t.faqCats.map((label, i) => ({ label, i }))).map(({ label, i }) => ({
+      label, go: () => this.setState({ faqCat: i }),
+      bg: fc === i ? "#0B0A0A" : "transparent",
+      fg: fc === i ? accent : "#4a4848",
+      border: fc === i ? "#0B0A0A" : "#A6A7A7"
+    }));
+    const faqs = FAQS.filter((f) => fc === -1 || f.c === fc).map((f) => ({ cat: t.faqCats[f.c], q: p(f.q), a: p(f.a) }));
+
+    return {
+      t, nav,
+      isHome: view === "home", isViajes: view === "viajes", isTienda: view === "tienda", isFaq: view === "faq",
+      viewAnim: this.state.nav % 2 ? "adrViewA" : "adrViewB",
+      goHome: () => this.go("home"), goViajes: () => this.go("viajes"), goTienda: () => this.go("tienda"),
+      goContact: () => this.anchor(view, "#contacto"),
+
+      marquee: marqueeBase.concat(marqueeBase).map((text, i) => ({ text, color: i % 3 === 1 ? accent : "#757676" })),
+      tabs, active: { ...evs[idx], anim: idx % 2 ? "adrSlideA" : "adrSlideB", zoomAnim: idx % 2 ? "adrZoomA" : "adrZoomB" },
+
+      tourTabs, showItinerary: tourTab === 0, showIncludes: tourTab === 1, showExcludes: tourTab === 2,
+      tourSpecs: [
+        { label: L === "es" ? "Distancia" : "Distância", value: "3.940 km" },
+        { label: L === "es" ? "Duración" : "Duração", value: "16 " + t.unitDays + " / 15 " + t.unitNights },
+        { label: L === "es" ? "Recorrido" : "Percurso", value: "Chicago → Santa Monica" }
+      ],
+      itinerary: ITINERARY.map((i) => ({ day: p(i.day), place: i.place, note: p(i.note) })),
+      includes: INCLUDES[L].map((text) => ({ text })),
+      excludes: EXCLUDES[L].map((text) => ({ text })),
+      departures: DEPARTURES.map((dep) => ({
+        date: dep.date, state: p(dep.state), lang: p(dep.lang), fill: dep.fill, spots: p(dep.spots),
+        stateBg: dep.open ? accent : "#201C1C", stateFg: dep.open ? "#0B0A0A" : "#A6A7A7"
+      })),
+      packages: PACKAGES.map((k) => ({ name: p(k.name), price: k.price, detail: p(k.detail), spots: p(k.spots) })),
+      steps: STEPS.map((s) => ({ n: s.n, title: p(s.title), body: p(s.body) })),
+      summary: SUMMARY.map((s) => ({ k: p(s.k), v: p(s.v) })),
+      shirtSizes, payments,
+
+      carouselProducts: PRODUCTS.concat(PRODUCTS).map(mapProduct),
+      storeShift: "calc(-" + this.state.shop + " * (clamp(230px,26vw,290px) + 20px))",
+      storeTrans: this.state.shopAnim === false ? "none" : "transform 620ms cubic-bezier(.22,.8,.26,1)",
+      storePrev: () => this.shiftShop(-1),
+      storeNext: () => this.shiftShop(1),
+      storeDots: PRODUCTS.map((_, i) => ({
+        go: () => this.setState({ shop: i, shopAnim: true }),
+        w: this.state.shop % PRODUCTS.length === i ? "30px" : "10px",
+        bg: this.state.shop % PRODUCTS.length === i ? accent : "#2c2929"
+      })),
+
+      tripFilters, tripCards,
+
+      shopCats, shopSizes, shopProducts: shown.map(mapProduct),
+      query: this.state.query, maxPrice: this.state.maxPrice,
+      sorts: t.sorts.map((label, i) => ({ label, value: String(i), selected: this.state.sort === i })),
+      onSearch: (e) => this.setState({ query: e.target.value, limit: PAGE }),
+      onSort: (e) => this.setState({ sort: Number(e.target.value) }),
+      onPrice: (e) => this.setState({ maxPrice: Number(e.target.value), limit: PAGE }),
+      clearFilters: () => this.setState({ cat: -1, shopSize: null, maxPrice: 120, query: "", limit: PAGE }),
+      hasFilters: this.state.cat !== -1 || !!this.state.shopSize || this.state.maxPrice < 120 || !!this.state.query,
+      countLabel: all.length + (all.length === 1 ? (L === "es" ? " producto" : " produto") : (L === "es" ? " productos" : " produtos")),
+      shopEmpty: all.length === 0,
+      hasMore: all.length > shown.length,
+      showMore: () => this.setState({ limit: this.state.limit + PAGE }),
+
+      detail, detailSizes, qty: this.state.qty,
+      closeDetail: () => this.setState({ open: null }),
+      incQty: () => this.setState({ qty: this.state.qty + 1 }),
+      decQty: () => this.setState({ qty: Math.max(1, this.state.qty - 1) }),
+      addDetail: () => d && this.add(d.sku, this.state.detailSize, this.state.qty),
+
+      cart, cartOpen: this.state.cartOpen, cartCount: count, cartEmpty: count === 0, cartTotal: "USD " + total,
+      openCart: () => this.setState({ cartOpen: true }), closeCart: () => this.setState({ cartOpen: false }),
+
+      faqCats, faqs,
+
+      waOpacity: this.state.atFooter ? "0" : "1",
+      waTransform: this.state.atFooter ? "translateY(24px) scale(0.92)" : "none",
+      waEvents: this.state.atFooter ? "none" : "auto",
+      setEs: () => this.setState({ lang: "es" }),
+      setPt: () => this.setState({ lang: "pt" }),
+      esBg: L === "es" ? accent : "transparent", esFg: L === "es" ? "#0B0A0A" : "#A6A7A7",
+      ptBg: L === "pt" ? accent : "transparent", ptFg: L === "pt" ? "#0B0A0A" : "#A6A7A7"
+    };
+  }
+}
+
+</script>
+</body>
+</html>
