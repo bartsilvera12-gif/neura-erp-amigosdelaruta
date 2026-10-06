@@ -6,9 +6,7 @@
     "node": ">=18.17.0"
   },
   "scripts": {
-    "predev": "node sitio-web-adr/sync.mjs",
     "dev": "next dev",
-    "prebuild": "node sitio-web-adr/sync.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

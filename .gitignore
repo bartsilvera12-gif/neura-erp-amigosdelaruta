@@ -51,6 +51,3 @@ e2e-super-admin*.png
 
 # Auditorías locales (scripts scratch + CSV con datos sensibles, no commitear)
 /tmp/
-
-# Sitio web ADR: espejo generado por sitio-web-adr/sync.mjs (fuente: sitio-web-adr/publico/)
-/public/sitio/

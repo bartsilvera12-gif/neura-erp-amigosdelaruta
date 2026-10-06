@@ -38,20 +38,6 @@ const nextConfig: NextConfig = {
      */
     proxyClientMaxBodySize: "70mb",
   },
-  /**
-   * Sitio web público de Amigos de la Ruta. Es un export estático (`.dc.html` + su
-   * runtime `support.js`) que vive en `public/sitio/`, no un route de Next: no comparte
-   * layout, auth ni providers con el ERP. Next sirve `public/` tal cual, pero sólo
-   * responde a la ruta exacta del archivo (`/sitio/index.html`), así que este rewrite
-   * hace que `/sitio` y `/sitio/` también lo sirvan. Las rutas internas del HTML son
-   * absolutas (`/sitio/...`) justamente para que funcionen con las tres formas.
-   */
-  async rewrites() {
-    return [
-      { source: "/sitio", destination: "/sitio/index.html" },
-      { source: "/sitio/", destination: "/sitio/index.html" },
-    ];
-  },
 };
 
 export default nextConfig;
