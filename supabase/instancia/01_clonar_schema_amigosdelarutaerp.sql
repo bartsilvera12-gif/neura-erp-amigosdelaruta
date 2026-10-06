@@ -41,6 +41,13 @@ BEGIN;
 -- tablas que todavía no existen en el destino. Solo para esta transacción.
 SET LOCAL check_function_bodies = off;
 
+-- pg_trgm y otras extensiones instalan sus clases de operadores en su propio
+-- schema. El paso 6 recrea indices a partir de su texto SQL, y ahi un
+-- `gin_trgm_ops` sin calificar tiene que resolverse por search_path o falla con
+-- "operator class does not exist". Todo el DDL de este script califica schema
+-- explicitamente, asi que ampliar el search_path no cambia nada mas.
+SET LOCAL search_path = public, extensions, pg_catalog;
+
 DO $CLONE$
 DECLARE
   v_src  text := 'neura';
@@ -304,11 +311,18 @@ BEGIN
   END LOOP;
 
   -- -------------------------------------------------------------------------
-  -- 6) Defaults que quedaron apuntando al schema origen.
-  --    `LIKE` copia el default TAL CUAL: una columna `serial` de neura queda con
-  --    `nextval('neura.t_id_seq')`, o sea compartiendo la secuencia del origen.
-  --    Aca se reescriben al destino y se re-establece el OWNED BY.
+  -- 6) Reescribir TODO lo que `LIKE` copio literal apuntando al schema origen.
+  --
+  --    `LIKE ... INCLUDING ALL` no traduce nombres: copia el texto tal cual. Eso
+  --    deja cuatro clases de fuga hacia el origen, y hay que tratarlas todas o
+  --    el schema nuevo queda dependiendo de `neura`:
+  --      6a. defaults de columna  -> p. ej. `nextval('neura.t_id_seq')` en un serial
+  --      6b. expresiones de indice -> p. ej. `gin (neura.sin_tildes(name))`
+  --      6c. CHECK                 -> p. ej. `CHECK (neura.validar(x))`
+  --      6d. columnas generadas    -> no se pueden reescribir en el lugar
+  --    La auditoria del final del script vuelve a verificar que no quedo nada.
   -- -------------------------------------------------------------------------
+  -- 6a) Defaults de columna.
   FOR r IN
     SELECT c.relname, a.attname, pg_get_expr(ad.adbin, ad.adrelid) AS def
       FROM pg_class     c
@@ -321,7 +335,63 @@ BEGIN
     v_def := regexp_replace(r.def, '\m' || v_src || '\M', v_dst, 'g');
     EXECUTE format('ALTER TABLE %I.%I ALTER COLUMN %I SET DEFAULT %s',
                    v_dst, r.relname, r.attname, v_def);
-    RAISE NOTICE '[6] default %.%.%: -> %', v_dst, r.relname, r.attname, v_def;
+    RAISE NOTICE '[6a] default %.%.%: -> %', v_dst, r.relname, r.attname, v_def;
+  END LOOP;
+
+  -- 6b) Expresiones de indice. Se recrea el indice con el nombre reescrito.
+  --     Los indices que respaldan un constraint (PK/UNIQUE) no se pueden dropear
+  --     directo, asi que si aparece uno se corta y se avisa en vez de dejarlo.
+  FOR r IN
+    SELECT m.relname AS tabla, i.relname AS idxname,
+           pg_get_indexdef(i.oid) AS def,
+           EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conindid = i.oid) AS de_constraint
+      FROM pg_index x
+      JOIN pg_class i ON i.oid = x.indexrelid
+      JOIN pg_class m ON m.oid = x.indrelid
+     WHERE m.relnamespace = v_dst_oid
+       AND pg_get_indexdef(i.oid) ~ ('\m' || v_src || '\M')
+     ORDER BY m.relname, i.relname
+  LOOP
+    IF r.de_constraint THEN
+      RAISE EXCEPTION
+        '[6b] el indice %.% respalda un constraint y su expresion llama a %. Hay que resolverlo a mano (ALTER TABLE ... DROP CONSTRAINT).',
+        v_dst, r.idxname, v_src;
+    END IF;
+    v_def := regexp_replace(r.def, '\m' || v_src || '\M', v_dst, 'g');
+    EXECUTE format('DROP INDEX %I.%I', v_dst, r.idxname);
+    EXECUTE v_def;
+    RAISE NOTICE '[6b] indice %.%: reescrito', v_dst, r.idxname;
+  END LOOP;
+
+  -- 6c) CHECK constraints.
+  FOR r IN
+    SELECT c.relname, k.conname, pg_get_constraintdef(k.oid) AS def
+      FROM pg_constraint k
+      JOIN pg_class c ON c.oid = k.conrelid
+     WHERE c.relnamespace = v_dst_oid AND k.contype = 'c'
+       AND pg_get_constraintdef(k.oid) ~ ('\m' || v_src || '\M')
+     ORDER BY c.relname, k.conname
+  LOOP
+    EXECUTE format('ALTER TABLE %I.%I DROP CONSTRAINT %I', v_dst, r.relname, r.conname);
+    EXECUTE format('ALTER TABLE %I.%I ADD CONSTRAINT %I %s',
+                   v_dst, r.relname, r.conname,
+                   regexp_replace(r.def, '\m' || v_src || '\M', v_dst, 'g'));
+    RAISE NOTICE '[6c] check %.% %: reescrito', v_dst, r.relname, r.conname;
+  END LOOP;
+
+  -- 6d) Columnas generadas: no hay forma limpia de reescribir la expresion sin
+  --     recrear la columna, asi que se corta y se avisa cual es.
+  FOR r IN
+    SELECT c.relname, a.attname, pg_get_expr(ad.adbin, ad.adrelid) AS def
+      FROM pg_attribute a
+      JOIN pg_class     c  ON c.oid = a.attrelid
+      JOIN pg_attrdef   ad ON ad.adrelid = c.oid AND ad.adnum = a.attnum
+     WHERE c.relnamespace = v_dst_oid AND a.attgenerated <> ''
+       AND pg_get_expr(ad.adbin, ad.adrelid) ~ ('\m' || v_src || '\M')
+  LOOP
+    RAISE EXCEPTION
+      '[6d] la columna generada %.%.% llama a %: %. Hay que reescribirla a mano.',
+      v_dst, r.relname, r.attname, v_src, r.def;
   END LOOP;
 
   -- OWNED BY: ata cada secuencia `serial` del destino a su columna del destino,
@@ -655,10 +725,10 @@ SELECT objeto,
 -- Auditoria de independencia: busca CUALQUIER referencia a `neura` que haya
 -- quedado dentro de `amigosdelarutaerp`.
 --
--- Lo esperado es CERO FILAS. El paso 6 reescribe los defaults de columna, pero
--- `LIKE` tambien copia literalmente los CHECK, las expresiones de indice y las
--- columnas generadas: si alguno de esos llama a una funcion de `neura`, aparece
--- aca y hay que arreglarlo a mano (DROP + ADD con el nombre reescrito).
+-- Lo esperado es CERO FILAS. El paso 6 ya reescribe defaults, expresiones de
+-- indice y CHECK, y aborta si encuentra una columna generada que no puede
+-- reescribir. Esta consulta es la verificacion independiente de que no quedo
+-- ninguna fuga: si devuelve algo, es un caso que el paso 6 todavia no cubre.
 --
 -- Si aparecen filas de tipo 'funcion' cuyo cuerpo menciona `neura` dentro de un
 -- literal (p. ej. una migracion que itera schemas), revisalas pero puede estar
