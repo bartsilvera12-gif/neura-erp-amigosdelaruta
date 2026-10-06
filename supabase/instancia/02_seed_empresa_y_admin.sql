@@ -52,6 +52,13 @@ DECLARE
     'proyectos',
     'agenda'
   ];
+
+  -- Pestañas del módulo Dashboard. Sin `comercial`: ver el paso 7.
+  v_dash_slugs text[] := ARRAY[
+    'financiero',
+    'inventario',
+    'ventas'
+  ];
 BEGIN
   IF to_regnamespace(v_dst) IS NULL THEN
     RAISE EXCEPTION 'No existe el schema %. Corré primero el script 01.', v_dst;
@@ -157,16 +164,35 @@ BEGIN
 
   -- -------------------------------------------------------------------------
   -- 7) Vistas de dashboard de la empresa (pestañas del módulo Dashboard).
+  --    `comercial` queda fuera a pedido: es el tablero de CRM (leads, pipeline,
+  --    clientes ganados) y esta instancia no tiene el módulo CRM habilitado, así
+  --    que mostraba solo ceros.
+  --    La pestaña que quede primera pasa a ser la de arranque; el Dashboard
+  --    corrige solo el `?tab=` de la URL si apunta a una que no está activa.
   -- -------------------------------------------------------------------------
   EXECUTE format(
     'INSERT INTO %I.empresa_dashboard_views (empresa_id, dashboard_view_id, activo)
      SELECT $1, v.id, true FROM %I.dashboard_views v
-      WHERE v.activo
+      WHERE v.activo AND v.slug = ANY($2)
         AND NOT EXISTS (
           SELECT 1 FROM %I.empresa_dashboard_views edv
            WHERE edv.empresa_id = $1 AND edv.dashboard_view_id = v.id)',
-    v_dst, v_dst, v_dst) USING v_empresa_id;
-  RAISE NOTICE '[7] empresa_dashboard_views: listo';
+    v_dst, v_dst, v_dst) USING v_empresa_id, v_dash_slugs;
+
+  -- Y desactiva cualquiera que no esté en la lista (hace falta para que
+  -- re-correr este script sobre una instancia ya instalada saque `comercial`).
+  EXECUTE format(
+    'UPDATE %I.empresa_dashboard_views edv SET activo = false
+       FROM %I.dashboard_views v
+      WHERE edv.dashboard_view_id = v.id AND edv.empresa_id = $1
+        AND NOT (v.slug = ANY($2)) AND edv.activo',
+    v_dst, v_dst) USING v_empresa_id, v_dash_slugs;
+
+  EXECUTE format(
+    'SELECT count(*) FROM %I.empresa_dashboard_views WHERE empresa_id = $1 AND activo',
+    v_dst) INTO v_n USING v_empresa_id;
+  RAISE NOTICE '[7] empresa_dashboard_views activas: % (esperado %)',
+               v_n, array_length(v_dash_slugs, 1);
 
   RAISE NOTICE 'Semilla lista. Entra con % en http://amigosdelaruta.neura.com.py', v_email;
 END
@@ -188,3 +214,10 @@ SELECT m.slug, m.nombre, em.activo
   FROM amigosdelarutaerp.empresa_modulos em
   JOIN amigosdelarutaerp.modulos m ON m.id = em.modulo_id
  ORDER BY m.slug;
+
+-- Pestañas del Dashboard: financiero, inventario y ventas en true; `comercial`
+-- en false si la instancia venía de una instalación anterior.
+SELECT v.slug, v.nombre, edv.activo
+  FROM amigosdelarutaerp.empresa_dashboard_views edv
+  JOIN amigosdelarutaerp.dashboard_views v ON v.id = edv.dashboard_view_id
+ ORDER BY edv.activo DESC, v.orden, v.slug;
