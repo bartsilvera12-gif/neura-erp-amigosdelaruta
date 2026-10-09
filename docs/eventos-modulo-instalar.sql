@@ -8,34 +8,41 @@
 -- Esas dos son la fuente de verdad: si cambian, hay que regenerar este archivo.
 -- Acá están juntas sólo por comodidad, porque el editor corre un script por vez.
 --
+-- ACOTADO A `amigosdelarutaerp`. No crea nada en `public` y no toca ningún otro
+-- schema: este repo es la instancia de un solo cliente.
+--
 -- CÓMO CORRERLO
---   1. Pegar todo y ejecutar. Tarda unos segundos: recorre todos los schemas de
---      empresa que tengan el ERP instalado.
---   2. En la pestaña de mensajes van a aparecer los NOTICE:
---        modulo eventos provisionado en <schema>
---        reglas del modulo eventos aplicadas en <schema>
---      Si no aparece ningún NOTICE, no encontró schemas con `productos` +
---      `clientes` y no hizo nada. Avisame si pasa eso.
+--   1. Pegar todo y ejecutar.
+--   2. En la pestaña de mensajes tienen que aparecer los dos NOTICE:
+--        modulo eventos provisionado en amigosdelarutaerp
+--        reglas del modulo eventos aplicadas en amigosdelarutaerp
 --   3. Es idempotente: se puede volver a correr sin romper nada.
 --
 -- SI CORTA
---   El error más probable es "No se encontro puede_acceder_empresa() para el
---   schema X". Es a propósito: sin esa función no se pueden crear las políticas
---   RLS, y dejar las tablas sin política en un ERP multiempresa sería peor que
---   no crearlas. Si pasa, pasame el nombre del schema.
+--   · "No existe el schema amigosdelarutaerp"  -> falta correr el 01.
+--   · "no tiene productos"                     -> el schema no es un ERP instalado.
+--   · "Falta public.set_updated_at()"          -> la usan 13 triggers de este
+--     módulo. El script la referencia pero no la crea, para no escribir en
+--     `public`. En este ERP ya existe (se usa en 62 lugares).
+--   · "No se encontro puede_acceder_empresa()" -> sin esa función no se pueden
+--     crear las políticas RLS, y dejar las tablas sin política en un ERP
+--     multiempresa sería peor que no crearlas.
 --
 -- PARA VERIFICAR DESPUÉS (correr aparte):
+--   -- tiene que devolver UNA sola fila: amigosdelarutaerp | 16
 --   select table_schema, count(*)
 --   from information_schema.tables
---   where table_name in ('eventos','salidas','paquetes','reservas','participantes',
---                        'reserva_pagos','evento_kits','reserva_stock')
+--   where table_name in ('eventos','evento_itinerario','salidas','paquetes',
+--                        'adicionales','reservas','reserva_adicionales',
+--                        'participantes','participante_documentos','reserva_pagos',
+--                        'reserva_plan_pagos','producto_variantes','evento_kits',
+--                        'reserva_stock','eventos_auditoria','reserva_correlativos')
 --   group by 1 order by 1;
 --
 --   select schemaname, tablename, count(*) as politicas
 --   from pg_policies where tablename in ('eventos','reservas','participantes','reserva_pagos')
 --   group by 1,2 order by 1,2;
 -- =============================================================================
-
 
 -- =============================================================================
 -- Módulo Eventos — provisión multi-schema.
@@ -60,17 +67,18 @@
 SET client_encoding = 'UTF8';
 SET lock_timeout = '10s';
 
-CREATE OR REPLACE FUNCTION public.neura_provision_eventos(s text)
-RETURNS void
-LANGUAGE plpgsql
-AS $fn$
+DO $EVENTOS$
+DECLARE
+  s text := 'amigosdelarutaerp';
 BEGIN
-  IF s IS NULL OR btrim(s) = '' THEN
-    RETURN;
-  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = s) THEN
-    RETURN;
+    RAISE EXCEPTION 'No existe el schema %.', s;
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                  WHERE n.nspname = s AND c.relname = 'productos' AND c.relkind = 'r') THEN
+    RAISE EXCEPTION 'El schema % no tiene productos: no parece un ERP instalado.', s;
+  END IF;
+
 
     -- eventos
     EXECUTE format($ddl$CREATE TABLE IF NOT EXISTS %1$I.eventos (
@@ -433,33 +441,9 @@ BEGIN
   EXECUTE format($ddl$
     ALTER TABLE %1$I.productos ADD COLUMN IF NOT EXISTS stock_reservado numeric NOT NULL DEFAULT 0
   $ddl$, s);
-END;
-$fn$;
-
-COMMENT ON FUNCTION public.neura_provision_eventos(text) IS
-  'Crea las tablas del módulo Eventos en el schema indicado. Idempotente. Llamar al dar de alta una empresa nueva.';
-
--- Ejecuta DDL y `public` está expuesto por PostgREST en Supabase: sin esto
--- quedaría alcanzable como RPC. Mismo criterio que usa el repo con
--- public.sorteos_ensure_order_from_chat.
-REVOKE ALL ON FUNCTION public.neura_provision_eventos(text) FROM PUBLIC;
-
--- Provisión en todos los schemas que ya tienen el ERP instalado.
-DO $$
-DECLARE r RECORD;
-BEGIN
-  FOR r IN
-    SELECT n.nspname AS sch
-    FROM pg_namespace n
-    WHERE EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = n.oid AND c.relname = 'productos' AND c.relkind = 'r')
-      AND EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = n.oid AND c.relname = 'clientes'  AND c.relkind = 'r')
-    ORDER BY 1
-  LOOP
-    PERFORM public.neura_provision_eventos(r.sch);
-    RAISE NOTICE 'modulo eventos provisionado en %', r.sch;
-  END LOOP;
-END $$;
-
+  RAISE NOTICE 'modulo eventos provisionado en %', s;
+END
+$EVENTOS$;
 SELECT pg_notify('pgrst', 'reload schema');
 
 
@@ -470,9 +454,8 @@ SELECT pg_notify('pgrst', 'reload schema');
 
 -- =============================================================================
 -- Módulo Eventos — reglas: RLS, triggers, correlativo y vistas de cálculo.
--- Continúa 20261009120000_eventos_provision.sql con el mismo patrón
--- multi-schema: una función de provisión por schema y un bucle que la aplica a
--- todos los que ya tienen el módulo.
+-- Continúa 20261009120000_eventos_provision.sql, igual de acotada: aplica a
+-- `amigosdelarutaerp` y a nada más, y no deja funciones en `public`.
 --
 -- Lo que esta migración hace cumplir EN LA BASE, porque la web va a escribir
 -- contra estas tablas y no alcanza con confiar en el cliente:
@@ -485,34 +468,25 @@ SELECT pg_notify('pgrst', 'reload schema');
 SET client_encoding = 'UTF8';
 SET lock_timeout = '10s';
 
--- `public.set_updated_at()` ya existe en el ERP y se usa en 62 lugares: los
--- triggers de este modulo la reusan en vez de duplicarla. Solo se crea si
--- faltara, para que el modulo tambien instale en una base limpia.
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_proc pp JOIN pg_namespace nn ON nn.oid = pp.pronamespace
-    WHERE nn.nspname = 'public' AND pp.proname = 'set_updated_at'
-  ) THEN
-    EXECUTE $crea$
-      CREATE FUNCTION public.set_updated_at() RETURNS trigger LANGUAGE plpgsql AS $body$
-      BEGIN NEW.updated_at = now(); RETURN NEW; END;
-      $body$
-    $crea$;
-  END IF;
-END $$;
+-- `public.set_updated_at()` ya existe en el ERP y la usan 62 lugares: los
+-- triggers de este modulo la REFERENCIAN. No se crea acá — este script no
+-- escribe en `public`. Si faltara, se corta abajo con un mensaje claro.
 
-CREATE OR REPLACE FUNCTION public.neura_provision_eventos_reglas(s text)
-RETURNS void
-LANGUAGE plpgsql
-AS $fn$
+DO $REGLAS$
 DECLARE
-  v_auth boolean := EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated');
-  v_svc  boolean := EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role');
+  s       text := 'amigosdelarutaerp';
+  v_auth  boolean := EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated');
+  v_svc   boolean := EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role');
   v_guard text;
 BEGIN
-  IF s IS NULL OR btrim(s) = '' THEN RETURN; END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = s) THEN RETURN; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = s) THEN
+    RAISE EXCEPTION 'No existe el schema %.', s;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                  WHERE n.nspname = 'public' AND p.proname = 'set_updated_at') THEN
+    RAISE EXCEPTION 'Falta public.set_updated_at(), que usan los triggers de este modulo.';
+  END IF;
+
 
   -- `puede_acceder_empresa` vive en el schema del tenant en instalaciones
   -- nuevas y en `public` en las viejas. Se resuelve explícitamente en vez de
@@ -530,10 +504,6 @@ BEGIN
 
   IF v_guard IS NULL THEN
     RAISE EXCEPTION 'No se encontro puede_acceder_empresa() para el schema %. Sin guard no se crean politicas RLS.', s;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-                 WHERE n.nspname = s AND c.relname = 'reservas' AND c.relkind = 'r') THEN
-    RETURN;   -- el módulo no está provisionado en este schema
   END IF;
 
   -- RLS + políticas + grants + updated_at
@@ -849,30 +819,7 @@ BEGIN
   IF v_svc  THEN EXECUTE format($ddl$GRANT SELECT ON %1$I.salida_cupos TO service_role$ddl$, s); END IF;
   IF v_auth THEN EXECUTE format($ddl$GRANT SELECT ON %1$I.kit_necesidad TO authenticated$ddl$, s); END IF;
   IF v_svc  THEN EXECUTE format($ddl$GRANT SELECT ON %1$I.kit_necesidad TO service_role$ddl$, s); END IF;
-END;
-$fn$;
-
-COMMENT ON FUNCTION public.neura_provision_eventos_reglas(text) IS
-  'Aplica RLS, triggers, correlativo y vistas del módulo Eventos en el schema indicado. Idempotente.';
-
--- Ejecuta DDL y `public` está expuesto por PostgREST en Supabase: sin esto
--- quedaría alcanzable como RPC. Mismo criterio que usa el repo con
--- public.sorteos_ensure_order_from_chat.
-REVOKE ALL ON FUNCTION public.neura_provision_eventos_reglas(text) FROM PUBLIC;
-
-DO $$
-DECLARE r RECORD;
-BEGIN
-  FOR r IN
-    SELECT n.nspname AS sch
-    FROM pg_namespace n
-    WHERE EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = n.oid AND c.relname = 'reservas' AND c.relkind = 'r')
-      AND EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = n.oid AND c.relname = 'productos' AND c.relkind = 'r')
-    ORDER BY 1
-  LOOP
-    PERFORM public.neura_provision_eventos_reglas(r.sch);
-    RAISE NOTICE 'reglas del modulo eventos aplicadas en %', r.sch;
-  END LOOP;
-END $$;
-
+  RAISE NOTICE 'reglas del modulo eventos aplicadas en %', s;
+END
+$REGLAS$;
 SELECT pg_notify('pgrst', 'reload schema');

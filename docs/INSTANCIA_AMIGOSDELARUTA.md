@@ -52,7 +52,6 @@ En el SQL editor del Supabase self-hosted, en este orden:
 | `supabase/instancia/00_preflight_schema_neura.sql` | Solo lee. Inventario de `neura` y aviso de lo que el clonador no sabe replicar. |
 | `supabase/instancia/01_clonar_schema_amigosdelarutaerp.sql` | Crea `amigosdelarutaerp` como clon estructural de `neura`, sin una sola fila. |
 | `supabase/instancia/02_seed_empresa_y_admin.sql` | Empresa, catálogos globales, usuario admin y los 14 módulos. |
-| `supabase/instancia/06_eventos_amigosdelaruta.sql` | Módulo Eventos (16 tablas) **acotado a este schema**. Usar este y no `docs/eventos-modulo-instalar.sql`: ese instala en todos los schemas y deja funciones en `public`. |
 | `supabase/instancia/04_catalogos_por_empresa.sql` | Catálogos por empresa de Proyectos: estados, tipos, prioridades, objetivos SLV. Sin esto el Kanban abre vacío. |
 | `supabase/instancia/03_catalogos_pendientes.sql` | Opcional, al final. Lista otras tablas de referencia que quedaron vacías. |
 

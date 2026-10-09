@@ -1,8 +1,7 @@
 -- =============================================================================
 -- Módulo Eventos — reglas: RLS, triggers, correlativo y vistas de cálculo.
--- Continúa 20261009120000_eventos_provision.sql con el mismo patrón
--- multi-schema: una función de provisión por schema y un bucle que la aplica a
--- todos los que ya tienen el módulo.
+-- Continúa 20261009120000_eventos_provision.sql, igual de acotada: aplica a
+-- `amigosdelarutaerp` y a nada más, y no deja funciones en `public`.
 --
 -- Lo que esta migración hace cumplir EN LA BASE, porque la web va a escribir
 -- contra estas tablas y no alcanza con confiar en el cliente:
@@ -15,34 +14,25 @@
 SET client_encoding = 'UTF8';
 SET lock_timeout = '10s';
 
--- `public.set_updated_at()` ya existe en el ERP y se usa en 62 lugares: los
--- triggers de este modulo la reusan en vez de duplicarla. Solo se crea si
--- faltara, para que el modulo tambien instale en una base limpia.
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_proc pp JOIN pg_namespace nn ON nn.oid = pp.pronamespace
-    WHERE nn.nspname = 'public' AND pp.proname = 'set_updated_at'
-  ) THEN
-    EXECUTE $crea$
-      CREATE FUNCTION public.set_updated_at() RETURNS trigger LANGUAGE plpgsql AS $body$
-      BEGIN NEW.updated_at = now(); RETURN NEW; END;
-      $body$
-    $crea$;
-  END IF;
-END $$;
+-- `public.set_updated_at()` ya existe en el ERP y la usan 62 lugares: los
+-- triggers de este modulo la REFERENCIAN. No se crea acá — este script no
+-- escribe en `public`. Si faltara, se corta abajo con un mensaje claro.
 
-CREATE OR REPLACE FUNCTION public.neura_provision_eventos_reglas(s text)
-RETURNS void
-LANGUAGE plpgsql
-AS $fn$
+DO $REGLAS$
 DECLARE
-  v_auth boolean := EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated');
-  v_svc  boolean := EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role');
+  s       text := 'amigosdelarutaerp';
+  v_auth  boolean := EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated');
+  v_svc   boolean := EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role');
   v_guard text;
 BEGIN
-  IF s IS NULL OR btrim(s) = '' THEN RETURN; END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = s) THEN RETURN; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = s) THEN
+    RAISE EXCEPTION 'No existe el schema %.', s;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                  WHERE n.nspname = 'public' AND p.proname = 'set_updated_at') THEN
+    RAISE EXCEPTION 'Falta public.set_updated_at(), que usan los triggers de este modulo.';
+  END IF;
+
 
   -- `puede_acceder_empresa` vive en el schema del tenant en instalaciones
   -- nuevas y en `public` en las viejas. Se resuelve explícitamente en vez de
@@ -60,10 +50,6 @@ BEGIN
 
   IF v_guard IS NULL THEN
     RAISE EXCEPTION 'No se encontro puede_acceder_empresa() para el schema %. Sin guard no se crean politicas RLS.', s;
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-                 WHERE n.nspname = s AND c.relname = 'reservas' AND c.relkind = 'r') THEN
-    RETURN;   -- el módulo no está provisionado en este schema
   END IF;
 
   -- RLS + políticas + grants + updated_at
@@ -379,30 +365,7 @@ BEGIN
   IF v_svc  THEN EXECUTE format($ddl$GRANT SELECT ON %1$I.salida_cupos TO service_role$ddl$, s); END IF;
   IF v_auth THEN EXECUTE format($ddl$GRANT SELECT ON %1$I.kit_necesidad TO authenticated$ddl$, s); END IF;
   IF v_svc  THEN EXECUTE format($ddl$GRANT SELECT ON %1$I.kit_necesidad TO service_role$ddl$, s); END IF;
-END;
-$fn$;
-
-COMMENT ON FUNCTION public.neura_provision_eventos_reglas(text) IS
-  'Aplica RLS, triggers, correlativo y vistas del módulo Eventos en el schema indicado. Idempotente.';
-
--- Ejecuta DDL y `public` está expuesto por PostgREST en Supabase: sin esto
--- quedaría alcanzable como RPC. Mismo criterio que usa el repo con
--- public.sorteos_ensure_order_from_chat.
-REVOKE ALL ON FUNCTION public.neura_provision_eventos_reglas(text) FROM PUBLIC;
-
-DO $$
-DECLARE r RECORD;
-BEGIN
-  FOR r IN
-    SELECT n.nspname AS sch
-    FROM pg_namespace n
-    WHERE EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = n.oid AND c.relname = 'reservas' AND c.relkind = 'r')
-      AND EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = n.oid AND c.relname = 'productos' AND c.relkind = 'r')
-    ORDER BY 1
-  LOOP
-    PERFORM public.neura_provision_eventos_reglas(r.sch);
-    RAISE NOTICE 'reglas del modulo eventos aplicadas en %', r.sch;
-  END LOOP;
-END $$;
-
+  RAISE NOTICE 'reglas del modulo eventos aplicadas en %', s;
+END
+$REGLAS$;
 SELECT pg_notify('pgrst', 'reload schema');

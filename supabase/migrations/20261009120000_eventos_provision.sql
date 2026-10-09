@@ -21,17 +21,18 @@
 SET client_encoding = 'UTF8';
 SET lock_timeout = '10s';
 
-CREATE OR REPLACE FUNCTION public.neura_provision_eventos(s text)
-RETURNS void
-LANGUAGE plpgsql
-AS $fn$
+DO $EVENTOS$
+DECLARE
+  s text := 'amigosdelarutaerp';
 BEGIN
-  IF s IS NULL OR btrim(s) = '' THEN
-    RETURN;
-  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = s) THEN
-    RETURN;
+    RAISE EXCEPTION 'No existe el schema %.', s;
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                  WHERE n.nspname = s AND c.relname = 'productos' AND c.relkind = 'r') THEN
+    RAISE EXCEPTION 'El schema % no tiene productos: no parece un ERP instalado.', s;
+  END IF;
+
 
     -- eventos
     EXECUTE format($ddl$CREATE TABLE IF NOT EXISTS %1$I.eventos (
@@ -394,31 +395,7 @@ BEGIN
   EXECUTE format($ddl$
     ALTER TABLE %1$I.productos ADD COLUMN IF NOT EXISTS stock_reservado numeric NOT NULL DEFAULT 0
   $ddl$, s);
-END;
-$fn$;
-
-COMMENT ON FUNCTION public.neura_provision_eventos(text) IS
-  'Crea las tablas del módulo Eventos en el schema indicado. Idempotente. Llamar al dar de alta una empresa nueva.';
-
--- Ejecuta DDL y `public` está expuesto por PostgREST en Supabase: sin esto
--- quedaría alcanzable como RPC. Mismo criterio que usa el repo con
--- public.sorteos_ensure_order_from_chat.
-REVOKE ALL ON FUNCTION public.neura_provision_eventos(text) FROM PUBLIC;
-
--- Provisión en todos los schemas que ya tienen el ERP instalado.
-DO $$
-DECLARE r RECORD;
-BEGIN
-  FOR r IN
-    SELECT n.nspname AS sch
-    FROM pg_namespace n
-    WHERE EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = n.oid AND c.relname = 'productos' AND c.relkind = 'r')
-      AND EXISTS (SELECT 1 FROM pg_class c WHERE c.relnamespace = n.oid AND c.relname = 'clientes'  AND c.relkind = 'r')
-    ORDER BY 1
-  LOOP
-    PERFORM public.neura_provision_eventos(r.sch);
-    RAISE NOTICE 'modulo eventos provisionado en %', r.sch;
-  END LOOP;
-END $$;
-
+  RAISE NOTICE 'modulo eventos provisionado en %', s;
+END
+$EVENTOS$;
 SELECT pg_notify('pgrst', 'reload schema');
