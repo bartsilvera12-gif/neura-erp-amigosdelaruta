@@ -264,6 +264,35 @@ BEGIN
     RAISE NOTICE '[web] %.%: lista', v_dst, t;
   END LOOP;
 
+  -- ---------------------------------------------------------------------------
+  -- Correlativo de pedido. Un INSERT ... ON CONFLICT DO UPDATE RETURNING toma
+  -- el lock de la fila, asi que dos pedidos simultaneos del sitio no pueden
+  -- sacar el mismo numero. Es el mismo criterio que usa `next_codigo_reserva`
+  -- del modulo Eventos.
+  --
+  -- Va en el schema de la instancia, no en `public`.
+  -- ---------------------------------------------------------------------------
+  EXECUTE format($ddl$
+    CREATE OR REPLACE FUNCTION %1$I.web_pedido_siguiente_numero(p_empresa_id uuid)
+    RETURNS integer LANGUAGE plpgsql AS $body$
+    DECLARE v_num integer;
+    BEGIN
+      INSERT INTO %1$I.web_pedido_correlativo (empresa_id, ultimo)
+      VALUES (p_empresa_id, 1)
+      ON CONFLICT (empresa_id)
+      DO UPDATE SET ultimo = %1$I.web_pedido_correlativo.ultimo + 1
+      RETURNING ultimo INTO v_num;
+      RETURN v_num;
+    END;
+    $body$$ddl$, v_dst);
+
+  IF v_auth THEN
+    EXECUTE format($d$GRANT EXECUTE ON FUNCTION %1$I.web_pedido_siguiente_numero(uuid) TO authenticated$d$, v_dst);
+  END IF;
+  IF v_svc THEN
+    EXECUTE format($d$GRANT EXECUTE ON FUNCTION %1$I.web_pedido_siguiente_numero(uuid) TO service_role$d$, v_dst);
+  END IF;
+
   RAISE NOTICE 'Tablas de contenido web listas en %', v_dst;
 END
 $WEB$;
@@ -271,7 +300,8 @@ $WEB$;
 COMMIT;
 
 -- =============================================================================
--- Verificación: 8 tablas, todas con RLS y con sus 4 políticas.
+-- Verificación: 8 tablas, todas con RLS y con sus 4 políticas, más la función
+-- del correlativo de pedidos.
 --
 -- El filtro `relkind = 'r'` no es opcional: sin él entran también los índices
 -- (`web_producto_pkey`, `web_config_clave_uk`…), que aparecen con rls=false y
@@ -286,3 +316,8 @@ SELECT c.relname AS tabla,
    AND c.relkind = 'r'
    AND c.relname LIKE 'web\_%'
  ORDER BY 1;
+
+-- La función del correlativo: tiene que devolver una fila.
+SELECT p.proname, pg_get_function_identity_arguments(p.oid) AS args
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+ WHERE n.nspname = 'amigosdelarutaerp' AND p.proname = 'web_pedido_siguiente_numero';
