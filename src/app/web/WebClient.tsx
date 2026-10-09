@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { RefreshCw, Plus, Trash2, Save, Globe, AlertCircle, Check } from "lucide-react";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
+import CampoImagen from "@/components/web/CampoImagen";
 
 /**
  * Módulo Web: administra el contenido del sitio público
@@ -413,7 +414,12 @@ export default function WebClient({ seccion }: { seccion: SeccionWeb }) {
                     valor={valorDe(clave, fila, "descripcion")}
                     onChange={(v) => setDraftCampo(clave, "descripcion", v)}
                   />
-                  <CampoUrl clave={clave} fila={fila} campo="imagen_url" valorDe={valorDe} onCampo={setDraftCampo} />
+                  <CampoImagen
+                    coleccion="moto"
+                    idFila={fila ? String(fila.id) : null}
+                    valor={String(valorDe(clave, fila, "imagen_url") ?? "")}
+                    onChange={(url) => setDraftCampo(clave, "imagen_url", url)}
+                  />
                 </>
               )}
             />
@@ -504,34 +510,6 @@ export default function WebClient({ seccion }: { seccion: SeccionWeb }) {
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-function CampoUrl({
-  clave,
-  fila,
-  campo,
-  valorDe,
-  onCampo,
-}: {
-  clave: string;
-  fila: Fila | null;
-  campo: string;
-  valorDe: (clave: string, fila: Fila | null, campo: string) => unknown;
-  onCampo: (clave: string, campo: string, valor: unknown) => void;
-}) {
-  return (
-    <div>
-      <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
-        URL de la imagen
-      </div>
-      <input
-        className={input}
-        placeholder="https://…"
-        value={String(valorDe(clave, fila, campo) ?? "")}
-        onChange={(e) => onCampo(clave, campo, e.target.value)}
-      />
     </div>
   );
 }

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { RefreshCw, Route, Save, Plus, AlertCircle, Check } from "lucide-react";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
+import CampoImagen from "@/components/web/CampoImagen";
 
 /**
  * Módulo Eventos: viajes y rallies del club.
@@ -232,15 +233,13 @@ export default function EventosClient({ seccion }: { seccion: SeccionEventos }) 
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <div>
-          <div className={lbl}>Portada (URL)</div>
-          <input
-            className={input}
-            placeholder="https://…"
-            value={String(valorDe(clave, e, "portada_url") ?? "")}
-            onChange={(ev) => setCampo(clave, "portada_url", ev.target.value)}
-          />
-        </div>
+        <CampoImagen
+          label="Portada"
+          coleccion="evento"
+          idFila={e ? String(e.id) : null}
+          valor={String(valorDe(clave, e, "portada_url") ?? "")}
+          onChange={(url) => setCampo(clave, "portada_url", url)}
+        />
         <div className="flex items-end gap-4 pb-2">
           <label className="inline-flex items-center gap-2 text-sm text-slate-700">
             <input
