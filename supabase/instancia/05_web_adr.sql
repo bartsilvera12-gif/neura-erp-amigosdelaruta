@@ -321,3 +321,11 @@ SELECT c.relname AS tabla,
 SELECT p.proname, pg_get_function_identity_arguments(p.oid) AS args
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
  WHERE n.nspname = 'amigosdelarutaerp' AND p.proname = 'web_pedido_siguiente_numero';
+
+-- =============================================================================
+-- PostgREST cachea el esquema: sin esto, las tablas recien creadas existen en
+-- la base pero la API responde "Could not find the table ... in the schema
+-- cache" y el ERP falla contra tablas que estan ahi. El modulo Eventos ya hacia
+-- este aviso al final; estos scripts no, y costo un 500 en /api/web/catalogo.
+-- =============================================================================
+SELECT pg_notify('pgrst', 'reload schema');

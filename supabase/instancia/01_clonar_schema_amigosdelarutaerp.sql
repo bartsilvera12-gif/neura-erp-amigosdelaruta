@@ -1031,3 +1031,11 @@ SELECT c.relname AS tabla_con_datos,
           query_to_xml(format('SELECT count(*) AS c FROM %I.%I', 'amigosdelarutaerp', c.relname),
                        false, true, '')))[1]::text::bigint > 0
  ORDER BY 2 DESC;
+
+-- =============================================================================
+-- PostgREST cachea el esquema: sin esto, las tablas recien creadas existen en
+-- la base pero la API responde "Could not find the table ... in the schema
+-- cache" y el ERP falla contra tablas que estan ahi. El modulo Eventos ya hacia
+-- este aviso al final; estos scripts no, y costo un 500 en /api/web/catalogo.
+-- =============================================================================
+SELECT pg_notify('pgrst', 'reload schema');
