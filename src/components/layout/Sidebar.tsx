@@ -40,6 +40,8 @@ import {
   Percent,
   Tags,
   CalendarDays,
+  Route,
+  Globe,
   BarChart3,
   HandCoins,
   ServerCog,
@@ -258,6 +260,35 @@ const MENU_STRUCTURE_COMPLETO: MenuItem[] = [
     icon: CalendarDays,
   },
   {
+    // Viajes y rallies del club. El modelo (Tour -> Salida -> Paquete -> Reserva)
+    // lo instala supabase/migrations/20261009120000_eventos_provision.sql.
+    key: "eventos",
+    slug: "eventos",
+    label: "Eventos",
+    href: "/eventos",
+    icon: Route,
+    children: [
+      { label: "Viajes", href: "/eventos" },
+      { label: "Salidas", href: "/eventos/salidas" },
+      { label: "Reservas", href: "/eventos/reservas" },
+    ],
+  },
+  {
+    // Contenido del sitio publico (amigos-de-la-ruta-web). Lo que acá se edita
+    // es lo que sirve GET /api/web/catalogo.
+    key: "web",
+    slug: "web",
+    label: "Web",
+    href: "/web",
+    icon: Globe,
+    children: [
+      { label: "Tienda", href: "/web" },
+      { label: "Motos", href: "/web/motos" },
+      { label: "FAQ", href: "/web/faq" },
+      { label: "Configuración", href: "/web/configuracion" },
+    ],
+  },
+  {
     key: "sorteos",
     slug: "sorteos",
     label: "Sorteos",
@@ -315,6 +346,8 @@ const INSTANCIA_MENU_KEYS_PERMITIDAS: readonly string[] = [
   "reportes",
   "proyectos",
   "agenda",
+  "eventos",
+  "web",
 ];
 
 const MENU_STRUCTURE: MenuItem[] = MENU_STRUCTURE_COMPLETO.filter((item) =>
@@ -371,7 +404,8 @@ const MENU_FAMILIES: { id: string; title: string; itemKeys: string[] }[] = [
     title: "Finanzas",
     itemKeys: ["ventas", "cobranzas", "pagos", "gastos", "compras", "notas_credito", "reportes"],
   },
-  { id: "operaciones", title: "Operaciones", itemKeys: ["inventario", "produccion"] },
+  { id: "operaciones", title: "Operaciones", itemKeys: ["inventario", "produccion", "eventos"] },
+  { id: "sitio", title: "Sitio web", itemKeys: ["web"] },
   {
     id: "omnicanal",
     title: "Omnicanal",

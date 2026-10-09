@@ -30,13 +30,16 @@ DECLARE
   v_auth_id     uuid;
   v_n           int;
   v_falta       text;
+  -- el `FOR i IN .. LOOP` de PL/pgSQL declara su propia `i`: no va acá.
 
   -- Los 14 slugs de módulo de esta instancia. "Movimientos" no está porque no es
   -- un módulo con slug propio: es la vista `/inventario/movimientos`, que entra
   -- con el permiso de `inventario`.
   -- Debe coincidir con INSTANCIA_MENU_KEYS_PERMITIDAS en
   -- src/components/layout/Sidebar.tsx.
-  v_slugs text[] := ARRAY[
+  -- Módulos que SÍ existen en el catálogo de `neura`: se copian de allá con su
+  -- id y su nombre, para no inventar ids distintos a los del madre.
+  v_slugs_neura text[] := ARRAY[
     'dashboard',
     'gerencia',
     'ventas',
@@ -53,6 +56,19 @@ DECLARE
     'agenda'
   ];
 
+  -- Módulos propios de esta instancia: no existen en `neura`, se crean acá.
+  --   eventos → viajes y rallies del club (modelo Tour → Salida → Paquete →
+  --             Reserva, lo instalan las migraciones 20261009120000/130000)
+  --   web     → contenido del sitio público amigos-de-la-ruta-web
+  -- El par es (slug, nombre) aplanado: el bucle del paso 1b los toma de a dos.
+  v_slugs_locales text[] := ARRAY[
+    'eventos', 'Eventos',
+    'web',     'Web'
+  ];
+
+  -- Todos los módulos habilitados para la empresa (pasos 6 y en adelante).
+  v_slugs text[];
+
   -- Pestañas del módulo Dashboard. Sin `comercial`: ver el paso 7.
   v_dash_slugs text[] := ARRAY[
     'financiero',
@@ -60,33 +76,56 @@ DECLARE
     'ventas'
   ];
 BEGIN
+  -- `v_slugs_locales` es (slug, nombre) aplanado: se toman las posiciones
+  -- impares. El alias va como `g(n)` y no como `i`: un alias llamado igual que
+  -- una variable de PL/pgSQL da "column reference is ambiguous".
+  SELECT v_slugs_neura || array_agg(v_slugs_locales[g.n] ORDER BY g.n)
+    INTO v_slugs
+    FROM generate_series(1, array_length(v_slugs_locales, 1), 2) AS g(n);
+
   IF to_regnamespace(v_dst) IS NULL THEN
     RAISE EXCEPTION 'No existe el schema %. Corré primero el script 01.', v_dst;
   END IF;
 
   -- -------------------------------------------------------------------------
-  -- 1) Catálogo de módulos: se copian las filas tal cual desde `neura` (mismos
-  --    id, nombre y cualquier columna extra), filtrando por los 14 slugs.
-  --    `SELECT *` sirve porque el 01 clonó la tabla con idéntica estructura.
+  -- 1) Catálogo de módulos que vienen de `neura`: se copian las filas tal cual
+  --    (mismos id, nombre y cualquier columna extra). `SELECT *` sirve porque el
+  --    01 clonó la tabla con idéntica estructura.
   -- -------------------------------------------------------------------------
   EXECUTE format(
     'INSERT INTO %I.modulos SELECT * FROM %I.modulos m
       WHERE m.slug = ANY($1)
         AND NOT EXISTS (SELECT 1 FROM %I.modulos d WHERE d.slug = m.slug)',
-    v_dst, v_src, v_dst) USING v_slugs;
+    v_dst, v_src, v_dst) USING v_slugs_neura;
 
-  EXECUTE format('SELECT count(*) FROM %I.modulos', v_dst) INTO v_n;
-  RAISE NOTICE '[1] modulos en %: % (esperado %)', v_dst, v_n, array_length(v_slugs, 1);
+  EXECUTE format('SELECT count(*) FROM %I.modulos WHERE slug = ANY($1)', v_dst)
+    INTO v_n USING v_slugs_neura;
+  RAISE NOTICE '[1] modulos copiados de %: % (esperado %)',
+               v_src, v_n, array_length(v_slugs_neura, 1);
 
-  IF v_n < array_length(v_slugs, 1) THEN
+  IF v_n < array_length(v_slugs_neura, 1) THEN
     EXECUTE format(
       'SELECT string_agg(s, '', '' ORDER BY s) FROM unnest($1) s
         WHERE s NOT IN (SELECT slug FROM %I.modulos)', v_dst)
-      INTO v_falta USING v_slugs;
+      INTO v_falta USING v_slugs_neura;
     RAISE EXCEPTION
       'Estos slugs de modulo no existen en %.modulos, asi que no se pudieron copiar: %. Revisa como se llaman en el origen.',
       v_src, v_falta;
   END IF;
+
+  -- -------------------------------------------------------------------------
+  -- 1b) Módulos propios de la instancia. No están en `neura`, así que se crean
+  --     acá con id nuevo. Si el madre llegara a sumar un módulo con el mismo
+  --     slug, este ya existe y no se duplica.
+  -- -------------------------------------------------------------------------
+  FOR i IN 1 .. array_length(v_slugs_locales, 1) BY 2 LOOP
+    EXECUTE format(
+      'INSERT INTO %I.modulos (nombre, slug)
+       SELECT $2, $1
+        WHERE NOT EXISTS (SELECT 1 FROM %I.modulos m WHERE m.slug = $1)',
+      v_dst, v_dst) USING v_slugs_locales[i], v_slugs_locales[i + 1];
+    RAISE NOTICE '[1b] modulo propio %: listo', v_slugs_locales[i];
+  END LOOP;
 
   -- -------------------------------------------------------------------------
   -- 2) Catálogo de vistas de dashboard: también se copia desde `neura`.
@@ -137,7 +176,7 @@ BEGIN
   RAISE NOTICE '[5] usuario % -> auth %', v_email, v_auth_id;
 
   -- -------------------------------------------------------------------------
-  -- 6) Módulos habilitados para la empresa: los 14 y nada más.
+  -- 6) Módulos habilitados para la empresa: los 16 y nada más.
   --    Este es el permiso REAL. El recorte del sidebar es solo visual; lo que
   --    cierra las rutas de los módulos que no van es justamente esta tabla.
   -- -------------------------------------------------------------------------
@@ -209,7 +248,8 @@ SELECT e.id AS empresa_id, e.nombre_empresa, e.estado, e.data_schema
 SELECT u.email, u.rol, u.auth_user_id IS NOT NULL AS enlazado_a_auth, u.empresa_id
   FROM amigosdelarutaerp.usuarios u;
 
--- Debe devolver exactamente 14 filas, todas en true.
+-- Debe devolver exactamente 16 filas, todas en true (14 copiadas de neura +
+-- eventos y web, que son propios de esta instancia).
 SELECT m.slug, m.nombre, em.activo
   FROM amigosdelarutaerp.empresa_modulos em
   JOIN amigosdelarutaerp.modulos m ON m.id = em.modulo_id
