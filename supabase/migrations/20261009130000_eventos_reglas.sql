@@ -15,15 +15,22 @@
 SET client_encoding = 'UTF8';
 SET lock_timeout = '10s';
 
--- Helpers compartidos. Van en `public` para que los triggers de cualquier
--- schema tenant los encuentren sin depender del search_path.
-CREATE OR REPLACE FUNCTION public.neura_set_updated_at()
-RETURNS trigger LANGUAGE plpgsql AS $fn$
+-- `public.set_updated_at()` ya existe en el ERP y se usa en 62 lugares: los
+-- triggers de este modulo la reusan en vez de duplicarla. Solo se crea si
+-- faltara, para que el modulo tambien instale en una base limpia.
+DO $$
 BEGIN
-  NEW.updated_at := now();
-  RETURN NEW;
-END;
-$fn$;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc pp JOIN pg_namespace nn ON nn.oid = pp.pronamespace
+    WHERE nn.nspname = 'public' AND pp.proname = 'set_updated_at'
+  ) THEN
+    EXECUTE $crea$
+      CREATE FUNCTION public.set_updated_at() RETURNS trigger LANGUAGE plpgsql AS $body$
+      BEGIN NEW.updated_at = now(); RETURN NEW; END;
+      $body$
+    $crea$;
+  END IF;
+END $$;
 
 CREATE OR REPLACE FUNCTION public.neura_provision_eventos_reglas(s text)
 RETURNS void
@@ -70,7 +77,7 @@ BEGIN
   EXECUTE format($ddl$DROP POLICY IF EXISTS eventos_delete ON %1$I.eventos$ddl$, s);
   EXECUTE format($ddl$CREATE POLICY eventos_delete ON %1$I.eventos FOR DELETE USING (%2$s(empresa_id))$ddl$, s, v_guard);
   EXECUTE format($ddl$DROP TRIGGER IF EXISTS eventos_set_updated_at ON %1$I.eventos$ddl$, s);
-  EXECUTE format($ddl$CREATE TRIGGER eventos_set_updated_at BEFORE UPDATE ON %1$I.eventos FOR EACH ROW EXECUTE FUNCTION public.neura_set_updated_at()$ddl$, s);
+  EXECUTE format($ddl$CREATE TRIGGER eventos_set_updated_at BEFORE UPDATE ON %1$I.eventos FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()$ddl$, s);
   IF v_auth THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.eventos TO authenticated$ddl$, s); END IF;
   IF v_svc  THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.eventos TO service_role$ddl$, s); END IF;
   EXECUTE format($ddl$ALTER TABLE %1$I.evento_itinerario ENABLE ROW LEVEL SECURITY$ddl$, s);
@@ -83,7 +90,7 @@ BEGIN
   EXECUTE format($ddl$DROP POLICY IF EXISTS evento_itinerario_delete ON %1$I.evento_itinerario$ddl$, s);
   EXECUTE format($ddl$CREATE POLICY evento_itinerario_delete ON %1$I.evento_itinerario FOR DELETE USING (%2$s(empresa_id))$ddl$, s, v_guard);
   EXECUTE format($ddl$DROP TRIGGER IF EXISTS evento_itinerario_set_updated_at ON %1$I.evento_itinerario$ddl$, s);
-  EXECUTE format($ddl$CREATE TRIGGER evento_itinerario_set_updated_at BEFORE UPDATE ON %1$I.evento_itinerario FOR EACH ROW EXECUTE FUNCTION public.neura_set_updated_at()$ddl$, s);
+  EXECUTE format($ddl$CREATE TRIGGER evento_itinerario_set_updated_at BEFORE UPDATE ON %1$I.evento_itinerario FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()$ddl$, s);
   IF v_auth THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.evento_itinerario TO authenticated$ddl$, s); END IF;
   IF v_svc  THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.evento_itinerario TO service_role$ddl$, s); END IF;
   EXECUTE format($ddl$ALTER TABLE %1$I.salidas ENABLE ROW LEVEL SECURITY$ddl$, s);
@@ -96,7 +103,7 @@ BEGIN
   EXECUTE format($ddl$DROP POLICY IF EXISTS salidas_delete ON %1$I.salidas$ddl$, s);
   EXECUTE format($ddl$CREATE POLICY salidas_delete ON %1$I.salidas FOR DELETE USING (%2$s(empresa_id))$ddl$, s, v_guard);
   EXECUTE format($ddl$DROP TRIGGER IF EXISTS salidas_set_updated_at ON %1$I.salidas$ddl$, s);
-  EXECUTE format($ddl$CREATE TRIGGER salidas_set_updated_at BEFORE UPDATE ON %1$I.salidas FOR EACH ROW EXECUTE FUNCTION public.neura_set_updated_at()$ddl$, s);
+  EXECUTE format($ddl$CREATE TRIGGER salidas_set_updated_at BEFORE UPDATE ON %1$I.salidas FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()$ddl$, s);
   IF v_auth THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.salidas TO authenticated$ddl$, s); END IF;
   IF v_svc  THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.salidas TO service_role$ddl$, s); END IF;
   EXECUTE format($ddl$ALTER TABLE %1$I.paquetes ENABLE ROW LEVEL SECURITY$ddl$, s);
@@ -109,7 +116,7 @@ BEGIN
   EXECUTE format($ddl$DROP POLICY IF EXISTS paquetes_delete ON %1$I.paquetes$ddl$, s);
   EXECUTE format($ddl$CREATE POLICY paquetes_delete ON %1$I.paquetes FOR DELETE USING (%2$s(empresa_id))$ddl$, s, v_guard);
   EXECUTE format($ddl$DROP TRIGGER IF EXISTS paquetes_set_updated_at ON %1$I.paquetes$ddl$, s);
-  EXECUTE format($ddl$CREATE TRIGGER paquetes_set_updated_at BEFORE UPDATE ON %1$I.paquetes FOR EACH ROW EXECUTE FUNCTION public.neura_set_updated_at()$ddl$, s);
+  EXECUTE format($ddl$CREATE TRIGGER paquetes_set_updated_at BEFORE UPDATE ON %1$I.paquetes FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()$ddl$, s);
   IF v_auth THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.paquetes TO authenticated$ddl$, s); END IF;
   IF v_svc  THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.paquetes TO service_role$ddl$, s); END IF;
   EXECUTE format($ddl$ALTER TABLE %1$I.adicionales ENABLE ROW LEVEL SECURITY$ddl$, s);
@@ -122,7 +129,7 @@ BEGIN
   EXECUTE format($ddl$DROP POLICY IF EXISTS adicionales_delete ON %1$I.adicionales$ddl$, s);
   EXECUTE format($ddl$CREATE POLICY adicionales_delete ON %1$I.adicionales FOR DELETE USING (%2$s(empresa_id))$ddl$, s, v_guard);
   EXECUTE format($ddl$DROP TRIGGER IF EXISTS adicionales_set_updated_at ON %1$I.adicionales$ddl$, s);
-  EXECUTE format($ddl$CREATE TRIGGER adicionales_set_updated_at BEFORE UPDATE ON %1$I.adicionales FOR EACH ROW EXECUTE FUNCTION public.neura_set_updated_at()$ddl$, s);
+  EXECUTE format($ddl$CREATE TRIGGER adicionales_set_updated_at BEFORE UPDATE ON %1$I.adicionales FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()$ddl$, s);
   IF v_auth THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.adicionales TO authenticated$ddl$, s); END IF;
   IF v_svc  THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.adicionales TO service_role$ddl$, s); END IF;
   EXECUTE format($ddl$ALTER TABLE %1$I.reservas ENABLE ROW LEVEL SECURITY$ddl$, s);
@@ -135,7 +142,7 @@ BEGIN
   EXECUTE format($ddl$DROP POLICY IF EXISTS reservas_delete ON %1$I.reservas$ddl$, s);
   EXECUTE format($ddl$CREATE POLICY reservas_delete ON %1$I.reservas FOR DELETE USING (%2$s(empresa_id))$ddl$, s, v_guard);
   EXECUTE format($ddl$DROP TRIGGER IF EXISTS reservas_set_updated_at ON %1$I.reservas$ddl$, s);
-  EXECUTE format($ddl$CREATE TRIGGER reservas_set_updated_at BEFORE UPDATE ON %1$I.reservas FOR EACH ROW EXECUTE FUNCTION public.neura_set_updated_at()$ddl$, s);
+  EXECUTE format($ddl$CREATE TRIGGER reservas_set_updated_at BEFORE UPDATE ON %1$I.reservas FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()$ddl$, s);
   IF v_auth THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.reservas TO authenticated$ddl$, s); END IF;
   IF v_svc  THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.reservas TO service_role$ddl$, s); END IF;
   EXECUTE format($ddl$ALTER TABLE %1$I.reserva_adicionales ENABLE ROW LEVEL SECURITY$ddl$, s);
@@ -159,7 +166,7 @@ BEGIN
   EXECUTE format($ddl$DROP POLICY IF EXISTS participantes_delete ON %1$I.participantes$ddl$, s);
   EXECUTE format($ddl$CREATE POLICY participantes_delete ON %1$I.participantes FOR DELETE USING (%2$s(empresa_id))$ddl$, s, v_guard);
   EXECUTE format($ddl$DROP TRIGGER IF EXISTS participantes_set_updated_at ON %1$I.participantes$ddl$, s);
-  EXECUTE format($ddl$CREATE TRIGGER participantes_set_updated_at BEFORE UPDATE ON %1$I.participantes FOR EACH ROW EXECUTE FUNCTION public.neura_set_updated_at()$ddl$, s);
+  EXECUTE format($ddl$CREATE TRIGGER participantes_set_updated_at BEFORE UPDATE ON %1$I.participantes FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()$ddl$, s);
   IF v_auth THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.participantes TO authenticated$ddl$, s); END IF;
   IF v_svc  THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.participantes TO service_role$ddl$, s); END IF;
   EXECUTE format($ddl$ALTER TABLE %1$I.participante_documentos ENABLE ROW LEVEL SECURITY$ddl$, s);
@@ -172,7 +179,7 @@ BEGIN
   EXECUTE format($ddl$DROP POLICY IF EXISTS participante_documentos_delete ON %1$I.participante_documentos$ddl$, s);
   EXECUTE format($ddl$CREATE POLICY participante_documentos_delete ON %1$I.participante_documentos FOR DELETE USING (%2$s(empresa_id))$ddl$, s, v_guard);
   EXECUTE format($ddl$DROP TRIGGER IF EXISTS participante_documentos_set_updated_at ON %1$I.participante_documentos$ddl$, s);
-  EXECUTE format($ddl$CREATE TRIGGER participante_documentos_set_updated_at BEFORE UPDATE ON %1$I.participante_documentos FOR EACH ROW EXECUTE FUNCTION public.neura_set_updated_at()$ddl$, s);
+  EXECUTE format($ddl$CREATE TRIGGER participante_documentos_set_updated_at BEFORE UPDATE ON %1$I.participante_documentos FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()$ddl$, s);
   IF v_auth THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.participante_documentos TO authenticated$ddl$, s); END IF;
   IF v_svc  THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.participante_documentos TO service_role$ddl$, s); END IF;
   EXECUTE format($ddl$ALTER TABLE %1$I.reserva_pagos ENABLE ROW LEVEL SECURITY$ddl$, s);
@@ -185,7 +192,7 @@ BEGIN
   EXECUTE format($ddl$DROP POLICY IF EXISTS reserva_pagos_delete ON %1$I.reserva_pagos$ddl$, s);
   EXECUTE format($ddl$CREATE POLICY reserva_pagos_delete ON %1$I.reserva_pagos FOR DELETE USING (%2$s(empresa_id))$ddl$, s, v_guard);
   EXECUTE format($ddl$DROP TRIGGER IF EXISTS reserva_pagos_set_updated_at ON %1$I.reserva_pagos$ddl$, s);
-  EXECUTE format($ddl$CREATE TRIGGER reserva_pagos_set_updated_at BEFORE UPDATE ON %1$I.reserva_pagos FOR EACH ROW EXECUTE FUNCTION public.neura_set_updated_at()$ddl$, s);
+  EXECUTE format($ddl$CREATE TRIGGER reserva_pagos_set_updated_at BEFORE UPDATE ON %1$I.reserva_pagos FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()$ddl$, s);
   IF v_auth THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.reserva_pagos TO authenticated$ddl$, s); END IF;
   IF v_svc  THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.reserva_pagos TO service_role$ddl$, s); END IF;
   EXECUTE format($ddl$ALTER TABLE %1$I.reserva_plan_pagos ENABLE ROW LEVEL SECURITY$ddl$, s);
@@ -198,7 +205,7 @@ BEGIN
   EXECUTE format($ddl$DROP POLICY IF EXISTS reserva_plan_pagos_delete ON %1$I.reserva_plan_pagos$ddl$, s);
   EXECUTE format($ddl$CREATE POLICY reserva_plan_pagos_delete ON %1$I.reserva_plan_pagos FOR DELETE USING (%2$s(empresa_id))$ddl$, s, v_guard);
   EXECUTE format($ddl$DROP TRIGGER IF EXISTS reserva_plan_pagos_set_updated_at ON %1$I.reserva_plan_pagos$ddl$, s);
-  EXECUTE format($ddl$CREATE TRIGGER reserva_plan_pagos_set_updated_at BEFORE UPDATE ON %1$I.reserva_plan_pagos FOR EACH ROW EXECUTE FUNCTION public.neura_set_updated_at()$ddl$, s);
+  EXECUTE format($ddl$CREATE TRIGGER reserva_plan_pagos_set_updated_at BEFORE UPDATE ON %1$I.reserva_plan_pagos FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()$ddl$, s);
   IF v_auth THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.reserva_plan_pagos TO authenticated$ddl$, s); END IF;
   IF v_svc  THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.reserva_plan_pagos TO service_role$ddl$, s); END IF;
   EXECUTE format($ddl$ALTER TABLE %1$I.producto_variantes ENABLE ROW LEVEL SECURITY$ddl$, s);
@@ -211,7 +218,7 @@ BEGIN
   EXECUTE format($ddl$DROP POLICY IF EXISTS producto_variantes_delete ON %1$I.producto_variantes$ddl$, s);
   EXECUTE format($ddl$CREATE POLICY producto_variantes_delete ON %1$I.producto_variantes FOR DELETE USING (%2$s(empresa_id))$ddl$, s, v_guard);
   EXECUTE format($ddl$DROP TRIGGER IF EXISTS producto_variantes_set_updated_at ON %1$I.producto_variantes$ddl$, s);
-  EXECUTE format($ddl$CREATE TRIGGER producto_variantes_set_updated_at BEFORE UPDATE ON %1$I.producto_variantes FOR EACH ROW EXECUTE FUNCTION public.neura_set_updated_at()$ddl$, s);
+  EXECUTE format($ddl$CREATE TRIGGER producto_variantes_set_updated_at BEFORE UPDATE ON %1$I.producto_variantes FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()$ddl$, s);
   IF v_auth THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.producto_variantes TO authenticated$ddl$, s); END IF;
   IF v_svc  THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.producto_variantes TO service_role$ddl$, s); END IF;
   EXECUTE format($ddl$ALTER TABLE %1$I.evento_kits ENABLE ROW LEVEL SECURITY$ddl$, s);
@@ -224,7 +231,7 @@ BEGIN
   EXECUTE format($ddl$DROP POLICY IF EXISTS evento_kits_delete ON %1$I.evento_kits$ddl$, s);
   EXECUTE format($ddl$CREATE POLICY evento_kits_delete ON %1$I.evento_kits FOR DELETE USING (%2$s(empresa_id))$ddl$, s, v_guard);
   EXECUTE format($ddl$DROP TRIGGER IF EXISTS evento_kits_set_updated_at ON %1$I.evento_kits$ddl$, s);
-  EXECUTE format($ddl$CREATE TRIGGER evento_kits_set_updated_at BEFORE UPDATE ON %1$I.evento_kits FOR EACH ROW EXECUTE FUNCTION public.neura_set_updated_at()$ddl$, s);
+  EXECUTE format($ddl$CREATE TRIGGER evento_kits_set_updated_at BEFORE UPDATE ON %1$I.evento_kits FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()$ddl$, s);
   IF v_auth THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.evento_kits TO authenticated$ddl$, s); END IF;
   IF v_svc  THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.evento_kits TO service_role$ddl$, s); END IF;
   EXECUTE format($ddl$ALTER TABLE %1$I.reserva_stock ENABLE ROW LEVEL SECURITY$ddl$, s);
@@ -237,7 +244,7 @@ BEGIN
   EXECUTE format($ddl$DROP POLICY IF EXISTS reserva_stock_delete ON %1$I.reserva_stock$ddl$, s);
   EXECUTE format($ddl$CREATE POLICY reserva_stock_delete ON %1$I.reserva_stock FOR DELETE USING (%2$s(empresa_id))$ddl$, s, v_guard);
   EXECUTE format($ddl$DROP TRIGGER IF EXISTS reserva_stock_set_updated_at ON %1$I.reserva_stock$ddl$, s);
-  EXECUTE format($ddl$CREATE TRIGGER reserva_stock_set_updated_at BEFORE UPDATE ON %1$I.reserva_stock FOR EACH ROW EXECUTE FUNCTION public.neura_set_updated_at()$ddl$, s);
+  EXECUTE format($ddl$CREATE TRIGGER reserva_stock_set_updated_at BEFORE UPDATE ON %1$I.reserva_stock FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()$ddl$, s);
   IF v_auth THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.reserva_stock TO authenticated$ddl$, s); END IF;
   IF v_svc  THEN EXECUTE format($ddl$GRANT SELECT, INSERT, UPDATE, DELETE ON %1$I.reserva_stock TO service_role$ddl$, s); END IF;
   EXECUTE format($ddl$ALTER TABLE %1$I.eventos_auditoria ENABLE ROW LEVEL SECURITY$ddl$, s);
@@ -377,6 +384,11 @@ $fn$;
 
 COMMENT ON FUNCTION public.neura_provision_eventos_reglas(text) IS
   'Aplica RLS, triggers, correlativo y vistas del módulo Eventos en el schema indicado. Idempotente.';
+
+-- Ejecuta DDL y `public` está expuesto por PostgREST en Supabase: sin esto
+-- quedaría alcanzable como RPC. Mismo criterio que usa el repo con
+-- public.sorteos_ensure_order_from_chat.
+REVOKE ALL ON FUNCTION public.neura_provision_eventos_reglas(text) FROM PUBLIC;
 
 DO $$
 DECLARE r RECORD;

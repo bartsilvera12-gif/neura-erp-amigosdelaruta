@@ -400,6 +400,11 @@ $fn$;
 COMMENT ON FUNCTION public.neura_provision_eventos(text) IS
   'Crea las tablas del módulo Eventos en el schema indicado. Idempotente. Llamar al dar de alta una empresa nueva.';
 
+-- Ejecuta DDL y `public` está expuesto por PostgREST en Supabase: sin esto
+-- quedaría alcanzable como RPC. Mismo criterio que usa el repo con
+-- public.sorteos_ensure_order_from_chat.
+REVOKE ALL ON FUNCTION public.neura_provision_eventos(text) FROM PUBLIC;
+
 -- Provisión en todos los schemas que ya tienen el ERP instalado.
 DO $$
 DECLARE r RECORD;
