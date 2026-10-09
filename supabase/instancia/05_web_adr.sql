@@ -21,6 +21,10 @@
 -- "en": "..."}, igual que `eventos.nombre` del módulo Eventos.
 --
 -- Escribe solo dentro de `amigosdelarutaerp`. Idempotente.
+--
+-- No depende de `public`: `puede_acceder_empresa` y `set_updated_at` se buscan
+-- primero en el schema de la instancia, que es donde las dejó el clonado del 01,
+-- y solo se cae a `public` si no estuvieran.
 -- =============================================================================
 
 BEGIN;
@@ -29,6 +33,7 @@ DO $WEB$
 DECLARE
   v_dst   text := 'amigosdelarutaerp';
   v_guard text;
+  v_touch text;
   v_auth  boolean;
   v_svc   boolean;
   t       text;
@@ -37,15 +42,36 @@ BEGIN
     RAISE EXCEPTION 'No existe el schema %. Corré primero el 01.', v_dst;
   END IF;
 
-  -- Misma guarda de RLS que usa el módulo Eventos.
-  SELECT 'public.' || p.proname INTO v_guard
+  -- `puede_acceder_empresa` y `set_updated_at` pueden estar en el schema de la
+  -- instancia —el 01 las clonó desde `neura`— o en `public` en instalaciones
+  -- viejas. Se resuelven PREFIRIENDO el propio, que es lo coherente con una
+  -- instancia independiente, y se califican explícitamente en vez de confiar en
+  -- el search_path, que dentro de una política RLS no es el que uno cree.
+  -- Mismo criterio que usa el módulo Eventos.
+  SELECT quote_ident(n.nspname) || '.puede_acceder_empresa'
+    INTO v_guard
     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-   WHERE n.nspname = 'public' AND p.proname = 'puede_acceder_empresa'
+   WHERE p.proname = 'puede_acceder_empresa'
+     AND n.nspname IN (v_dst, 'public')
+   ORDER BY (n.nspname = v_dst) DESC
    LIMIT 1;
   IF v_guard IS NULL THEN
     RAISE EXCEPTION
-      'No se encontro public.puede_acceder_empresa(). Sin esa funcion las tablas quedarian sin RLS en un ERP multiempresa, que es peor que no crearlas.';
+      'No se encontro puede_acceder_empresa() ni en % ni en public. Sin guard las tablas quedarian sin RLS, que es peor que no crearlas.', v_dst;
   END IF;
+
+  SELECT quote_ident(n.nspname) || '.set_updated_at'
+    INTO v_touch
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE p.proname = 'set_updated_at'
+     AND n.nspname IN (v_dst, 'public')
+   ORDER BY (n.nspname = v_dst) DESC
+   LIMIT 1;
+  IF v_touch IS NULL THEN
+    RAISE EXCEPTION 'No se encontro set_updated_at() ni en % ni en public.', v_dst;
+  END IF;
+
+  RAISE NOTICE '[web] guard=%  updated_at=%', v_guard, v_touch;
 
   SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') INTO v_auth;
   SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role')  INTO v_svc;
@@ -225,7 +251,7 @@ BEGIN
     IF t <> 'web_pedido_correlativo' AND t <> 'web_pedido_item' THEN
       EXECUTE format($d$DROP TRIGGER IF EXISTS %2$s_set_updated_at ON %1$I.%2$I$d$, v_dst, t);
       EXECUTE format($d$CREATE TRIGGER %2$s_set_updated_at BEFORE UPDATE ON %1$I.%2$I
-                        FOR EACH ROW EXECUTE FUNCTION public.set_updated_at()$d$, v_dst, t);
+                        FOR EACH ROW EXECUTE FUNCTION %3$s()$d$, v_dst, t, v_touch);
     END IF;
 
     IF v_auth THEN
