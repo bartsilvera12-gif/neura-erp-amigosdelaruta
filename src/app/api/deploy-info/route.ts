@@ -1,4 +1,12 @@
 import { NextResponse } from "next/server";
+import { getBuildId } from "@/lib/app/build-id";
+
+/**
+ * Se fuerza dinámica: la usa el aviso de "nueva versión" y una respuesta
+ * cacheada devolvería para siempre el build id viejo, que es justo lo contrario
+ * de lo que hace falta.
+ */
+export const dynamic = "force-dynamic";
 
 function hostnameFromNextPublicSupabaseUrl(): string | null {
   const raw = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
@@ -22,6 +30,12 @@ export async function GET() {
   const vercelEnv = process.env.VERCEL_ENV ?? null;
 
   return NextResponse.json({
+    /**
+     * Identificador del build que sirve este contenedor. Cambia en cada deploy;
+     * es lo que mira el aviso de "nueva versión". `null` = no se pudo resolver,
+     * y entonces el aviso no se muestra.
+     */
+    build_id: getBuildId(),
     /** Alias pedido para depuración (mismo valor que git_commit_sha en Vercel). */
     commit: sha,
     /** Alias pedido: production | preview | development | null si no es Vercel. */

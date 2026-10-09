@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import Sidebar from "./layout/Sidebar";
 import Header from "./layout/Header";
 import AgentPresenceHeartbeat from "./AgentPresenceHeartbeat";
+import NuevaVersionAviso from "./NuevaVersionAviso";
 
 const STANDALONE_ROUTES = ["/login"];
 
@@ -64,6 +65,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       {ASSISTANT_ENABLED && <AssistantWidget />}
       {/* Presencia global del agente: heartbeat en cualquier pantalla del ERP (no solo el inbox). */}
       <AgentPresenceHeartbeat />
+      {/* Avisa cuando hubo un deploy y la pestaña sigue con el bundle viejo.
+          Va dentro del shell del ERP a propósito: en /login no aporta, y en /m/*
+          (webview de la APK) la recarga la maneja el contenedor nativo. */}
+      <NuevaVersionAviso />
     </div>
   );
 }
