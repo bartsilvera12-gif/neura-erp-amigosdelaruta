@@ -285,20 +285,20 @@ BEGIN
     BEGIN
       IF NEW.estado = 'cancelada' THEN RETURN NEW; END IF;
 
-      EXECUTE format('SELECT cupo_total FROM %%%%I.salidas WHERE id = $1', v_sch)
+      EXECUTE format('SELECT cupo_total FROM %%I.salidas WHERE id = $1', v_sch)
         INTO v_cupo USING NEW.salida_id;
       IF v_cupo IS NULL THEN RETURN NEW; END IF;
 
-      EXECUTE format('SELECT COALESCE(SUM(cantidad_participantes),0) FROM %%%%I.reservas WHERE salida_id = $1 AND estado <> ''cancelada'' AND id <> $2', v_sch)
+      EXECUTE format('SELECT COALESCE(SUM(cantidad_participantes),0) FROM %%I.reservas WHERE salida_id = $1 AND estado <> ''cancelada'' AND id <> $2', v_sch)
         INTO v_ocupados USING NEW.salida_id, NEW.id;
 
       IF v_ocupados + NEW.cantidad_participantes > v_cupo THEN
         IF COALESCE(NEW.sobreventa_autorizada, false) THEN
-          EXECUTE format('INSERT INTO %%%%I.eventos_auditoria (empresa_id, entidad, entidad_id, accion, usuario_id, datos_despues) VALUES ($1,''reservas'',$2,''sobreventa_autorizada'',$3,$4)', v_sch)
+          EXECUTE format('INSERT INTO %%I.eventos_auditoria (empresa_id, entidad, entidad_id, accion, usuario_id, datos_despues) VALUES ($1,''reservas'',$2,''sobreventa_autorizada'',$3,$4)', v_sch)
             USING NEW.empresa_id, NEW.id, NEW.sobreventa_autorizada_por,
                   jsonb_build_object('cupo_total', v_cupo, 'ocupados', v_ocupados, 'solicitados', NEW.cantidad_participantes);
         ELSE
-          RAISE EXCEPTION 'Cupo insuficiente en la salida %%%%: %%%% ocupados de %%%%, se piden %%%% mas. Requiere sobreventa autorizada.',
+          RAISE EXCEPTION 'Cupo insuficiente en la salida %%: %% ocupados de %%, se piden %% mas. Requiere sobreventa autorizada.',
             NEW.salida_id, v_ocupados, v_cupo, NEW.cantidad_participantes USING ERRCODE = 'check_violation';
         END IF;
       END IF;
