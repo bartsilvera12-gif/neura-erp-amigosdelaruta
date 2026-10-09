@@ -29,14 +29,25 @@
 --     multiempresa sería peor que no crearlas.
 --
 -- PARA VERIFICAR DESPUÉS (correr aparte):
---   -- tiene que devolver UNA sola fila: amigosdelarutaerp | 16
---   select table_schema, count(*)
---   from information_schema.tables
---   where table_name in ('eventos','evento_itinerario','salidas','paquetes',
---                        'adicionales','reservas','reserva_adicionales',
---                        'participantes','participante_documentos','reserva_pagos',
---                        'reserva_plan_pagos','producto_variantes','evento_kits',
---                        'reserva_stock','eventos_auditoria','reserva_correlativos')
+--
+--   Tiene que devolver UNA sola fila: amigosdelarutaerp | 16.
+--
+--   Ojo con verificar por NOMBRE de tabla: `reservas`, `salidas` y `paquetes`
+--   son nombres genéricos y ya existen, sin relación con este módulo, en otros
+--   ERP de esta misma base (asunhome, jepurucar_erp, total). Buscar solo por
+--   nombre da un falso positivo de "se instaló en otro schema". Por eso esta
+--   consulta ancla en `eventos`, que sí es propio del módulo, y cuenta las
+--   tablas de ese mismo schema.
+--
+--   select t.table_schema, count(*)
+--   from information_schema.tables t
+--   where t.table_name in ('eventos','evento_itinerario','salidas','paquetes',
+--                          'adicionales','reservas','reserva_adicionales',
+--                          'participantes','participante_documentos','reserva_pagos',
+--                          'reserva_plan_pagos','producto_variantes','evento_kits',
+--                          'reserva_stock','eventos_auditoria','reserva_correlativos')
+--     and exists (select 1 from information_schema.tables e
+--                  where e.table_schema = t.table_schema and e.table_name = 'eventos')
 --   group by 1 order by 1;
 
 -- =============================================================================
