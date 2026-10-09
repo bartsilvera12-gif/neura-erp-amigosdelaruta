@@ -272,11 +272,17 @@ COMMIT;
 
 -- =============================================================================
 -- Verificación: 8 tablas, todas con RLS y con sus 4 políticas.
+--
+-- El filtro `relkind = 'r'` no es opcional: sin él entran también los índices
+-- (`web_producto_pkey`, `web_config_clave_uk`…), que aparecen con rls=false y
+-- 0 políticas y hacen parecer que algo falló.
 -- =============================================================================
 SELECT c.relname AS tabla,
        c.relrowsecurity AS rls,
        (SELECT count(*) FROM pg_policy p WHERE p.polrelid = c.oid) AS politicas
   FROM pg_class c
   JOIN pg_namespace n ON n.oid = c.relnamespace
- WHERE n.nspname = 'amigosdelarutaerp' AND c.relname LIKE 'web\_%'
+ WHERE n.nspname = 'amigosdelarutaerp'
+   AND c.relkind = 'r'
+   AND c.relname LIKE 'web\_%'
  ORDER BY 1;
