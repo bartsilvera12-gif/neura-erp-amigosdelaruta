@@ -8,6 +8,7 @@ import { getProducto, productoExiste, updateProducto } from "@/lib/inventario/st
 import type { MetodoValuacion } from "@/lib/inventario/types";
 import ProductImageUploader from "@/components/inventario/ProductImageUploader";
 import SelectFromList from "@/components/inventario/SelectFromList";
+import { opcionesUnidad } from "@/lib/inventario/unidades";
 
 interface CatRow { id: string; nombre: string }
 interface UbiRow { id: string; nombre: string; tipo: string }
@@ -329,14 +330,18 @@ export default function EditarProductoPage() {
             </div>
             <div>
               <label className={labelClass}>Unidad de medida</label>
-              <input
-                type="text"
+              <select
                 name="unidad_medida"
                 value={form.unidad_medida}
                 onChange={handleChange}
-                className={`${inputClass} uppercase`}
+                className={inputClass}
                 required
-              />
+              >
+                <option value="">— Elegí una unidad —</option>
+                {opcionesUnidad(form.unidad_medida).map((u) => (
+                  <option key={u.value} value={u.value}>{u.label}</option>
+                ))}
+              </select>
             </div>
           </div>
 

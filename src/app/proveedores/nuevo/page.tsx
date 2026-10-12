@@ -3,7 +3,12 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import ProveedorForm, { emptyProveedorForm, type ProveedorFormValues } from "@/app/proveedores/ProveedorForm";
+import ProveedorForm, {
+  emptyProveedorForm,
+  errorProveedorForm,
+  type ProveedorFormValues,
+} from "@/app/proveedores/ProveedorForm";
+import { normalizarEmail } from "@/lib/clientes/validar-contacto";
 import { createProveedor } from "@/lib/proveedores/storage";
 
 export default function NuevoProveedorPage() {
@@ -15,8 +20,9 @@ export default function NuevoProveedorPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!form.nombre.trim()) {
-      setError("Completá el nombre.");
+    const errForm = errorProveedorForm(form);
+    if (errForm) {
+      setError(errForm);
       return;
     }
     setSaving(true);
@@ -26,7 +32,7 @@ export default function NuevoProveedorPage() {
       razon_social: form.razon_social.trim() || null,
       ruc: form.ruc.trim() || null,
       telefono: form.telefono.trim() || null,
-      email: form.email.trim() || null,
+      email: normalizarEmail(form.email) || null,
       direccion: form.direccion.trim() || null,
       contacto: form.contacto.trim() || null,
       estado: form.estado,
@@ -72,7 +78,7 @@ export default function NuevoProveedorPage() {
         <p className="mt-1 text-sm text-slate-500">Los datos se guardan en la base de tu empresa.</p>
       </div>
 
-      <form onSubmit={handleSubmit} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
+      <form onSubmit={handleSubmit} autoComplete="off" className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm space-y-6">
         <ProveedorForm values={form} onChange={setForm} disabled={saving} />
         {error && (
           <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">

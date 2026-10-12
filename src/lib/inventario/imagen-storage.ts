@@ -77,6 +77,32 @@ export async function signProductoImagen(
 }
 
 /**
+ * Firma varias imágenes en una sola llamada (para listados). Devuelve path → URL;
+ * los paths que no se pudieron firmar quedan fuera del mapa.
+ */
+export async function signProductoImagenes(
+  supabase: AppSupabaseClient,
+  paths: string[],
+  ttlSeconds = 3600
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const unicos = Array.from(new Set(paths.filter(Boolean)));
+  if (unicos.length === 0) return out;
+  try {
+    const { data, error } = await supabase.storage
+      .from(PRODUCTOS_IMAGENES_BUCKET)
+      .createSignedUrls(unicos, ttlSeconds);
+    if (error || !data) return out;
+    for (const d of data) {
+      if (d.path && d.signedUrl && !d.error) out.set(d.path, d.signedUrl);
+    }
+  } catch {
+    /* sin miniaturas: el listado sigue funcionando */
+  }
+  return out;
+}
+
+/**
  * Valida que el path pertenezca a la empresa indicada (primer segmento).
  * Previene cross-tenant en operaciones que reciben paths arbitrarios.
  */

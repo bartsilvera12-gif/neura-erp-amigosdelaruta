@@ -561,7 +561,7 @@ function ClienteBusquedaGlobal({
       : [...clientes].sort((a, b) =>
           clienteNombre(a).localeCompare(clienteNombre(b), "es", { sensitivity: "base" })
         );
-    return base.slice(0, q ? 50 : 24);
+    return base.slice(0, q ? 50 : 100);
   }, [clientes, query]);
 
   useEffect(() => {
@@ -676,9 +676,17 @@ function ClienteBusquedaGlobal({
         </div>
       </div>
 
-      {open && (
-        <div className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl ring-1 ring-[#4FAEB2]/15">
-          <div className="max-h-64 overflow-y-auto overscroll-y-contain">
+      {(open || variant === "landing") && (
+        <div
+          className={
+            variant === "landing"
+              ? // En la portada la lista va en el flujo (no flotante): flotando dentro de la tarjeta,
+                // que recorta con overflow-hidden, se cortaba a partir del 4.º cliente.
+                "mt-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm ring-1 ring-[#4FAEB2]/15"
+              : "absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl ring-1 ring-[#4FAEB2]/15"
+          }
+        >
+          <div className={`${variant === "landing" ? "max-h-[min(28rem,55dvh)]" : "max-h-64"} overflow-y-auto overscroll-y-contain`}>
             {resultados.length === 0 ? (
               <div className="px-4 py-8 text-center text-xs text-slate-400">
                 {query.trim() ? <>Sin resultados para &ldquo;{query.trim()}&rdquo;</> : <>Sin clientes cargados</>}
@@ -704,6 +712,11 @@ function ClienteBusquedaGlobal({
             )}
           </div>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-100 bg-slate-50 px-3 py-1.5 text-[10px] text-slate-400">
+            {!query.trim() && clientes.length > resultados.length ? (
+              <span className="font-medium text-slate-500">
+                Mostrando {resultados.length} de {clientes.length} · escribí para filtrar
+              </span>
+            ) : null}
             <span className="inline-flex items-center gap-1">
               <kbd className="rounded border border-slate-200 bg-white px-1 py-0.5 font-mono text-[9px] leading-none">↵</kbd>
               primer resultado
@@ -978,7 +991,7 @@ function GestionClientesPageInner() {
         style={{ height: "max(560px, calc(100dvh - 10.5rem))" }}
       >
         {selected === null ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-5 px-4 py-8">
+          <div className="flex min-h-0 flex-1 flex-col items-center gap-5 overflow-y-auto px-4 py-8">
             <div className="space-y-2 text-center">
               <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-[#4FAEB2]/30 bg-[#4FAEB2]/10 text-[#4FAEB2]">
                 <IconoLupa className="h-5 w-5" />

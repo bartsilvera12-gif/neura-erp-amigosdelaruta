@@ -26,6 +26,18 @@ import type { Cliente, TipoCliente, OrigenCliente } from "@/lib/clientes/types";
 import { ClienteDatosSifenReceptorForm } from "@/components/clientes/ClienteDatosSifenReceptorForm";
 import type { ClienteTipoServicioRow } from "@/lib/clientes/tipo-servicio-catalogo";
 import { formatTelefonoPy } from "@/lib/clientes/format-telefono";
+import {
+  errorEmail,
+  errorNombreEmpresa,
+  errorNombrePersona,
+  errorRuc,
+  errorTelefono,
+  mantenerCursor,
+  normalizarEmail,
+  soloDocumento,
+  soloRuc,
+  soloSinDigitos,
+} from "@/lib/clientes/validar-contacto";
 import { filasTiposDesdeSistemaEstatico, fetchTiposFormCliente } from "@/lib/clientes/fetch-tipos-servicio-form";
 import type { Plan } from "@/lib/planes/types";
 
@@ -224,10 +236,14 @@ function ClienteNuevoFormInner({ variant = "page", onCreated, onCancel, fromPros
     const { name, value } = e.target;
     const type = (e.target as HTMLInputElement).type;
     let normalized = value;
-    if (lower.includes(name) || type === "email") normalized = value.toLowerCase();
+    // El email se normaliza al guardar: transformarlo acá manda el cursor al final (ver validar-contacto).
+    if (lower.includes(name) || type === "email") normalized = value;
     else if (upper.includes(name)) normalized = value.toUpperCase();
-    // El nombre de una persona no lleva números (evita que se cuele un teléfono en el nombre).
-    if (name === "nombre_contacto") normalized = normalized.replace(/[0-9]/g, "");
+    // Nombre de persona, ciudad y país no llevan números (evita que se cuele un teléfono en el nombre).
+    if (name === "nombre_contacto" || name === "ciudad" || name === "pais") normalized = soloSinDigitos(normalized);
+    if (name === "ruc" || name === "ruc_factura") normalized = soloRuc(normalized);
+    if (name === "documento") normalized = soloDocumento(normalized).toUpperCase();
+    mantenerCursor(e.target, value, normalized);
     setForm((prev) => {
       const next = { ...prev, [name]: normalized };
       // Espejo: mientras el usuario no toque la razón social, sigue al nombre del cliente
@@ -262,6 +278,14 @@ function ClienteNuevoFormInner({ variant = "page", onCreated, onCancel, fromPros
     if (!form.nombre_contacto.trim()) return setError("El nombre de contacto es obligatorio.");
     if (form.tipo_cliente === "empresa" && !form.empresa.trim())
       return setError("El nombre de empresa es obligatorio.");
+    const errContacto =
+      (form.tipo_cliente === "empresa" ? errorNombreEmpresa(form.empresa) : null) ??
+      errorNombrePersona(form.nombre_contacto, form.tipo_cliente === "empresa" ? "La persona de contacto" : "El nombre") ??
+      errorRuc(form.ruc) ??
+      errorRuc(form.ruc_factura, "El RUC de factura") ??
+      errorTelefono(form.telefono) ??
+      errorEmail(form.email);
+    if (errContacto) return setError(errContacto);
 
     if (form.condicion_pago === "MENSUAL" && form.estado === "activo") {
       const dur = parseInt(formSusc.duracion_meses, 10) || 0;
@@ -346,7 +370,7 @@ function ClienteNuevoFormInner({ variant = "page", onCreated, onCancel, fromPros
       ruc: form.ruc.trim() || undefined,
       documento: form.documento.trim() || undefined,
       telefono: form.telefono.trim() || undefined,
-      email: form.email.trim() || undefined,
+      email: normalizarEmail(form.email) || undefined,
       direccion: form.direccion.trim() || undefined,
       ciudad: form.ciudad.trim().toUpperCase() || undefined,
       pais: form.pais.trim().toUpperCase() || undefined,
@@ -431,6 +455,9 @@ function ClienteNuevoFormInner({ variant = "page", onCreated, onCancel, fromPros
 
   return (
     <form
+      // Sin autocompletado del navegador: Chrome precargaba datos propios del usuario (dirección,
+      // "@gmail.com") en el alta de un cliente que no es él.
+      autoComplete="off"
       onSubmit={handleSubmit}
       className={
         isModal
@@ -656,6 +683,8 @@ function ClienteNuevoFormInner({ variant = "page", onCreated, onCancel, fromPros
                 name="email"
                 value={form.email}
                 onChange={handleChange}
+                onBlur={() => setForm((prev) => ({ ...prev, email: normalizarEmail(prev.email) }))}
+                autoComplete="off"
                 placeholder="contacto@empresa.com"
                 className={inputClass}
               />

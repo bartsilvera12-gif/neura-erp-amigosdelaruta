@@ -385,6 +385,86 @@ export async function incrementarSecuenciaPg(
   return Number(rows[0]?.v ?? 0);
 }
 
+/**
+ * Borra un producto. Si nunca se movió (a lo sumo tiene el movimiento de inventario inicial
+ * que genera el alta) se borra de verdad, junto con ese movimiento. Si tiene historial
+ * (ventas, compras, ajustes: FKs ON DELETE RESTRICT) se da de baja (activo = false) para no
+ * romper ese historial; sale igual del listado, que solo muestra activos.
+ */
+export async function deleteProductoPg(
+  schemaRaw: string,
+  empresaId: string,
+  id: string
+): Promise<{ modo: "borrado" | "archivado"; imagen_path: string | null } | null> {
+  const schema = assertAllowedChatDataSchema(schemaRaw);
+  const t = tProd(schema);
+  const tm = tMov(schema);
+  const client = await pool().connect();
+  try {
+    await client.query("BEGIN");
+    const prod = await client.query<{ imagen_path: string | null }>(
+      `SELECT imagen_path FROM ${t} WHERE id = $1::uuid AND empresa_id = $2::uuid FOR UPDATE`,
+      [id, empresaId]
+    );
+    if (prod.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const imagenPath = prod.rows[0].imagen_path;
+    const mov = await client.query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM ${tm}
+        WHERE empresa_id = $2::uuid AND producto_id = $1::uuid
+          AND COALESCE(origen, '') <> 'inventario_inicial'`,
+      [id, empresaId]
+    );
+    if (Number(mov.rows[0]?.n ?? 0) === 0) {
+      await client.query("SAVEPOINT borrar");
+      try {
+        await client.query(`DELETE FROM ${tm} WHERE empresa_id = $2::uuid AND producto_id = $1::uuid`, [id, empresaId]);
+        await client.query(`DELETE FROM ${t} WHERE id = $1::uuid AND empresa_id = $2::uuid`, [id, empresaId]);
+        await client.query("COMMIT");
+        return { modo: "borrado", imagen_path: imagenPath };
+      } catch (err) {
+        // 23503: lo referencia una venta, compra, orden… → se archiva.
+        if ((err as { code?: string })?.code !== "23503") throw err;
+        await client.query("ROLLBACK TO SAVEPOINT borrar");
+      }
+    }
+    await client.query(
+      `UPDATE ${t} SET activo = false, updated_at = now() WHERE id = $1::uuid AND empresa_id = $2::uuid`,
+      [id, empresaId]
+    );
+    await client.query("COMMIT");
+    return { modo: "archivado", imagen_path: null };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** Prefijo de los SKU que asigna el sistema cuando el usuario deja el campo vacío. */
+export const SKU_AUTO_PREFIX = "PRD-";
+
+/**
+ * Siguiente SKU automático de la empresa: PRD-00001, PRD-00002…
+ * Toma el mayor número ya usado con ese prefijo (incluye productos inactivos, que siguen
+ * ocupando el SKU por el índice único). Dos altas simultáneas pueden pedir el mismo número:
+ * quien inserta reintenta ante DuplicadoError("sku").
+ */
+export async function siguienteSkuPg(schemaRaw: string, empresaId: string): Promise<string> {
+  const schema = assertAllowedChatDataSchema(schemaRaw);
+  const { rows } = await pool().query<{ n: string }>(
+    `SELECT COALESCE(MAX(substring(sku FROM '^PRD-([0-9]+)$')::bigint), 0) + 1 AS n
+       FROM ${tProd(schema)}
+      WHERE empresa_id = $1::uuid`,
+    [empresaId]
+  );
+  const n = Number(rows[0]?.n ?? 1);
+  return `${SKU_AUTO_PREFIX}${String(n).padStart(5, "0")}`;
+}
+
 export function rowToProductoApi(r: ProductoRow): Record<string, unknown> {
   return {
     id: r.id,

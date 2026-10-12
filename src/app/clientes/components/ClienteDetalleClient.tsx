@@ -29,6 +29,18 @@ import {
 } from "@/lib/api/client";
 import { getFacturas, getSuscripciones } from "@/lib/facturacion/storage";
 import { formatTelefonoPy } from "@/lib/clientes/format-telefono";
+import {
+  errorEmail,
+  errorNombreEmpresa,
+  errorNombrePersona,
+  errorRuc,
+  errorTelefono,
+  mantenerCursor,
+  normalizarEmail,
+  soloDocumento,
+  soloRuc,
+  soloSinDigitos,
+} from "@/lib/clientes/validar-contacto";
 import { AnularFacturaButton } from "@/components/facturas/AnularFacturaButton";
 import { CondonarSaldoButton } from "@/components/facturas/CondonarSaldoButton";
 import { getMarketingTasks, createMarketingTask, updateTaskStatus } from "@/lib/marketing/storage";
@@ -696,10 +708,14 @@ export default function ClienteDetalleClient({
     const { name, value } = e.target;
     const type = (e.target as HTMLInputElement).type;
     let normalized = value;
-    if (lower.includes(name) || type === "email") normalized = value.toLowerCase();
+    // El email se normaliza al guardar: transformarlo acá manda el cursor al final (ver validar-contacto).
+    if (lower.includes(name) || type === "email") normalized = value;
     else if (upper.includes(name)) normalized = value.toUpperCase();
-    // El nombre de una persona no lleva números (evita que se cuele un teléfono en el nombre).
-    if (name === "nombre_contacto") normalized = normalized.replace(/[0-9]/g, "");
+    // Nombre de persona, ciudad y país no llevan números (evita que se cuele un teléfono en el nombre).
+    if (name === "nombre_contacto" || name === "ciudad" || name === "pais") normalized = soloSinDigitos(normalized);
+    if (name === "ruc" || name === "ruc_factura") normalized = soloRuc(normalized);
+    if (name === "documento") normalized = soloDocumento(normalized).toUpperCase();
+    mantenerCursor(e.target, value, normalized);
     setForm((prev) => ({ ...prev, [name]: normalized }));
   }
 
@@ -708,6 +724,15 @@ export default function ClienteDetalleClient({
     setFormError(null);
     if (!form.nombre_contacto.trim())                             return setFormError("El contacto es obligatorio.");
     if (form.tipo_cliente === "empresa" && !form.empresa.trim())  return setFormError("El nombre de empresa es obligatorio.");
+    const errContacto =
+      (form.tipo_cliente === "empresa" ? errorNombreEmpresa(form.empresa) : null) ??
+      errorNombrePersona(form.nombre_contacto, form.tipo_cliente === "empresa" ? "La persona de contacto" : "El nombre") ??
+      errorRuc(form.ruc) ??
+      errorRuc(form.ruc_factura, "El RUC de factura") ??
+      errorTelefono(form.telefono) ??
+      errorEmail(form.email) ??
+      errorEmail(form.email_secundario, "El email secundario");
+    if (errContacto) return setFormError(errContacto);
 
     // Solo validar creación de suscripción cuando: MENSUAL + activo + NO tiene suscripciones
     if (form.condicion_pago === "MENSUAL" && form.estado === "activo" && suscripciones.length === 0) {
@@ -815,8 +840,8 @@ export default function ClienteDetalleClient({
         documento:           form.documento.trim()           || undefined,
         telefono:            form.telefono.trim()            || undefined,
         telefono_secundario: form.telefono_secundario.trim() || undefined,
-        email:               form.email.trim()               || undefined,
-        email_secundario:    form.email_secundario.trim()    || undefined,
+        email:               normalizarEmail(form.email)            || undefined,
+        email_secundario:    normalizarEmail(form.email_secundario) || undefined,
         direccion:           form.direccion.trim()           || undefined,
         ciudad:              form.ciudad.trim().toUpperCase()  || undefined,
         pais:                form.pais.trim().toUpperCase()    || undefined,
@@ -940,7 +965,7 @@ export default function ClienteDetalleClient({
       return;
     }
     setModalBajaOperativa(false);
-    router.push("/clientes?baja_ok=1");
+    router.push(`/clientes?baja_ok=1&baja_id=${encodeURIComponent(id)}`);
   }
 
   async function handleEliminar() {
@@ -1811,7 +1836,15 @@ export default function ClienteDetalleClient({
 
                 <div>
                   <label className={labelClass}>Email</label>
-                  <input type="email" name="email" value={form.email} onChange={handleChange} className={inputClass} />
+                  <input
+                    type="email"
+                    name="email"
+                    value={form.email}
+                    onChange={handleChange}
+                    onBlur={() => setForm((p) => ({ ...p, email: normalizarEmail(p.email) }))}
+                    autoComplete="off"
+                    className={inputClass}
+                  />
                 </div>
 
                 <div>

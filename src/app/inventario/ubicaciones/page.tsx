@@ -75,6 +75,59 @@ export default function UbicacionesPage() {
     }
   }
 
+  // Edición en la misma fila
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editNombre, setEditNombre] = useState("");
+  const [editParentId, setEditParentId] = useState("");
+  const [editTipo, setEditTipo] = useState<string>("deposito");
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+
+  function empezarEdicion(u: Ubicacion) {
+    setListError(null);
+    setEditId(u.id);
+    setEditNombre(u.nombre);
+    setEditParentId(u.parent_id ?? "");
+    setEditTipo(u.tipo);
+  }
+
+  async function guardarEdicion(u: Ubicacion) {
+    if (!editNombre.trim() || savingEdit) return;
+    setSavingEdit(true);
+    setListError(null);
+    try {
+      const r = await fetch(`/api/inventario/ubicaciones/${u.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ nombre: editNombre.trim(), parent_id: editParentId || null, tipo: editTipo }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.success) setListError(j?.error ?? "No se pudo guardar.");
+      else {
+        setEditId(null);
+        await load();
+      }
+    } catch (e) {
+      setListError(e instanceof Error ? e.message : "Error de red");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  async function borrar(u: Ubicacion) {
+    if (!window.confirm(`¿Borrar la ubicación «${u.nombre}»? No se puede deshacer.`)) return;
+    setListError(null);
+    try {
+      const r = await fetch(`/api/inventario/ubicaciones/${u.id}`, { method: "DELETE", credentials: "include" });
+      const j = await r.json();
+      if (!r.ok || !j?.success) setListError(j?.error ?? "No se pudo borrar.");
+      else await load();
+    } catch (e) {
+      setListError(e instanceof Error ? e.message : "Error de red");
+    }
+  }
+
   async function toggleActivo(u: Ubicacion) {
     const r = await fetch(`/api/inventario/ubicaciones/${u.id}`, {
       method: "PATCH",
@@ -84,7 +137,7 @@ export default function UbicacionesPage() {
     });
     const j = await r.json();
     if (r.ok && j?.success) load();
-    else setError(j?.error ?? "No se pudo actualizar.");
+    else setListError(j?.error ?? "No se pudo actualizar.");
   }
 
   // Ordenar: padres primero (alfabético) y debajo sus hijos. Sub-ubicaciones indentadas.
@@ -230,6 +283,11 @@ export default function UbicacionesPage() {
             {items.length} {items.length === 1 ? "ubicación" : "ubicaciones"}
           </span>
         </div>
+        {listError && (
+          <p className="mx-6 mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
+            {listError}
+          </p>
+        )}
         {loading ? (
           <p className="p-6 text-sm text-slate-400">Cargando...</p>
         ) : itemsOrdenados.length === 0 ? (
@@ -250,12 +308,71 @@ export default function UbicacionesPage() {
                 <th className="text-left px-4 py-2.5 text-[10px] font-semibold uppercase tracking-[0.1em]">
                   Estado
                 </th>
-                <th className="px-4 py-2.5"></th>
+                <th className="px-4 py-2.5 text-right text-[10px] font-semibold uppercase tracking-[0.1em]">
+                  Acciones
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {itemsOrdenados.map((u) => {
                 const parent = items.find((i) => i.id === u.parent_id);
+                if (editId === u.id) {
+                  // Con hijos no puede pasar a ser hija de otra: la jerarquía es de dos niveles.
+                  const tieneHijos = items.some((i) => i.parent_id === u.id);
+                  return (
+                    <tr key={u.id} className="bg-[#4FAEB2]/[0.04]">
+                      <td className="px-6 py-2">
+                        <input
+                          value={editNombre}
+                          onChange={(e) => setEditNombre(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") guardarEdicion(u);
+                            if (e.key === "Escape") setEditId(null);
+                          }}
+                          className={`${inputCls} uppercase`}
+                          autoFocus
+                        />
+                      </td>
+                      <td className="px-4 py-2">
+                        <select value={editTipo} onChange={(e) => setEditTipo(e.target.value)} className={inputCls}>
+                          {TIPOS.map((t) => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                      </td>
+                      <td className="px-4 py-2">
+                        <select
+                          value={editParentId}
+                          onChange={(e) => setEditParentId(e.target.value)}
+                          className={inputCls}
+                          disabled={tieneHijos}
+                          title={tieneHijos ? "Tiene elementos hijos: no puede quedar debajo de otro" : undefined}
+                        >
+                          <option value="">— ninguna —</option>
+                          {padresDisponibles
+                            .filter((i) => i.id !== u.id)
+                            .map((i) => (
+                              <option key={i.id} value={i.id}>{i.nombre}</option>
+                            ))}
+                        </select>
+                      </td>
+                      <td className="px-4 py-2" />
+                      <td className="px-4 py-2 text-right whitespace-nowrap">
+                        <button
+                          onClick={() => guardarEdicion(u)}
+                          disabled={savingEdit || !editNombre.trim()}
+                          className="rounded-lg bg-[#4FAEB2] px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-[#3F8E91] disabled:opacity-50"
+                        >
+                          {savingEdit ? "Guardando..." : "Guardar"}
+                        </button>
+                        <button
+                          onClick={() => setEditId(null)}
+                          className="ml-3 text-[11px] font-semibold text-slate-500 hover:text-slate-700"
+                        >
+                          Cancelar
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                }
                 return (
                   <tr key={u.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-6 py-3 font-medium text-slate-800">
@@ -284,12 +401,24 @@ export default function UbicacionesPage() {
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
                       <button
-                        onClick={() => toggleActivo(u)}
+                        onClick={() => empezarEdicion(u)}
                         className="text-[11px] font-semibold text-[#3F8E91] underline-offset-2 hover:underline"
                       >
+                        Editar
+                      </button>
+                      <button
+                        onClick={() => toggleActivo(u)}
+                        className="ml-3 text-[11px] font-semibold text-slate-500 underline-offset-2 hover:underline"
+                      >
                         {u.activo ? "Desactivar" : "Activar"}
+                      </button>
+                      <button
+                        onClick={() => borrar(u)}
+                        className="ml-3 text-[11px] font-semibold text-red-600 underline-offset-2 hover:underline"
+                      >
+                        Borrar
                       </button>
                     </td>
                   </tr>

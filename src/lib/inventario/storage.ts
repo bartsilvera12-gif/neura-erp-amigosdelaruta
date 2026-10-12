@@ -93,9 +93,10 @@ function rowToMovimiento(row: MovimientoRow): MovimientoInventario {
 // ─── Productos ─────────────────────────────────────────────────────────────────
 
 /** Lista productos via API server-side (PG directo, soporta tenants erp_* no expuestos). */
-export async function getProductos(): Promise<Producto[]> {
+export async function getProductos(opts?: { conImagenes?: boolean }): Promise<Producto[]> {
   try {
-    const r = await fetch("/api/productos", { credentials: "include", cache: "no-store" });
+    const qs = opts?.conImagenes ? "?con_imagenes=1" : "";
+    const r = await fetch(`/api/productos${qs}`, { credentials: "include", cache: "no-store" });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j?.success) {
       console.error("[inventario] getProductos:", (j as { error?: string })?.error ?? r.status);
@@ -106,6 +107,22 @@ export async function getProductos(): Promise<Producto[]> {
   } catch (err) {
     console.error("[inventario] getProductos:", err instanceof Error ? err.message : err);
     return [];
+  }
+}
+
+/**
+ * Borra un producto (solo admin). `archivado`: tenía historial y se dio de baja en lugar de borrarse.
+ */
+export async function deleteProducto(
+  id: string
+): Promise<{ ok: true; modo: "borrado" | "archivado" } | { ok: false; error: string }> {
+  try {
+    const r = await fetch(`/api/productos/${encodeURIComponent(id)}`, { method: "DELETE", credentials: "include" });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j?.success) return { ok: false, error: (j as { error?: string })?.error ?? "No se pudo borrar." };
+    return { ok: true, modo: (j.data as { modo: "borrado" | "archivado" }).modo };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Error de red" };
   }
 }
 
@@ -143,7 +160,7 @@ export async function productoExiste(
   return (
     productos.find(
       (p) =>
-        p.sku.toLowerCase() === skuNorm ||
+        (skuNorm !== "" && p.sku.toLowerCase() === skuNorm) ||
         p.nombre.toLowerCase() === nombreNorm
     ) ?? null
   );

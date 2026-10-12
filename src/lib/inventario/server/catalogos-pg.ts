@@ -150,6 +150,41 @@ export async function updateCategoriaProducto(
   return rows[0] ?? null;
 }
 
+/**
+ * Borra una categoría si ningún producto activo ni sub-categoría la usa. Las FK son ON DELETE SET NULL / CASCADE, así que un
+ * DELETE directo dejaría productos sin categoría y sub-categorías sueltas sin avisar: por eso
+ * se cuenta antes y se devuelve el motivo para que el usuario decida (reasignar o desactivar).
+ */
+export async function deleteCategoriaProducto(
+  schemaRaw: string,
+  empresaId: string,
+  id: string
+): Promise<{ ok: true } | { ok: false; motivo: "no_existe" | "en_uso"; productos: number; subcategorias: number }> {
+  const schema = assertAllowedChatDataSchema(schemaRaw);
+  const t = quoteSchemaTable(schema, "categorias_productos");
+  const tProd = quoteSchemaTable(schema, "productos");
+  const tPuente = quoteSchemaTable(schema, "producto_categorias");
+  const p = pool();
+  const { rows } = await p.query<{ productos: string; subcategorias: string }>(
+    `SELECT
+       (SELECT count(DISTINCT x.pid) FROM (
+          SELECT id AS pid FROM ${tProd}
+           WHERE empresa_id = $2::uuid AND activo = true AND categoria_principal_id = $1::uuid
+          UNION
+          SELECT pc.producto_id FROM ${tPuente} pc JOIN ${tProd} pr ON pr.id = pc.producto_id
+           WHERE pc.empresa_id = $2::uuid AND pr.activo = true AND pc.categoria_id = $1::uuid
+        ) x)::text AS productos,
+       (SELECT count(*) FROM ${t} WHERE empresa_id = $2::uuid AND parent_id = $1::uuid)::text AS subcategorias`,
+    [id, empresaId]
+  );
+  const productos = Number(rows[0]?.productos ?? 0);
+  const subcategorias = Number(rows[0]?.subcategorias ?? 0);
+  if (productos > 0 || subcategorias > 0) return { ok: false, motivo: "en_uso", productos, subcategorias };
+  const del = await p.query(`DELETE FROM ${t} WHERE id = $1::uuid AND empresa_id = $2::uuid`, [id, empresaId]);
+  if (!del.rowCount) return { ok: false, motivo: "no_existe", productos: 0, subcategorias: 0 };
+  return { ok: true };
+}
+
 // ─── Ubicaciones ──────────────────────────────────────────────────────────
 
 const TIPOS_UBICACION = ["deposito", "salon", "pasillo", "gondola", "estante", "zona", "otro"] as const;
@@ -239,6 +274,43 @@ export async function updateUbicacion(
     params
   );
   return rows[0] ?? null;
+}
+
+/**
+ * Borra una ubicación si no tiene stock, productos que la usen como principal ni sub-ubicaciones.
+ * inventario_stock_ubicacion es ON DELETE CASCADE: borrarla con stock haría desaparecer
+ * existencias sin movimiento que lo explique.
+ */
+export async function deleteUbicacion(
+  schemaRaw: string,
+  empresaId: string,
+  id: string
+): Promise<
+  | { ok: true }
+  | { ok: false; motivo: "no_existe" | "en_uso"; conStock: number; productos: number; sububicaciones: number }
+> {
+  const schema = assertAllowedChatDataSchema(schemaRaw);
+  const t = quoteSchemaTable(schema, "inventario_ubicaciones");
+  const tStock = quoteSchemaTable(schema, "inventario_stock_ubicacion");
+  const tProd = quoteSchemaTable(schema, "productos");
+  const p = pool();
+  const { rows } = await p.query<{ con_stock: string; productos: string; sububicaciones: string }>(
+    `SELECT
+       (SELECT count(*) FROM ${tStock} WHERE empresa_id = $2::uuid AND ubicacion_id = $1::uuid AND stock_actual <> 0)::text AS con_stock,
+       (SELECT count(*) FROM ${tProd}
+         WHERE empresa_id = $2::uuid AND activo = true AND ubicacion_principal_id = $1::uuid)::text AS productos,
+       (SELECT count(*) FROM ${t} WHERE empresa_id = $2::uuid AND parent_id = $1::uuid)::text AS sububicaciones`,
+    [id, empresaId]
+  );
+  const conStock = Number(rows[0]?.con_stock ?? 0);
+  const productos = Number(rows[0]?.productos ?? 0);
+  const sububicaciones = Number(rows[0]?.sububicaciones ?? 0);
+  if (conStock > 0 || productos > 0 || sububicaciones > 0) {
+    return { ok: false, motivo: "en_uso", conStock, productos, sububicaciones };
+  }
+  const del = await p.query(`DELETE FROM ${t} WHERE id = $1::uuid AND empresa_id = $2::uuid`, [id, empresaId]);
+  if (!del.rowCount) return { ok: false, motivo: "no_existe", conStock: 0, productos: 0, sububicaciones: 0 };
+  return { ok: true };
 }
 
 // ─── Relacion producto<->categoria principal ────────────────────────────

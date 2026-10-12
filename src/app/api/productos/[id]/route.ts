@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTenantSupabaseFromAuth } from "@/lib/supabase/tenant-api";
+import { getTenantSupabaseFromAuth, getTenantSupabaseFromAuthWithRol } from "@/lib/supabase/tenant-api";
+import { isAdmin } from "@/lib/middleware/auth";
+import { PRODUCTOS_IMAGENES_BUCKET, pathBelongsToEmpresa } from "@/lib/inventario/imagen-storage";
 import { fetchDataSchemaForEmpresaId } from "@/lib/supabase/empresa-data-schema";
 import { successResponse, errorResponse } from "@/lib/api/response";
 import { API_ERRORS } from "@/lib/api/errors";
@@ -8,6 +10,7 @@ import {
   rowToProductoApi,
   getProductoPg,
   DuplicadoError,
+  deleteProductoPg,
 } from "@/lib/inventario/server/productos-pg";
 
 /**
@@ -172,5 +175,37 @@ export async function PATCH(
       errorResponse("No se pudo actualizar el producto."),
       { status: 500 }
     );
+  }
+}
+
+/**
+ * DELETE /api/productos/[id] — solo administradores. Borra el producto si no tiene historial;
+ * si lo tiene, lo da de baja (ver deleteProductoPg). La respuesta indica qué se hizo.
+ */
+export async function DELETE(
+  request: NextRequest,
+  ctxParams: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await ctxParams.params;
+    const ctx = await getTenantSupabaseFromAuthWithRol(request);
+    if (!ctx) return NextResponse.json(errorResponse(API_ERRORS.UNAUTHORIZED), { status: 401 });
+    if (!isAdmin(ctx.auth)) {
+      return NextResponse.json(errorResponse("Solo un administrador puede borrar productos."), { status: 403 });
+    }
+    const empresaId = ctx.auth.empresa_id;
+    const schema = await fetchDataSchemaForEmpresaId(empresaId);
+    const r = await deleteProductoPg(schema, empresaId, id);
+    if (!r) return NextResponse.json(errorResponse(API_ERRORS.NOT_FOUND), { status: 404 });
+    if (r.modo === "borrado" && r.imagen_path && pathBelongsToEmpresa(r.imagen_path, empresaId)) {
+      await ctx.supabase.storage
+        .from(PRODUCTOS_IMAGENES_BUCKET)
+        .remove([r.imagen_path])
+        .catch(() => undefined);
+    }
+    return NextResponse.json(successResponse({ id, modo: r.modo }));
+  } catch (err) {
+    console.error("[/api/productos/[id] DELETE]", err instanceof Error ? err.message : err);
+    return NextResponse.json(errorResponse("No se pudo borrar el producto."), { status: 500 });
   }
 }

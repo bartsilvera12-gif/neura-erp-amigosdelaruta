@@ -10,6 +10,7 @@ import { getProductos, productoExiste, saveProducto } from "@/lib/inventario/sto
 import type { TipoIva, TipoPago, Moneda } from "@/lib/compras/types";
 import type { Proveedor } from "@/lib/proveedores/types";
 import type { Producto } from "@/lib/inventario/types";
+import { errorEmail, errorRuc, normalizarEmail, soloRuc } from "@/lib/clientes/validar-contacto";
 
 const fmt = (v: number) => `₲ ${Math.round(v).toLocaleString("es-PY")}`;
 function margenColor(m: number) {
@@ -214,11 +215,13 @@ export default function NuevaCompraModal({ onClose, onSaved }: { onClose: () => 
   async function agregarProveedor() {
     if (!fProv.nombre.trim() || !fProv.ruc.trim()) return;
     setErrRuc(null);
+    const errFormato = errorRuc(fProv.ruc) ?? errorEmail(fProv.email);
+    if (errFormato) { setErrRuc(errFormato); return; }
     const dup = await proveedorExiste(fProv.ruc);
     if (dup) { setErrRuc(`RUC ya registrado para "${dup.nombre}".`); return; }
     const r = await createProveedor({
       nombre: fProv.nombre.trim().toUpperCase(), ruc: fProv.ruc.trim(), telefono: fProv.telefono.trim(),
-      email: fProv.email.trim(), contacto: fProv.contacto.trim().toUpperCase(), direccion: "", estado: "activo",
+      email: normalizarEmail(fProv.email), contacto: fProv.contacto.trim().toUpperCase(), direccion: "", estado: "activo",
     });
     if (!r.ok) { setErrRuc(r.error); return; }
     await recargarProveedores();
@@ -332,14 +335,15 @@ export default function NuevaCompraModal({ onClose, onSaved }: { onClose: () => 
                     <input value={fProv.nombre} onChange={(e) => setFProv((p) => ({ ...p, nombre: e.target.value.toUpperCase() }))}
                       placeholder="Ej: TEXTILES DEL SUR S.A." className={`${INPUT} uppercase`} /></div>
                   <div><label className={SUBLABEL}>RUC *</label>
-                    <input value={fProv.ruc} onChange={(e) => { setErrRuc(null); setFProv((p) => ({ ...p, ruc: e.target.value })); }}
+                    <input value={fProv.ruc} onChange={(e) => { setErrRuc(null); setFProv((p) => ({ ...p, ruc: soloRuc(e.target.value) })); }}
                       placeholder="Ej: 80012345-1" className={`${INPUT} ${errRuc ? "border-red-300 bg-red-50" : ""}`} />
                     {errRuc && <p className="mt-1 text-[11px] text-red-600">{errRuc}</p>}</div>
                   <div><label className={SUBLABEL}>Teléfono</label>
                     <input value={fProv.telefono} onChange={(e) => setFProv((p) => ({ ...p, telefono: e.target.value }))}
                       placeholder="Ej: 0981 111 222" className={INPUT} /></div>
                   <div><label className={SUBLABEL}>Email</label>
-                    <input value={fProv.email} onChange={(e) => setFProv((p) => ({ ...p, email: e.target.value.toLowerCase() }))}
+                    <input value={fProv.email} onChange={(e) => setFProv((p) => ({ ...p, email: e.target.value }))}
+                      type="email" autoComplete="off"
                       placeholder="Ej: ventas@empresa.com" className={INPUT} /></div>
                   <div className="sm:col-span-2"><label className={SUBLABEL}>Persona de contacto</label>
                     <input value={fProv.contacto} onChange={(e) => setFProv((p) => ({ ...p, contacto: e.target.value.toUpperCase() }))}

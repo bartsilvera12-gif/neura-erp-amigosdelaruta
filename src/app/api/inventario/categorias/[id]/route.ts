@@ -3,7 +3,7 @@ import { getTenantSupabaseFromAuth } from "@/lib/supabase/tenant-api";
 import { fetchDataSchemaForEmpresaId } from "@/lib/supabase/empresa-data-schema";
 import { successResponse, errorResponse } from "@/lib/api/response";
 import { API_ERRORS } from "@/lib/api/errors";
-import { updateCategoriaProducto } from "@/lib/inventario/server/catalogos-pg";
+import { deleteCategoriaProducto, updateCategoriaProducto } from "@/lib/inventario/server/catalogos-pg";
 import { normalizeUpperText, normalizeUpperNullable } from "@/lib/text/normalize";
 
 export async function PATCH(
@@ -32,5 +32,32 @@ export async function PATCH(
     }
     console.error("[/api/inventario/categorias/[id] PATCH]", err);
     return NextResponse.json(errorResponse("No se pudo actualizar la categoría."), { status: 500 });
+  }
+}
+
+export async function DELETE(
+  request: NextRequest,
+  ctxParams: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await ctxParams.params;
+    const ctx = await getTenantSupabaseFromAuth(request);
+    if (!ctx) return NextResponse.json(errorResponse(API_ERRORS.UNAUTHORIZED), { status: 401 });
+    const schema = await fetchDataSchemaForEmpresaId(ctx.auth.empresa_id);
+    const r = await deleteCategoriaProducto(schema, ctx.auth.empresa_id, id);
+    if (r.ok) return NextResponse.json(successResponse({ id }));
+    if (r.motivo === "no_existe") return NextResponse.json(errorResponse(API_ERRORS.NOT_FOUND), { status: 404 });
+    const partes: string[] = [];
+    if (r.productos > 0) partes.push(`${r.productos} producto${r.productos === 1 ? "" : "s"}`);
+    if (r.subcategorias > 0) partes.push(`${r.subcategorias} sub-categoría${r.subcategorias === 1 ? "" : "s"}`);
+    return NextResponse.json(
+      errorResponse(
+        `No se puede borrar: la usan ${partes.join(" y ")}. Cambiales la categoría primero, o desactivala para que no aparezca en altas nuevas.`
+      ),
+      { status: 409 }
+    );
+  } catch (err) {
+    console.error("[/api/inventario/categorias/[id] DELETE]", err);
+    return NextResponse.json(errorResponse("No se pudo borrar la categoría."), { status: 500 });
   }
 }

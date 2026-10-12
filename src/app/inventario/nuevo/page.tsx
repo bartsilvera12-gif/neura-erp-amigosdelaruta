@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import MontoInput from "@/components/ui/MontoInput";
 import SelectFromList from "@/components/inventario/SelectFromList";
+import { opcionesUnidad } from "@/lib/inventario/unidades";
 import { productoExiste, saveProducto } from "@/lib/inventario/storage";
 import type { MetodoValuacion } from "@/lib/inventario/types";
 
@@ -26,7 +27,7 @@ export default function NuevoProductoPage() {
     precio_venta: "",
     stock_actual: "",
     stock_minimo: "",
-    unidad_medida: "",
+    unidad_medida: "UNIDAD",
     metodo_valuacion: "CPP" as MetodoValuacion,
   });
   const [submitting, setSubmitting] = useState(false);
@@ -40,6 +41,18 @@ export default function NuevoProductoPage() {
   const [categorias, setCategorias] = useState<CatRow[]>([]);
   const [ubicaciones, setUbicaciones] = useState<UbiRow[]>([]);
   const [proveedores, setProveedores] = useState<ProvRow[]>([]);
+
+  /** SKU que asignará el sistema si el campo queda vacío (solo vista previa). */
+  const [skuSugerido, setSkuSugerido] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancel = false;
+    fetch("/api/productos/siguiente-sku", { credentials: "include" })
+      .then((r) => r.json())
+      .then((j) => { if (!cancel && j?.success) setSkuSugerido(j.data.sku as string); })
+      .catch(() => undefined);
+    return () => { cancel = true; };
+  }, []);
 
   useEffect(() => {
     let cancel = false;
@@ -381,23 +394,28 @@ export default function NuevoProductoPage() {
                 name="sku"
                 value={form.sku}
                 onChange={handleChange}
-                placeholder="Ej: OOTD-001"
+                placeholder={skuSugerido ? `Automático: ${skuSugerido}` : "Automático"}
                 className={`${inputClass} uppercase`}
-                required
               />
+              <p className="mt-1 text-xs text-gray-400">
+                Dejalo vacío y el sistema asigna el siguiente. Escribí uno solo si ya usás tu propio código.
+              </p>
             </div>
 
             <div>
               <label className={labelClass}>Unidad de medida</label>
-              <input
-                type="text"
+              <select
                 name="unidad_medida"
                 value={form.unidad_medida}
                 onChange={handleChange}
-                placeholder="Ej: UNIDAD, KG, LT"
-                className={`${inputClass} uppercase`}
+                className={inputClass}
                 required
-              />
+              >
+                <option value="">— Elegí una unidad —</option>
+                {opcionesUnidad(form.unidad_medida).map((u) => (
+                  <option key={u.value} value={u.value}>{u.label}</option>
+                ))}
+              </select>
             </div>
           </div>
 

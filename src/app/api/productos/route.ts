@@ -8,11 +8,13 @@ import {
   insertMovimientoInicial,
   rowToProductoApi,
   DuplicadoError,
+  siguienteSkuPg,
 } from "@/lib/inventario/server/productos-pg";
 import { getChatPostgresPool, quoteSchemaTable } from "@/lib/supabase/chat-pg-pool";
 import { queryWithRetry } from "@/lib/supabase/pg-retry";
 import { assertAllowedChatDataSchema } from "@/lib/supabase/chat-data-schema";
 import { normalizeUpperText, normalizeUpperCodigoBarras } from "@/lib/text/normalize";
+import { pathBelongsToEmpresa, signProductoImagenes } from "@/lib/inventario/imagen-storage";
 
 /**
  * GET /api/productos — lista todos los productos activos via PG directo
@@ -42,6 +44,16 @@ export async function GET(request: NextRequest) {
         ORDER BY nombre`,
       [empresaId]
     );
+    // ?con_imagenes=1 → URL firmada para la miniatura (el bucket es privado y imagen_url queda null).
+    if (request.nextUrl.searchParams.get("con_imagenes") === "1") {
+      const paths = (rows as { imagen_path: string | null }[])
+        .map((r) => r.imagen_path)
+        .filter((p): p is string => !!p && pathBelongsToEmpresa(p, empresaId));
+      const firmadas = await signProductoImagenes(ctx.supabase, paths);
+      for (const r of rows as { imagen_path: string | null; imagen_url: string | null }[]) {
+        if (r.imagen_path && firmadas.has(r.imagen_path)) r.imagen_url = firmadas.get(r.imagen_path)!;
+      }
+    }
     return NextResponse.json(successResponse({ productos: rows }));
   } catch (err) {
     console.error("[/api/productos GET]", err instanceof Error ? err.message : err);
@@ -95,9 +107,9 @@ export async function POST(request: NextRequest) {
     }
 
     const nombre = normalizeUpperText(body.nombre);
-    const sku = normalizeUpperText(body.sku);
+    // SKU vacío → lo asigna el sistema (PRD-00001…).
+    const skuManual = normalizeUpperText(body.sku);
     if (!nombre) return NextResponse.json(errorResponse("El nombre es obligatorio."), { status: 400 });
-    if (!sku) return NextResponse.json(errorResponse("El SKU es obligatorio."), { status: 400 });
 
     const codigoBarras = normalizeUpperCodigoBarras(body.codigo_barras);
     const codigoBarrasInterno = codigoBarras != null && body.codigo_barras_interno === true;
@@ -127,9 +139,8 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-      const row = await insertProducto(schema, empresaId, {
+      const datos: Omit<Parameters<typeof insertProducto>[2], "sku"> = {
         nombre,
-        sku,
         costo_promedio: costoPromedio,
         precio_venta: precioVenta,
         stock_actual: stockActual,
@@ -141,7 +152,18 @@ export async function POST(request: NextRequest) {
         categoria_principal_id: categoriaPrincipalId,
         ubicacion_principal_id: ubicacionPrincipalId,
         proveedor_principal_id: proveedorPrincipalId,
-      });
+      };
+      let row: Awaited<ReturnType<typeof insertProducto>> | null = null;
+      for (let intento = 0; row === null; intento++) {
+        const sku = skuManual || (await siguienteSkuPg(schema, empresaId));
+        try {
+          row = await insertProducto(schema, empresaId, { ...datos, sku });
+        } catch (err) {
+          // Otro alta tomó el mismo SKU automático entre el cálculo y el INSERT: probar el siguiente.
+          const choqueAuto = !skuManual && err instanceof DuplicadoError && err.campo === "sku";
+          if (!choqueAuto || intento >= 4) throw err;
+        }
+      }
 
       // Inventario inicial (mismo schema, via PG directo).
       // Si falla aqui, el producto YA fue creado — registramos el error en

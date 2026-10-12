@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { getProductos } from "@/lib/inventario/storage";
+import { deleteProducto, getProductos } from "@/lib/inventario/storage";
 import type { Producto, MetodoValuacion } from "@/lib/inventario/types";
 import ExportExcelButton from "@/components/ui/ExportExcelButton";
 import ImportExcelButton from "@/components/ui/ImportExcelButton";
@@ -39,6 +39,28 @@ export default function InventarioPage() {
   const [todos, setTodos] = useState<Producto[]>([]);
   const [ubicaciones, setUbicaciones] = useState<UbicacionMin[]>([]);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [aviso, setAviso] = useState<{ tipo: "ok" | "error"; texto: string } | null>(null);
+  const [borrandoId, setBorrandoId] = useState<string | null>(null);
+
+  async function handleBorrar(p: Producto) {
+    if (!window.confirm(`¿Borrar el producto «${p.nombre}» (${p.sku})?`)) return;
+    setBorrandoId(p.id);
+    setAviso(null);
+    const r = await deleteProducto(p.id);
+    setBorrandoId(null);
+    if (!r.ok) {
+      setAviso({ tipo: "error", texto: r.error });
+      return;
+    }
+    setAviso({
+      tipo: "ok",
+      texto:
+        r.modo === "borrado"
+          ? `Se borró «${p.nombre}».`
+          : `«${p.nombre}» tiene movimientos, ventas o compras: se dio de baja para conservar ese historial y ya no aparece en el listado.`,
+    });
+    setRefreshKey((k) => k + 1);
+  }
 
   // Busqueda unica global + paginado
   const [query, setQuery] = useState("");
@@ -46,7 +68,7 @@ export default function InventarioPage() {
 
   useEffect(() => {
     let cancelled = false;
-    getProductos().then((data) => {
+    getProductos({ conImagenes: true }).then((data) => {
       if (!cancelled) setTodos(data);
     });
     // Ubicaciones para el filtro
@@ -123,6 +145,21 @@ export default function InventarioPage() {
         </div>
       </div>
 
+      {aviso && (
+        <div
+          className={`flex items-start justify-between gap-3 rounded-xl border px-3 py-2.5 text-sm font-medium ${
+            aviso.tipo === "ok"
+              ? "border-green-200 bg-green-50 text-green-800"
+              : "border-red-200 bg-red-50 text-red-700"
+          }`}
+        >
+          <p>{aviso.texto}</p>
+          <button onClick={() => setAviso(null)} className="shrink-0 text-xs opacity-70 hover:opacity-100">
+            Cerrar
+          </button>
+        </div>
+      )}
+
       <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
 
         <div className="mb-5 flex flex-wrap items-center gap-3">
@@ -193,6 +230,9 @@ export default function InventarioPage() {
 
             <thead>
               <tr className="bg-slate-50 text-slate-600 text-sm font-semibold">
+                <th className="py-3 pl-3 pr-3 font-medium w-14">
+                  <span className="sr-only">Imagen</span>
+                </th>
                 <th className="py-3 pr-4 font-medium">Nombre</th>
                 <th className="py-3 pr-4 font-medium">SKU</th>
                 <th className="py-3 pr-4 font-medium">Costo Prom.</th>
@@ -202,10 +242,12 @@ export default function InventarioPage() {
                 <th className="py-3 pr-4 font-medium">Unidad</th>
                 <th className="py-3 pr-4 font-medium">Ubicación</th>
                 <th className="py-3 pr-4 font-medium">Valuación</th>
-                <th className="py-3 font-medium text-right">
+                <th className="py-3 pr-6 font-medium text-right whitespace-nowrap">
                   <span title="(precio - costo) / precio × 100">Margen s/venta</span>
                 </th>
-                <th className="py-3 font-medium w-20"></th>
+                <th className="py-3 pl-4 pr-3 font-medium text-right whitespace-nowrap border-l border-slate-200">
+                  Acciones
+                </th>
               </tr>
             </thead>
 
@@ -215,6 +257,24 @@ export default function InventarioPage() {
                 const margen = calcularMargenVenta(p.costo_promedio, p.precio_venta);
                 return (
                   <tr key={p.id} className="border-b border-slate-200 last:border-0 hover:bg-slate-50 transition-colors">
+                    <td className="py-2 pl-3 pr-3">
+                      {p.imagen_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element -- URL firmada de Storage, cambia cada hora
+                        <img
+                          src={p.imagen_url}
+                          alt=""
+                          className="h-10 w-10 rounded-lg border border-slate-200 object-cover"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div
+                          aria-hidden="true"
+                          className="flex h-10 w-10 items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 text-[10px] font-semibold text-slate-300"
+                        >
+                          {p.nombre.charAt(0)}
+                        </div>
+                      )}
+                    </td>
                     <td className="py-4 pr-4 font-medium text-gray-800">{p.nombre}</td>
                     <td className="py-4 pr-4 text-gray-500 font-mono">{p.sku}</td>
                     <td className="py-4 pr-4 text-gray-700">{formatGs(p.costo_promedio)}</td>
@@ -246,16 +306,25 @@ export default function InventarioPage() {
                         {p.metodo_valuacion}
                       </span>
                     </td>
-                    <td className={`py-4 text-right tabular-nums font-semibold ${margenColor(margen)}`}>
+                    <td className={`py-4 pr-6 text-right tabular-nums font-semibold whitespace-nowrap ${margenColor(margen)}`}>
                       {margen.toFixed(2)}%
                     </td>
-                    <td className="py-4">
+                    <td className="py-4 pl-4 pr-3 text-right whitespace-nowrap border-l border-slate-100">
                       <Link
                         href={`/inventario/${p.id}/editar`}
-                        className="text-sm text-gray-500 hover:text-gray-800 underline"
+                        className="text-xs font-semibold text-[#3F8E91] underline-offset-2 hover:underline"
                       >
                         Editar
                       </Link>
+                      {isAdmin && (
+                        <button
+                          onClick={() => handleBorrar(p)}
+                          disabled={borrandoId === p.id}
+                          className="ml-3 text-xs font-semibold text-red-600 underline-offset-2 hover:underline disabled:opacity-50"
+                        >
+                          {borrandoId === p.id ? "Borrando..." : "Borrar"}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );

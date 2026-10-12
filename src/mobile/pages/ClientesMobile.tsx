@@ -137,7 +137,7 @@ function ClienteCard({ cliente }: { cliente: Cliente }) {
             <p className="truncate text-[11px] text-slate-500">{detalle}</p>
           ) : null}
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            <EstadoBadge estado={cliente.estado} />
+            <EstadoBadge estado={cliente.estado} anulado={Boolean(cliente.baja_operativa_at)} />
             <OrigenBadge origen={cliente.origen} />
             {cliente.ruc ? (
               <span className="text-[10px] tabular-nums text-slate-400">RUC {cliente.ruc}</span>
@@ -149,7 +149,15 @@ function ClienteCard({ cliente }: { cliente: Cliente }) {
   );
 }
 
-function EstadoBadge({ estado }: { estado: EstadoCliente }) {
+function EstadoBadge({ estado, anulado }: { estado: EstadoCliente; anulado?: boolean }) {
+  if (anulado) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700">
+        <span className="h-1 w-1 rounded-full bg-rose-500" />
+        Anulado
+      </span>
+    );
+  }
   const activo = estado === "activo";
   return (
     <span

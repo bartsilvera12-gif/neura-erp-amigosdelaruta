@@ -4,6 +4,17 @@ import type {
   CondicionPagoProveedor,
   EstadoProveedor,
 } from "@/lib/proveedores/types";
+import {
+  errorEmail,
+  errorNombreEmpresa,
+  errorNombrePersona,
+  errorRuc,
+  errorTelefono,
+  mantenerCursor,
+  normalizarEmail,
+  soloRuc,
+  soloSinDigitos,
+} from "@/lib/clientes/validar-contacto";
 
 const inputClass =
   "w-full border border-slate-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-[#4FAEB2]/40 focus:border-[#4FAEB2] bg-white text-sm";
@@ -45,6 +56,18 @@ export function emptyProveedorForm(): ProveedorFormValues {
   };
 }
 
+/** Primer error de formato del formulario, o null si se puede guardar. */
+export function errorProveedorForm(v: ProveedorFormValues): string | null {
+  if (!v.nombre.trim()) return "Completá el nombre.";
+  return (
+    errorNombreEmpresa(v.nombre, "El nombre del proveedor") ??
+    errorRuc(v.ruc) ??
+    errorTelefono(v.telefono) ??
+    errorEmail(v.email) ??
+    errorNombrePersona(v.contacto, "El contacto principal")
+  );
+}
+
 export default function ProveedorForm({
   values,
   onChange,
@@ -80,7 +103,11 @@ export default function ProveedorForm({
           <input
             className={`${inputClass} uppercase`}
             value={values.ruc}
-            onChange={(e) => patch("ruc", e.target.value)}
+            onChange={(e) => {
+              const v = soloRuc(e.target.value);
+              mantenerCursor(e.target, e.target.value, v);
+              patch("ruc", v);
+            }}
             placeholder="Opcional"
             disabled={disabled}
           />
@@ -99,8 +126,14 @@ export default function ProveedorForm({
           <label className={labelClass}>Teléfono</label>
           <input
             className={inputClass}
+            type="tel"
+            inputMode="tel"
             value={values.telefono}
-            onChange={(e) => patch("telefono", e.target.value)}
+            onChange={(e) => {
+              const v = e.target.value.replace(/[^0-9+\s-]/g, "");
+              mantenerCursor(e.target, e.target.value, v);
+              patch("telefono", v);
+            }}
             disabled={disabled}
           />
         </div>
@@ -110,7 +143,9 @@ export default function ProveedorForm({
             type="email"
             className={inputClass}
             value={values.email}
-            onChange={(e) => patch("email", e.target.value.toLowerCase())}
+            onChange={(e) => patch("email", e.target.value)}
+            onBlur={() => patch("email", normalizarEmail(values.email))}
+            autoComplete="off"
             disabled={disabled}
           />
         </div>
@@ -128,7 +163,11 @@ export default function ProveedorForm({
           <input
             className={`${inputClass} uppercase`}
             value={values.contacto}
-            onChange={(e) => patch("contacto", e.target.value)}
+            onChange={(e) => {
+              const v = soloSinDigitos(e.target.value);
+              mantenerCursor(e.target, e.target.value, v);
+              patch("contacto", v);
+            }}
             disabled={disabled}
           />
         </div>

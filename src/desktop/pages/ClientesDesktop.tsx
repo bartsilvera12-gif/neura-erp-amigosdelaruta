@@ -22,8 +22,21 @@ function formatFecha(iso: string) {
 
 // ── Badges ────────────────────────────────────────────────────────────────────
 
-function BadgeEstado({ estado }: { estado: Cliente["estado"] }) {
-  const activo = estado === "activo";
+function BadgeEstado({ cliente }: { cliente: Cliente }) {
+  // Dado de baja (baja operativa): se distingue de un inactivo común para que no se confunda.
+  if (cliente.baja_operativa_at) {
+    const fecha = new Date(cliente.baja_operativa_at).toLocaleDateString("es-PY");
+    return (
+      <span
+        title={`Baja del ${fecha}${cliente.baja_operativa_motivo ? ` · ${cliente.baja_operativa_motivo}` : ""}`}
+        className="inline-flex items-center gap-1.5 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700"
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
+        Anulado
+      </span>
+    );
+  }
+  const activo = cliente.estado === "activo";
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
@@ -222,6 +235,11 @@ function buildClienteColumns(mapNombreTipo: Record<string, string>): ClienteColu
                 <p className="truncate text-sm font-semibold text-slate-900 group-hover:text-slate-950">
                   {nombre}
                 </p>
+                {c.baja_operativa_at && (
+                  <span className="inline-flex items-center rounded-full border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-rose-700">
+                    Anulado
+                  </span>
+                )}
                 {c.perfil_tributario_activo && (
                   <span className="inline-flex items-center gap-1 rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-700">
                     Tributario
@@ -294,7 +312,7 @@ function buildClienteColumns(mapNombreTipo: Record<string, string>): ClienteColu
       visibleDefault: true,
       headerClassName: th,
       className: td,
-      render: (c) => <BadgeEstado estado={c.estado} />,
+      render: (c) => <BadgeEstado cliente={c} />,
     },
     {
       key: "desde",
@@ -359,8 +377,9 @@ export default function ClientesPage() {
   const [clientes,    setClientes]    = useState<Cliente[]>([]);
   const [cargando,    setCargando]    = useState(true);
   const [busqueda,    setBusqueda]    = useState("");
-  const [bajaOk,      setBajaOk]      = useState(false);
-  const [filtroEstado, setFiltroEstado] = useState<"" | "activo" | "inactivo">("");
+  /** Id del cliente recién dado de baja (viene en ?baja_id=), para nombrarlo en el aviso. */
+  const [bajaOk,      setBajaOk]      = useState<string | null>(null);
+  const [filtroEstado, setFiltroEstado] = useState<"" | "activo" | "inactivo" | "anulado">("");
   const [filtroOrigen, setFiltroOrigen] = useState<"" | "CRM" | "VENTA" | "MANUAL">("");
   const [filtroTipo,   setFiltroTipo]   = useState<"" | "empresa" | "persona">("");
   const [filtroTipoServicio, setFiltroTipoServicio] = useState<"" | string>("");
@@ -434,9 +453,9 @@ export default function ClientesPage() {
 
   useEffect(() => {
     if (searchParams?.get("baja_ok") === "1") {
-      setBajaOk(true);
+      setBajaOk(searchParams.get("baja_id") ?? "");
       window.history.replaceState({}, "", "/clientes");
-      const t = setTimeout(() => setBajaOk(false), 5000);
+      const t = setTimeout(() => setBajaOk(null), 8000);
       return () => clearTimeout(t);
     }
   }, [searchParams]);
@@ -457,7 +476,9 @@ export default function ClientesPage() {
         (c.ciudad         ?? "").toLowerCase().includes(q);
       if (!match) return false;
     }
-    if (filtroEstado       && c.estado              !== filtroEstado) return false;
+    if (filtroEstado === "anulado") {
+      if (!c.baja_operativa_at) return false;
+    } else if (filtroEstado && c.estado !== filtroEstado) return false;
     if (filtroOrigen       && c.origen              !== filtroOrigen) return false;
     if (filtroTipo         && c.tipo_cliente        !== filtroTipo) return false;
     if (filtroTipoServicio && c.tipo_servicio_cliente !== filtroTipoServicio) return false;
@@ -483,12 +504,23 @@ export default function ClientesPage() {
     <div className="space-y-4">
 
       {/* Mensaje de éxito baja operativa */}
-      {bajaOk && (
-        <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-xl px-3 py-2.5 text-green-800">
-          <span className="text-lg">✓</span>
-          <p className="text-sm font-medium">Baja procesada correctamente</p>
-        </div>
-      )}
+      {bajaOk !== null && (() => {
+        const dadoDeBaja = bajaOk ? clientes.find((c) => c.id === bajaOk) : undefined;
+        return (
+          <div className="flex items-center gap-3 bg-green-50 border border-green-200 rounded-xl px-3 py-2.5 text-green-800">
+            <span className="text-lg">✓</span>
+            <p className="text-sm font-medium">
+              {dadoDeBaja ? (
+                <>
+                  Se dio de baja a <span className="font-semibold">{clienteNombre(dadoDeBaja)}</span> ({dadoDeBaja.codigo_cliente}). Queda en el listado como «Anulado».
+                </>
+              ) : (
+                "Baja procesada correctamente"
+              )}
+            </p>
+          </div>
+        );
+      })()}
 
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
@@ -562,11 +594,12 @@ export default function ClientesPage() {
           ariaLabel="Filtrar por estado"
           placeholder="Todos los estados"
           value={filtroEstado}
-          onChange={(v) => setFiltroEstado(v as "" | "activo" | "inactivo")}
+          onChange={(v) => setFiltroEstado(v as "" | "activo" | "inactivo" | "anulado")}
           options={[
             { value: "", label: "Todos los estados" },
             { value: "activo", label: "Activo" },
             { value: "inactivo", label: "Inactivo" },
+            { value: "anulado", label: "Anulado (baja)" },
           ]}
         />
         <FancySelect
