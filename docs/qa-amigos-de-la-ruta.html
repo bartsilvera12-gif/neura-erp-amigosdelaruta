@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+  /* Reset minimo: el resto del estilo va mas abajo, con el documento. */
+  :root { color-scheme: light; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>QA Amigos de la Ruta</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+</head>
+<body>
+<style>
+  /* Documento técnico de una sola columna: cabecera fija con el avance, bloques
+     numerados porque el orden es una dependencia real (Inventario antes que
+     Ventas, Viaje antes que Salida). */
+  :root {
+    --bg: #f6f7f7;
+    --surface: #ffffff;
+    --surface-2: #eef1f1;
+    --fg: #15201f;
+    --fg-soft: #5d6d6c;
+    --fg-faint: #8a9998;
+    --line: #dde3e3;
+    --accent: #2d8b90;
+    --accent-soft: #e2f0f0;
+    --ok: #1d7a4c;
+    --ok-soft: #e0f2e8;
+    --falla: #b3261e;
+    --falla-soft: #fce9e7;
+    --aviso: #8a5a00;
+    --aviso-soft: #fdf1da;
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e1413;
+      --surface: #161d1d;
+      --surface-2: #1d2626;
+      --fg: #e7eceb;
+      --fg-soft: #a2b1b0;
+      --fg-faint: #768584;
+      --line: #283433;
+      --accent: #6fc5c9;
+      --accent-soft: #15302f;
+      --ok: #6ed69b;
+      --ok-soft: #102b1e;
+      --falla: #ff9a8f;
+      --falla-soft: #301917;
+      --aviso: #ebc27a;
+      --aviso-soft: #2c2213;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e1413;
+    --surface: #161d1d;
+    --surface-2: #1d2626;
+    --fg: #e7eceb;
+    --fg-soft: #a2b1b0;
+    --fg-faint: #768584;
+    --line: #283433;
+    --accent: #6fc5c9;
+    --accent-soft: #15302f;
+    --ok: #6ed69b;
+    --ok-soft: #102b1e;
+    --falla: #ff9a8f;
+    --falla-soft: #301917;
+    --aviso: #ebc27a;
+    --aviso-soft: #2c2213;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.55;
+    margin: 0;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding-inline: 16px; padding-block: 0 72px; }
+
+  /* ---------- barra de avance ---------- */
+  .barra {
+    position: sticky;
+    top: env(safe-area-inset-top, 0px);
+    z-index: 20;
+    background: color-mix(in srgb, var(--bg) 92%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+  }
+  .barra-in {
+    max-width: 860px; margin: 0 auto; padding: 10px 16px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px;
+  }
+  .cuenta { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; color: var(--fg-soft); }
+  .cuenta b { color: var(--fg); }
+  .pista { flex: 1 1 140px; min-width: 120px; height: 6px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+  .pista i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .25s ease; }
+  .btn {
+    font: 500 12px/1 var(--sans); color: var(--fg-soft);
+    background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+    padding: 7px 11px; cursor: pointer;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--fg); }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---------- cabecera ---------- */
+  header.tope { padding-block: 32px 8px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; font-weight: 500;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin: 0 0 8px;
+  }
+  h1 { font-size: clamp(27px, 4.6vw, 38px); line-height: 1.1; margin: 0 0 10px; letter-spacing: -.02em; text-wrap: balance; }
+  .bajada { color: var(--fg-soft); margin: 0; max-width: 62ch; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 16px; font-family: var(--mono); font-size: 12px; color: var(--fg-faint); }
+  .meta b { color: var(--fg-soft); font-weight: 500; }
+
+  /* ---------- avisos ---------- */
+  .nota { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-block: 14px; background: var(--surface); }
+  .nota.aviso { background: var(--aviso-soft); border-color: color-mix(in srgb, var(--aviso) 32%, transparent); }
+  .nota h3 { margin: 0 0 8px; font-size: 14px; letter-spacing: -.01em; }
+  .nota p, .nota li { color: var(--fg-soft); font-size: 14px; margin: 0; }
+  .nota ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+
+  /* ---------- secciones ---------- */
+  section { margin-top: 30px; }
+  .sec-tope { display: flex; align-items: baseline; gap: 10px; border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 4px; }
+  .num { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
+  h2 { font-size: 18px; margin: 0; letter-spacing: -.015em; }
+  .ruta { font-family: var(--mono); font-size: 12px; color: var(--fg-faint); margin-left: auto; }
+  .porque { color: var(--fg-soft); font-size: 14px; margin: 10px 0 4px; max-width: 64ch; }
+
+  /* ---------- pasos ---------- */
+  .paso { border-bottom: 1px solid var(--line); padding: 12px 0; display: grid; grid-template-columns: auto 1fr; gap: 10px 12px; }
+  .paso:last-child { border-bottom: 0; }
+  .marcas { display: flex; flex-direction: column; gap: 5px; }
+  .marca {
+    width: 26px; height: 26px; border-radius: 7px; border: 1px solid var(--line);
+    background: var(--surface); color: var(--fg-faint); cursor: pointer;
+    font: 600 12px/1 var(--mono); display: grid; place-items: center;
+  }
+  .marca:hover { border-color: var(--accent); }
+  .marca:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .paso[data-estado="ok"] .marca.ok { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
+  .paso[data-estado="falla"] .marca.falla { background: var(--falla-soft); border-color: var(--falla); color: var(--falla); }
+  .paso[data-estado="ok"] .cuerpo { opacity: .55; }
+  .cuerpo { min-width: 0; }
+  .accion { margin: 0 0 4px; }
+  .esperado { margin: 0; font-size: 14px; color: var(--fg-soft); }
+  .esperado b { color: var(--fg); font-weight: 600; }
+  .nota-falla { display: none; margin-top: 8px; }
+  .paso[data-estado="falla"] .nota-falla { display: block; }
+  .nota-falla textarea {
+    width: 100%; min-height: 56px; resize: vertical; padding: 8px 10px;
+    font: 400 13px/1.5 var(--sans); color: var(--fg);
+    background: var(--surface); border: 1px solid var(--falla); border-radius: 8px;
+  }
+  .nota-falla textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  code, .cod {
+    font-family: var(--mono); font-size: .88em;
+    background: var(--surface-2); border-radius: 5px; padding: 1px 5px;
+    overflow-wrap: anywhere;
+  }
+  pre {
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 11px 13px; margin: 8px 0 0; overflow-x: auto;
+  }
+  .pill {
+    display: inline-block; font: 500 11px/1 var(--sans); letter-spacing: .03em;
+    padding: 4px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent);
+  }
+  .pill.bloq { background: var(--falla-soft); color: var(--falla); }
+
+  body.solo-pendientes .paso[data-estado="ok"] { display: none; }
+
+  @media (max-width: 460px) {
+    .marcas { flex-direction: row; }
+    .paso { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="barra">
+  <div class="barra-in">
+    <span class="cuenta"><b id="hechos">0</b>/<span id="total">0</span> probados · <b id="fallas">0</b> fallas</span>
+    <span class="pista"><i id="avance"></i></span>
+    <button class="btn" id="filtrar" type="button">Ocultar probados</button>
+    <button class="btn" id="copiar" type="button">Copiar reporte</button>
+    <button class="btn" id="limpiar" type="button">Reiniciar</button>
+  </div>
+</div>
+
+<div class="wrap">
+  <header class="tope">
+    <p class="eyebrow">Plan de pruebas</p>
+    <h1>QA Amigos de la Ruta</h1>
+    <p class="bajada">Recorrido completo del ERP, en orden de dependencia: cada bloque usa datos que crearon los anteriores. Marcá <b>OK</b> o <b>falla</b> en cada paso; al terminar, "Copiar reporte" arma el listado de fallas con tus notas.</p>
+    <div class="meta">
+      <span><b>URL</b> amigosdelaruta.neura.com.py</span>
+      <span><b>Usuario</b> admin@amigosdelaruta.com</span>
+      <span><b>Build</b> s3ooVBynMA7YJuoc-g6Zq</span>
+    </div>
+  </header>
+
+  <div class="nota aviso">
+    <h3>Esto no son fallas: ya se sabe y es así a propósito</h3>
+    <ul>
+      <li><b>Usuarios</b> y <b>Configuración</b> no están en el menú. Se pidió un sidebar de 16 ítems y esos dos quedaron afuera; se llega sólo por URL directa.</li>
+      <li><b>Eventos → Salidas y Reservas son de sólo lectura.</b> Todavía no hay pantalla de alta: las salidas se cargan por SQL y las reservas entran por la API pública.</li>
+      <li><b>El sitio público no está conectado todavía.</b> amigos-de-la-ruta-web sigue mostrando contenido fijo; lo que cargues en el módulo Web no se ve ahí aún.</li>
+      <li>El Dashboard tiene <b>tres</b> solapas. "Comercial" se sacó porque era el tablero de CRM y este ERP no tiene CRM: mostraba sólo ceros.</li>
+      <li>Para subir una imagen hay que <b>guardar la fila primero</b>. En el formulario de alta el botón está deshabilitado y lo aclara.</li>
+      <li>Los endpoints públicos tienen tope: <b>5 envíos por minuto</b> y 60 lecturas. Si los golpeás seguido vas a ver 429, y está bien.</li>
+    </ul>
+  </div>
+
+  <div class="nota">
+    <h3>Antes de arrancar</h3>
+    <ul>
+      <li>Entrá con <b>Ctrl+F5</b> la primera vez: el navegador cachea el JS y podés quedar con una versión vieja.</li>
+      <li>Probá en Chrome y, si podés, repetí el bloque 1 y el 15 en el celular.</li>
+      <li>La base arranca vacía. Los bloques 3 a 6 <b>crean</b> los datos que usan los demás: no los saltees.</li>
+      <li>Si algo falla, anotá qué hiciste, qué esperabas y qué pasó. El texto va al reporte.</li>
+    </ul>
+  </div>
+
+  <main id="plan"></main>
+</div>
+
+<script>
+(function () {
+  const PLAN = [
+    {
+      t: "Acceso y menú", ruta: "/login", pill: "bloquea todo",
+      porque: "Si el menú no muestra los 16 ítems, el problema está en empresa_modulos y no tiene sentido seguir.",
+      pasos: [
+        { a: "Entrar con una contraseña equivocada.", e: "Rechaza con un mensaje claro. <b>No</b> entra ni queda cargando." },
+        { a: "Entrar con admin@amigosdelaruta.com y la contraseña real.", e: "Llega al Dashboard." },
+        { a: "Contar los ítems del menú lateral.", e: "Son <b>16</b>: Dashboard, Gerencia, Reportes, Ventas, Inventario, Clientes, Compras, Gastos, Pagos, Cobranzas, Notas de crédito, Gestión Clientes, Proyectos, Agenda, Eventos y Web." },
+        { a: "Buscar Usuarios o Configuración en el menú.", e: "<b>No</b> aparecen. Es lo esperado." },
+        { a: "Colapsar y expandir el menú con el botón de la izquierda.", e: "Se achica a íconos y vuelve, sin tapar el contenido." },
+        { a: "Marcar un favorito con la estrella de cualquier ítem.", e: "Sube a Favoritos y sigue ahí al recargar." },
+        { a: "Cerrar sesión y volver a la URL de un módulo.", e: "Manda al login en vez de mostrar la pantalla." }
+      ]
+    },
+    {
+      t: "Dashboard", ruta: "/",
+      porque: "Lee de casi todas las tablas; con la base vacía tiene que mostrar ceros, no romperse.",
+      pasos: [
+        { a: "Mirar las solapas.", e: "Hay <b>tres</b>: Financiero, Inventario y Ventas. <b>No</b> está Comercial." },
+        { a: "Entrar a cada solapa.", e: "Cargan sin error. Con la base vacía los números dan 0 y los gráficos salen vacíos, no rotos." },
+        { a: "Cambiar el período (mes / año) arriba a la derecha.", e: "Los números se recalculan." },
+        { a: "Buscar el selector “Viendo como” en el encabezado.", e: "<b>No</b> existe. Se sacó a pedido." }
+      ]
+    },
+    {
+      t: "Clientes", ruta: "/clientes", pill: "crea datos",
+      porque: "Casi todo lo demás necesita un cliente: ventas, cobranzas, notas de crédito.",
+      pasos: [
+        { a: "Crear un cliente con nombre, documento y teléfono.", e: "Queda en la lista." },
+        { a: "Crear un segundo cliente, con datos distintos.", e: "Los dos conviven." },
+        { a: "Editar el primero y cambiarle el teléfono.", e: "El cambio persiste al recargar." },
+        { a: "Buscar por nombre y por documento.", e: "Filtra en ambos casos." },
+        { a: "Intentar crear uno con el mismo documento que otro.", e: "Avisa del duplicado o lo permite de forma consistente; lo que <b>no</b> puede es tirar un error crudo." },
+        { a: "Dar de baja un cliente.", e: "Sale del listado activo sin desaparecer de la base." }
+      ]
+    },
+    {
+      t: "Inventario", ruta: "/inventario", pill: "crea datos",
+      porque: "Los productos de acá son los que vende el ERP y los que publica la tienda del sitio.",
+      pasos: [
+        { a: "Crear una categoría en la solapa Categorías.", e: "Queda disponible para elegir en el alta de producto." },
+        { a: "Crear un depósito en Depósitos / Ubicaciones.", e: "Queda disponible." },
+        { a: "Crear un producto con SKU, precio de venta y stock inicial 10.", e: "Aparece en Productos con el stock en 10." },
+        { a: "Subirle una imagen al producto.", e: "La imagen se ve en la ficha después de guardar." },
+        { a: "Crear un segundo producto con stock 0.", e: "Queda marcado como sin stock." },
+        { a: "Intentar crear un producto con un SKU ya usado.", e: "Lo rechaza: el SKU es único por empresa." },
+        { a: "Abrir la solapa Movimientos.", e: "Lista el movimiento del alta de stock." }
+      ]
+    },
+    {
+      t: "Ventas", ruta: "/ventas",
+      porque: "Es la caja: tiene que descontar stock de verdad, no sólo registrar.",
+      pasos: [
+        { a: "Hacer una venta al primer cliente con 2 unidades del producto de stock 10.", e: "La venta se registra con su número." },
+        { a: "Volver a Inventario y mirar ese producto.", e: "El stock bajó a <b>8</b>. Si no bajó, es falla." },
+        { a: "Intentar vender más unidades de las que hay en stock.", e: "Avisa o lo impide. <b>No</b> puede dejar el stock en negativo sin decir nada." },
+        { a: "Hacer una venta a crédito.", e: "Queda con saldo pendiente y aparece en Cobranzas." },
+        { a: "Anular una venta.", e: "Cambia de estado y el stock se repone." }
+      ]
+    },
+    {
+      t: "Compras y Proveedores", ruta: "/compras",
+      porque: "La otra punta del stock. Las cuatro solapas son pantallas distintas.",
+      pasos: [
+        { a: "Crear un proveedor en la solapa Proveedores.", e: "Queda en la lista." },
+        { a: "Crear una orden de compra en Órdenes de Compra.", e: "Se guarda con su número." },
+        { a: "Registrar una recepción contra esa orden.", e: "El stock del producto <b>sube</b>." },
+        { a: "Cargar una compra directa en la solapa Compras.", e: "Se registra y suma stock." },
+        { a: "Recorrer las cuatro solapas.", e: "Todas cargan sin error." }
+      ]
+    },
+    {
+      t: "Gastos", ruta: "/gastos",
+      porque: "Alimenta el tablero financiero.",
+      pasos: [
+        { a: "Cargar un gasto con monto, fecha y categoría.", e: "Queda listado." },
+        { a: "Filtrar por rango de fechas.", e: "Filtra bien; un rango sin gastos muestra vacío, no error." },
+        { a: "Editar y borrar un gasto.", e: "Ambas acciones funcionan." }
+      ]
+    },
+    {
+      t: "Pagos", ruta: "/pagos",
+      porque: "",
+      pasos: [
+        { a: "Registrar un pago contra la venta a crédito del bloque 5.", e: "Se imputa y baja el saldo del cliente." },
+        { a: "Volver a Cobranzas y mirar ese cliente.", e: "La deuda bajó por el monto pagado." },
+        { a: "Registrar un pago parcial.", e: "Queda saldo remanente, no se cancela toda la deuda." }
+      ]
+    },
+    {
+      t: "Cobranzas", ruta: "/cobranzas",
+      porque: "Es sólo lectura: muestra deuda, no la modifica.",
+      pasos: [
+        { a: "Abrir el módulo.", e: "Lista los clientes con deuda y el total por tramo de vencimiento." },
+        { a: "Abrir el detalle de un cliente.", e: "Muestra las facturas pendientes y los pagos hechos." },
+        { a: "Cruzar los montos contra lo cargado en los bloques 5 y 8.", e: "Los números <b>coinciden</b>." }
+      ]
+    },
+    {
+      t: "Notas de crédito", ruta: "/notas-credito",
+      porque: "Toca facturación: conviene mirarlo con atención.",
+      pasos: [
+        { a: "Crear una nota de crédito sobre una venta existente.", e: "Se genera asociada a esa factura." },
+        { a: "Mirar el saldo del cliente después.", e: "Bajó por el monto de la nota." },
+        { a: "Intentar una segunda nota en curso sobre la misma factura.", e: "Avisa que ya hay una en curso." }
+      ]
+    },
+    {
+      t: "Reportes", ruta: "/reportes",
+      porque: "Lee de todo lo cargado hasta acá.",
+      pasos: [
+        { a: "Abrir cada reporte disponible.", e: "Todos cargan; los vacíos muestran “sin datos” y no un error." },
+        { a: "Cruzar el reporte de ventas contra las ventas del bloque 5.", e: "Los totales coinciden." },
+        { a: "Exportar a Excel donde haya botón.", e: "Baja el archivo y abre bien." }
+      ]
+    },
+    {
+      t: "Gerencia", ruta: "/dashboard/gerencia",
+      porque: "Es un módulo que el repo madre no mostraba en el menú; se agregó para esta instancia.",
+      pasos: [
+        { a: "Abrir el módulo desde el menú.", e: "Carga el tablero. No da 404 ni “sin acceso”." },
+        { a: "Revisar los indicadores.", e: "Muestran datos o ceros coherentes con lo cargado." }
+      ]
+    },
+    {
+      t: "Proyectos", ruta: "/dashboard/proyectos",
+      porque: "Depende del script 04: sin esos catálogos el Kanban abre sin columnas.",
+      pasos: [
+        { a: "Abrir el módulo.", e: "El Kanban muestra sus <b>13</b> columnas, de “Nuevo / Pendiente de brief” a “Cancelado”." },
+        { a: "Crear un proyecto.", e: "Aparece en la primera columna. Si no deja crear, faltó correr el 04." },
+        { a: "Arrastrarlo a otra columna.", e: "Queda en la nueva y se mantiene al recargar." },
+        { a: "Abrir la ficha del proyecto.", e: "Se puede asignar prioridad entre Baja, Media, Alta y Urgente." }
+      ]
+    },
+    {
+      t: "Agenda", ruta: "/dashboard/agenda",
+      porque: "",
+      pasos: [
+        { a: "Abrir el módulo.", e: "Carga el calendario." },
+        { a: "Crear una cita con fecha, hora y cliente.", e: "Aparece en el día correcto." },
+        { a: "Reprogramarla a otro día.", e: "Se mueve y persiste." },
+        { a: "Cambiar de vista (día / semana / mes) si está disponible.", e: "Las vistas cargan bien." }
+      ]
+    },
+    {
+      t: "Eventos", ruta: "/eventos", pill: "módulo nuevo",
+      porque: "Es el módulo de viajes: Viaje → Salida → Paquete → Reserva. Sólo la pantalla de Viajes permite cargar.",
+      pasos: [
+        { a: "Abrir Eventos → Viajes.", e: "Carga con el formulario de alta al final." },
+        { a: "Crear un viaje con slug, país, nombre en los tres idiomas y estado Borrador.", e: "Queda listado con 0 salidas y 0 reservas." },
+        { a: "Probar un slug con mayúsculas o espacios, por ejemplo “Ruta 66”.", e: "Lo rechaza: el slug va en minúsculas y con guiones." },
+        { a: "Subirle una portada con el botón de imagen.", e: "La foto se ve en la ficha. Si avisa que guardes primero, guardá y volvé a intentar." },
+        { a: "Editarlo y pasarlo a Publicado.", e: "El cambio persiste." },
+        { a: "Abrir Salidas y Reservas.", e: "Cargan vacías y son de <b>sólo lectura</b>. No tener botón de alta es lo esperado." }
+      ]
+    },
+    {
+      t: "Web", ruta: "/web", pill: "módulo nuevo",
+      porque: "Administra el contenido del sitio público. Las cuatro solapas son pantallas distintas.",
+      pasos: [
+        { a: "Abrir Web → Tienda.", e: "Lista los productos activos que creaste en el bloque 4." },
+        { a: "Cargarle a un producto el nombre y la descripción en español, portugués e inglés, y tildar Publicado.", e: "Guarda y al recargar sigue ahí." },
+        { a: "Mirar el precio y el stock que muestra la ficha.", e: "Son los de Inventario. <b>No</b> se pueden editar desde acá, y está bien: el precio vive en Inventario." },
+        { a: "Abrir Motos y crear una moto con nombre y año.", e: "Queda listada." },
+        { a: "Subirle una imagen a esa moto.", e: "La foto aparece. Es la prueba del bucket." },
+        { a: "Abrir FAQ y crear una pregunta con su respuesta en los tres idiomas.", e: "Queda listada." },
+        { a: "Borrar la FAQ con el botón Borrar.", e: "Pide confirmación y la elimina." },
+        { a: "Abrir Configuración.", e: "Carga. Si no hay claves cargadas, lo dice en vez de romperse." }
+      ]
+    },
+    {
+      t: "API pública del sitio", ruta: "/api/web/catalogo",
+      porque: "Es lo que va a consumir el sitio. Se prueba desde el navegador, sin estar logueado.",
+      pasos: [
+        { a: "Abrir en una ventana de incógnito: amigosdelaruta.neura.com.py/api/web/catalogo", e: "Devuelve JSON con <span class=\"cod\">\"ok\":true</span>." },
+        { a: "Buscar en esa respuesta el viaje que publicaste en el bloque 15.", e: "Está dentro de <span class=\"cod\">viajes</span>. Si lo dejaste en Borrador, <b>no</b> tiene que estar." },
+        { a: "Buscar el producto que publicaste en el bloque 16.", e: "Está dentro de <span class=\"cod\">tienda</span>, con su precio y su texto." },
+        { a: "Buscar la moto y la FAQ.", e: "Están en <span class=\"cod\">motos</span> y <span class=\"cod\">faqs</span>." },
+        { a: "Despublicar el producto en Web → Tienda y recargar el catálogo.", e: "Ya <b>no</b> aparece en <span class=\"cod\">tienda</span>." },
+        { a: "Recargar el catálogo diez veces seguidas rápido.", e: "En algún momento responde 429. Es el tope por minuto y está bien." }
+      ]
+    },
+    {
+      t: "Aviso de versión nueva", ruta: "—",
+      porque: "Avisa cuando hay un deploy y la pestaña quedó con el bundle viejo. Sólo se puede probar con un deploy de por medio.",
+      pasos: [
+        { a: "Dejar el ERP abierto, pedir un deploy nuevo y esperar a que termine.", e: "Aparece abajo el cartel “Hay una versión nueva” con el botón Recargar." },
+        { a: "Tocar “Ahora no”.", e: "El cartel se va y la pantalla sigue como estaba, sin perder lo que estabas cargando." },
+        { a: "Volver a provocarlo y tocar Recargar.", e: "La página recarga con la versión nueva." }
+      ]
+    },
+    {
+      t: "Cierre", ruta: "—",
+      porque: "Lo que suele romperse cuando todo lo demás anda.",
+      pasos: [
+        { a: "Recorrer los 16 módulos abriendo cada uno una vez.", e: "Ninguno tira error ni queda cargando para siempre." },
+        { a: "Abrir el ERP en el celular y recorrer el menú.", e: "El menú se abre y se cierra, y nada se sale de la pantalla." },
+        { a: "Abrir la consola del navegador (F12) y recorrer tres o cuatro módulos.", e: "Sin errores en rojo. Los avisos amarillos se pueden ignorar." },
+        { a: "Recargar con Ctrl+F5 estando en un módulo cualquiera.", e: "Vuelve al mismo lugar con la sesión viva." }
+      ]
+    }
+  ];
+
+  const CLAVE = "qa-adr-v1";
+  let estado = {};
+  try { estado = JSON.parse(localStorage.getItem(CLAVE) || "{}") || {}; } catch (e) { estado = {}; }
+  function guardar() { try { localStorage.setItem(CLAVE, JSON.stringify(estado)); } catch (e) { /* sin storage: la sesión igual funciona */ } }
+
+  const plan = document.getElementById("plan");
+  let total = 0;
+
+  PLAN.forEach(function (sec, si) {
+    total += sec.pasos.length;
+    const s = document.createElement("section");
+    const tope = document.createElement("div");
+    tope.className = "sec-tope";
+    tope.innerHTML =
+      '<span class="num">' + String(si + 1).padStart(2, "0") + '</span>' +
+      '<h2>' + sec.t + '</h2>' +
+      (sec.ruta ? '<span class="ruta">' + sec.ruta + '</span>' : '');
+    s.appendChild(tope);
+
+    if (sec.pill) {
+      const p = document.createElement("p");
+      p.style.margin = "10px 0 0";
+      p.innerHTML = '<span class="pill' + (sec.pill === "bloquea todo" ? " bloq" : "") + '">' + sec.pill + '</span>';
+      s.appendChild(p);
+    }
+    if (sec.porque) {
+      const p = document.createElement("p");
+      p.className = "porque";
+      p.textContent = sec.porque;
+      s.appendChild(p);
+    }
+
+    sec.pasos.forEach(function (paso, pi) {
+      const id = si + "." + pi;
+      const guardado = estado[id] || {};
+      const div = document.createElement("div");
+      div.className = "paso";
+      div.dataset.estado = guardado.estado || "";
+      div.dataset.id = id;
+      div.innerHTML =
+        '<div class="marcas">' +
+          '<button class="marca ok" type="button" data-set="ok" aria-label="Marcar como correcto" title="Funciona">✓</button>' +
+          '<button class="marca falla" type="button" data-set="falla" aria-label="Marcar como falla" title="Falla">✕</button>' +
+        '</div>' +
+        '<div class="cuerpo">' +
+          '<p class="accion">' + (si + 1) + "." + (pi + 1) + ' &nbsp;' + paso.a + '</p>' +
+          '<p class="esperado">' + paso.e + '</p>' +
+          '<div class="nota-falla"><textarea id="n-' + id.replace(".", "-") + '" placeholder="Qué pasó: pantalla, pasos para repetirlo, mensaje de error."></textarea></div>' +
+        '</div>';
+      const ta = div.querySelector("textarea");
+      ta.value = guardado.nota || "";
+      ta.addEventListener("input", function () {
+        estado[id] = Object.assign({}, estado[id], { nota: ta.value });
+        guardar();
+      });
+      div.querySelectorAll(".marca").forEach(function (b) {
+        b.addEventListener("click", function () {
+          const q = b.dataset.set;
+          const nuevo = div.dataset.estado === q ? "" : q;
+          div.dataset.estado = nuevo;
+          estado[id] = Object.assign({}, estado[id], { estado: nuevo });
+          guardar();
+          pintar();
+          if (nuevo === "falla") ta.focus();
+        });
+      });
+      s.appendChild(div);
+    });
+
+    plan.appendChild(s);
+  });
+
+  document.getElementById("total").textContent = String(total);
+  const barra = document.getElementById("avance");
+  const elHechos = document.getElementById("hechos");
+  const elFallas = document.getElementById("fallas");
+
+  function pintar() {
+    let hechos = 0, fallas = 0;
+    Object.keys(estado).forEach(function (k) {
+      if (estado[k] && estado[k].estado === "ok") hechos++;
+      if (estado[k] && estado[k].estado === "falla") { hechos++; fallas++; }
+    });
+    elHechos.textContent = String(hechos);
+    elFallas.textContent = String(fallas);
+    barra.style.width = total ? (hechos / total * 100) + "%" : "0";
+    barra.style.background = fallas ? "var(--falla)" : "var(--accent)";
+  }
+  pintar();
+
+  document.getElementById("filtrar").addEventListener("click", function () {
+    const on = document.body.classList.toggle("solo-pendientes");
+    this.textContent = on ? "Mostrar todos" : "Ocultar probados";
+  });
+
+  document.getElementById("limpiar").addEventListener("click", function () {
+    if (!document.getElementById("limpiar").dataset.seguro) {
+      document.getElementById("limpiar").dataset.seguro = "1";
+      document.getElementById("limpiar").textContent = "¿Seguro? Tocá de nuevo";
+      setTimeout(function () {
+        const b = document.getElementById("limpiar");
+        delete b.dataset.seguro; b.textContent = "Reiniciar";
+      }, 4000);
+      return;
+    }
+    estado = {}; guardar();
+    document.querySelectorAll(".paso").forEach(function (p) { p.dataset.estado = ""; });
+    document.querySelectorAll(".nota-falla textarea").forEach(function (t) { t.value = ""; });
+    document.getElementById("limpiar").textContent = "Reiniciar";
+    delete document.getElementById("limpiar").dataset.seguro;
+    pintar();
+  });
+
+  document.getElementById("copiar").addEventListener("click", function () {
+    const btn = this;
+    const lineas = ["QA Amigos de la Ruta — " + new Date().toLocaleString("es-PY"), "Build s3ooVBynMA7YJuoc-g6Zq", ""];
+    let fallas = 0, hechos = 0, pendientes = [];
+    PLAN.forEach(function (sec, si) {
+      sec.pasos.forEach(function (paso, pi) {
+        const g = estado[si + "." + pi] || {};
+        if (g.estado === "ok") { hechos++; return; }
+        if (g.estado === "falla") {
+          fallas++;
+          lineas.push("FALLA  " + (si + 1) + "." + (pi + 1) + "  [" + sec.t + "]");
+          lineas.push("  Paso:     " + paso.a);
+          lineas.push("  Esperado: " + paso.e.replace(/<[^>]+>/g, ""));
+          lineas.push("  Pasó:     " + (g.nota ? g.nota : "(sin nota)"));
+          lineas.push("");
+          return;
+        }
+        pendientes.push((si + 1) + "." + (pi + 1));
+      });
+    });
+    lineas.splice(2, 0, "Probados: " + (hechos + fallas) + "/" + total + " · Fallas: " + fallas + " · Sin probar: " + pendientes.length, "");
+    if (pendientes.length) lineas.push("Sin probar: " + pendientes.join(", "));
+    const txt = lineas.join("\n");
+    function ok() { btn.textContent = "Copiado"; setTimeout(function () { btn.textContent = "Copiar reporte"; }, 1800); }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(ok, seleccionar);
+    } else { seleccionar(); }
+    function seleccionar() {
+      const ta = document.createElement("textarea");
+      ta.value = txt;
+      ta.style.cssText = "position:fixed;top:10%;left:5%;width:90%;height:60%;z-index:99;font-family:var(--mono);font-size:12px";
+      document.body.appendChild(ta); ta.select();
+      btn.textContent = "Copiá a mano y cerrá";
+      ta.addEventListener("blur", function () { ta.remove(); btn.textContent = "Copiar reporte"; });
+    }
+  });
+})();
+</script>
+</body>
+</html>
