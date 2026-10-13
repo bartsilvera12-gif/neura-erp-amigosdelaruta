@@ -216,6 +216,7 @@
   <div class="nota aviso">
     <h3>Esto no son fallas: ya se sabe y es así a propósito</h3>
     <ul>
+      <li><b>Ayuda en línea</b> y <b>Guardias</b> se quitaron de la barra de arriba: la primera apunta a una base de conocimiento vacía y las segundas son turnos de soporte de Neura, no de ADR.</li>
       <li><b>Usuarios</b> y <b>Configuración</b> no están en el menú. Se pidió un sidebar de 16 ítems y esos dos quedaron afuera; se llega sólo por URL directa.</li>
       <li><b>Eventos → Salidas y Reservas son de sólo lectura.</b> Todavía no hay pantalla de alta: las salidas se cargan por SQL y las reservas entran por la API pública.</li>
       <li><b>El sitio público ya lee el ERP</b>, pero mientras una colección esté vacía muestra su contenido de respaldo. Los viajes y productos de ejemplo que ves hoy en el sitio son ese respaldo, no una falla: desaparecen en cuanto publiques los tuyos (bloque <b>El sitio público</b>).</li>
@@ -328,7 +329,7 @@
       t: "Caja", ruta: "/ventas", pill: "pantalla nueva",
       porque: "Tiene que descontar stock de verdad, no sólo registrar. La portada del módulo se rehizo: antes era sólo el botón de factura y la venta con productos no se podía abrir desde el menú.",
       pasos: [
-        { a: "Abrir Caja desde el menú.", e: "Arriba de todo está el <b>panel del turno de caja</b>; abajo, el resumen de hoy (facturación, ventas, ticket promedio, unidades), la lista de órdenes de venta y <b>dos</b> botones: «Nueva venta» y «Nueva factura»." },
+        { a: "Abrir Caja desde el menú.", e: "Arriba de todo está el <b>panel del turno de caja</b>; abajo, el resumen de hoy (facturación, ventas, ticket promedio, unidades), la lista de órdenes de venta y el botón «Nueva venta»." },
         { a: "Con la caja cerrada, tocar <b>Abrir caja</b> y cargar un monto inicial (probá contando por denominaciones).", e: "Queda abierta, con su número, la hora de apertura y el monto. Si cargás el arqueo por billetes, el total se calcula solo." },
         { a: "Intentar abrir una segunda caja con el <b>mismo número</b>.", e: "No deja: sólo puede haber un turno activo por número. Esto lo garantiza la base, no la pantalla." },
         { a: "Hacer una venta en <b>efectivo</b> desde «Nueva venta» y volver a Caja.", e: "El panel suma esa venta al turno: sube la cantidad de ventas, el total vendido y el efectivo esperado." },
@@ -338,7 +339,6 @@
         { a: "Registrar un <b>retiro</b>.", e: "También baja el efectivo esperado." },
         { a: "Tocar <b>Cerrar caja</b> y contar un monto distinto al esperado.", e: "Muestra la <b>diferencia</b>: positiva si sobra, negativa si falta. El turno queda cerrado con ese arqueo guardado." },
         { a: "Volver a abrir una caja después de cerrar.", e: "Arranca un turno nuevo, vacío. Las ventas del turno anterior <b>no</b> aparecen en el nuevo." },
-        { a: "Entender la diferencia entre los dos botones.", e: "«Nueva venta» usa productos del inventario y descuenta stock. «Nueva factura» emite una factura suelta por nombre, RUC y monto, sin tocar inventario." },
         { a: "Tocar «Nueva venta» y hacer una venta al primer cliente con 2 unidades del producto de stock 10.", e: "La venta se registra con su número y al volver aparece en la lista de Caja." },
         { a: "Volver a Inventario y mirar ese producto.", e: "El stock bajó a <b>8</b>. Si no bajó, es falla." },
         { a: "Intentar vender más unidades de las que hay en stock.", e: "Avisa o lo impide. <b>No</b> puede dejar el stock en negativo sin decir nada." },
