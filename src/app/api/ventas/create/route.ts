@@ -116,6 +116,16 @@ export async function POST(request: NextRequest) {
         ? null
         : String(o.observaciones).slice(0, 4000);
 
+    /*
+     * Cómo se cobró. Lo suma el arqueo de la caja, así que se valida contra la
+     * lista cerrada en vez de guardar lo que venga: un "Efectivo" con mayúscula
+     * saldría del cálculo sin que nadie se entere. Si no viene, queda null y la
+     * venta no suma a ningún medio.
+     */
+    const METODOS_PAGO = ["efectivo", "tarjeta", "transferencia", "cheque", "otro"];
+    const metodoPagoRaw = typeof o.metodo_pago === "string" ? o.metodo_pago.trim().toLowerCase() : "";
+    const metodoPago = METODOS_PAGO.includes(metodoPagoRaw) ? metodoPagoRaw : null;
+
     const subtotalDeclarado = Number(o.subtotal);
     const montoIvaDeclarado = Number(o.monto_iva);
     const totalDeclarado = Number(o.total);
@@ -143,6 +153,14 @@ export async function POST(request: NextRequest) {
       subtotalDeclarado,
       montoIvaDeclarado,
       totalDeclarado,
+      metodoPago,
+      createdBy: auth.usuarioCatalogId ?? null,
+      // Se guarda el nombre además del id: el detalle del turno tiene que
+      // seguir diciendo quién vendió aunque después se borre el usuario.
+      usuarioNombre:
+        (auth.user?.user_metadata?.nombre as string | undefined)?.trim() ||
+        auth.user?.email ||
+        null,
     });
 
     let sub = 0;

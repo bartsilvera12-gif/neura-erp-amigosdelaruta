@@ -6,7 +6,8 @@ import MontoInput from "@/components/ui/MontoInput";
 import ProductPickerModal, { type ProductoPickerItem, type AgregarVentaPayload } from "@/components/inventario/ProductPickerModal";
 import { saveVenta } from "@/lib/ventas/storage";
 import { getProductos } from "@/lib/inventario/storage";
-import type { TipoIvaVenta, TipoVenta, MonedaVenta, LineaVenta } from "@/lib/ventas/types";
+import type { TipoIvaVenta, TipoVenta, MonedaVenta, LineaVenta, MetodoPagoVenta } from "@/lib/ventas/types";
+import { METODOS_PAGO_VENTA } from "@/lib/ventas/types";
 import type { Producto } from "@/lib/inventario/types";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -91,6 +92,9 @@ export default function NuevaVentaPage() {
   const [tipoCambio, setTipoCambio] = useState("");
   const [tipoVenta,  setTipoVenta]  = useState<TipoVenta>("CONTADO");
   const [plazoDias,  setPlazoDias]  = useState("");
+  /* Cómo se cobra. Lo suma el arqueo del turno de caja, así que se persiste.
+     Una venta a crédito no cobra nada ahora: va sin método. */
+  const [metodoPago, setMetodoPago] = useState<MetodoPagoVenta>("efectivo");
 
   // ── Cobro (solo CONTADO, no se persiste — solo ayuda al cajero) ───────────
   const [montoRecibido, setMontoRecibido] = useState("");
@@ -376,6 +380,7 @@ export default function NuevaVentaPage() {
       monto_iva:    totalIva,
       total:        totalGeneral,
       tipo_venta:   tipoVenta,
+      metodo_pago:  tipoVenta === "CONTADO" ? metodoPago : null,
       plazo_dias:
         tipoVenta === "CREDITO" && plazoDias ? parseInt(plazoDias) : undefined,
     });
@@ -437,6 +442,27 @@ export default function NuevaVentaPage() {
                 onChange={handleTipoVentaChange}
               />
             </div>
+
+            {/* Solo en contado: a crédito todavía no entró plata, así que no hay
+                medio de pago que sumar al turno. */}
+            {tipoVenta === "CONTADO" && (
+              <div>
+                <label className={labelClass}>Método de pago</label>
+                <select
+                  value={metodoPago}
+                  onChange={(e) => setMetodoPago(e.target.value as MetodoPagoVenta)}
+                  className={inputClass}
+                >
+                  {METODOS_PAGO_VENTA.map((m) => (
+                    <option key={m.value} value={m.value}>{m.label}</option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-slate-400">
+                  Define a qué columna del arqueo suma esta venta. Solo el efectivo
+                  cuenta para el conteo del cajón.
+                </p>
+              </div>
+            )}
 
             {/* Fila 2: sub-campos condicionales (alineados bajo su parent) */}
             {moneda === "USD" && (

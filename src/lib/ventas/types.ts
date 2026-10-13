@@ -1,6 +1,16 @@
 export type TipoIvaVenta = "EXENTA" | "5%" | "10%";
 export type TipoVenta   = "CONTADO" | "CREDITO";
 export type MonedaVenta = "GS" | "USD";
+export type MetodoPagoVenta = "efectivo" | "tarjeta" | "transferencia" | "cheque" | "otro";
+
+/** Etiquetas para los selectores. El valor es el que viaja a la base. */
+export const METODOS_PAGO_VENTA: { value: MetodoPagoVenta; label: string }[] = [
+  { value: "efectivo", label: "Efectivo" },
+  { value: "tarjeta", label: "Tarjeta" },
+  { value: "transferencia", label: "Transferencia" },
+  { value: "cheque", label: "Cheque" },
+  { value: "otro", label: "Otro" },
+];
 
 /** Un ítem dentro de una venta (una línea de producto). */
 export interface LineaVenta {
@@ -33,6 +43,13 @@ export interface Venta {
 
   tipo_venta: TipoVenta;
   plazo_dias?: number;       // solo si tipo_venta === "CREDITO"
+
+  /**
+   * Cómo se cobró. Es lo que suma el arqueo del turno de caja, por eso la lista
+   * es cerrada y coincide con el CHECK de `ventas.metodo_pago` en la base.
+   * `null` en las ventas anteriores al módulo Caja.
+   */
+  metodo_pago?: MetodoPagoVenta | null;
 
   fecha: string;             // ISO string, generado automáticamente
 }

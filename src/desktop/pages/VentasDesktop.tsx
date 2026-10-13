@@ -6,6 +6,7 @@ import { FileText, Plus } from "lucide-react";
 import EdgeScrollArea from "@/components/ui/EdgeScrollArea";
 import { FancySelect } from "@/app/dashboard/proyectos/components/FancySelect";
 import { NuevaFacturaCajaModal } from "@/components/caja/NuevaFacturaCajaModal";
+import CajaControlPanel from "@/components/caja/CajaControlPanel";
 import { getVentas } from "@/lib/ventas/storage";
 import type { Venta, TipoVenta, TipoIvaVenta } from "@/lib/ventas/types";
 
@@ -233,7 +234,7 @@ export default function VentasDesktop() {
           </div>
           <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">Caja</h1>
           <p className="mt-0.5 text-sm text-slate-500">
-            Registro de ventas y salidas de inventario
+            Turno de caja, cobro y registro de ventas
           </p>
         </div>
 
@@ -256,6 +257,11 @@ export default function VentasDesktop() {
           </Link>
         </div>
       </div>
+
+      {/* El turno de caja: abrir, movimientos, arqueo y cierre. Portado de
+          ferretodo. Se muestra arriba de todo porque condiciona lo demás: sin
+          caja abierta, una venta en efectivo no entra en ningún arqueo. */}
+      <CajaControlPanel />
 
       {/* ── Métricas del día ──────────────────────────────────────────────────── */}
       <div>

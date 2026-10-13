@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { FileText, Plus } from "lucide-react";
 import { NuevaFacturaCajaModal } from "@/components/caja/NuevaFacturaCajaModal";
+import CajaControlPanel from "@/components/caja/CajaControlPanel";
 import { getVentas } from "@/lib/ventas/storage";
 import type { Venta } from "@/lib/ventas/types";
 
@@ -60,8 +61,14 @@ export default function VentasMobile() {
     <div className="mx-auto max-w-md px-4 py-6">
       <header className="mb-5">
         <h1 className="text-xl font-bold tracking-tight text-slate-900">Caja</h1>
-        <p className="text-sm text-slate-500">Registro de ventas y salidas de inventario</p>
+        <p className="text-sm text-slate-500">Turno de caja, cobro y registro de ventas</p>
       </header>
+
+      {/* El turno: abrir, movimientos, arqueo y cierre. Mismo panel que en
+          escritorio; el cajero suele tener el teléfono a mano y no la pantalla. */}
+      <div className="mb-5">
+        <CajaControlPanel />
+      </div>
 
       <div className="mb-5 rounded-2xl border border-[#4FAEB2] bg-[#4FAEB2] px-5 py-4 shadow-sm">
         <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/90">

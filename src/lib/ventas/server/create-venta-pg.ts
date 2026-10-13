@@ -28,6 +28,17 @@ export interface CreateVentaPgParams {
   subtotalDeclarado: number;
   montoIvaDeclarado: number;
   totalDeclarado: number;
+  /**
+   * Turno de caja al que se imputa la venta. `null` si no había ninguno
+   * abierto: la venta se registra igual —no se le va a negar una venta al
+   * negocio por un turno sin abrir— pero no entra en ningún arqueo.
+   */
+  cajaId?: string | null;
+  /** Cómo se cobró. Es lo que suma el arqueo de la caja. */
+  metodoPago?: string | null;
+  /** Quién la hizo, para el detalle del turno. */
+  createdBy?: string | null;
+  usuarioNombre?: string | null;
 }
 
 function qTable(schema: string, table: string): string {
@@ -160,14 +171,45 @@ export async function createVentaTransaccionalPg(
 
     const fechaIso = new Date().toISOString();
 
+    /*
+     * Turno de caja al que se imputa esta venta.
+     *
+     * Se resuelve DENTRO de la transacción, no antes: si se mirara fuera, un
+     * cierre de caja entre la consulta y el INSERT dejaría la venta colgada de
+     * un turno ya cerrado y el arqueo de ese turno no cuadraría nunca más.
+     *
+     * `to_regclass` primero porque el módulo Caja puede no estar instalado
+     * (ver supabase/instancia/06_caja.sql). Sin esa guarda, una instancia sin
+     * la tabla no podría vender, que es muchísimo peor que vender sin caja.
+     */
+    let cajaId: string | null = params.cajaId ?? null;
+    if (!cajaId) {
+      const hayCajas = await client.query<{ reg: string | null }>(
+        `SELECT to_regclass($1) AS reg`,
+        [`${params.schema}.cajas`]
+      );
+      if (hayCajas.rows[0]?.reg) {
+        const abierta = await client.query<{ id: string }>(
+          `SELECT id FROM ${qTable(params.schema, "cajas")}
+            WHERE empresa_id = $1 AND estado = 'abierta'
+            ORDER BY fecha_apertura DESC
+            LIMIT 1`,
+          [params.empresaId]
+        );
+        cajaId = abierta.rows[0]?.id ?? null;
+      }
+    }
+
     const insVenta = await client.query<{ id: string }>(
       `
       INSERT INTO ${ventasT} (
         empresa_id, cliente_id, numero_control, moneda, tipo_cambio,
-        subtotal, monto_iva, total, estado, tipo_venta, plazo_dias, fecha, observaciones
+        subtotal, monto_iva, total, estado, tipo_venta, plazo_dias, fecha, observaciones,
+        caja_id, metodo_pago, created_by, usuario_nombre
       ) VALUES (
         $1, $2, $3, $4, $5,
-        $6, $7, $8, 'completada', $9, $10, $11::timestamptz, $12
+        $6, $7, $8, 'completada', $9, $10, $11::timestamptz, $12,
+        $13::uuid, $14, $15::uuid, $16
       )
       RETURNING id
       `,
@@ -184,6 +226,10 @@ export async function createVentaTransaccionalPg(
         params.plazoDias,
         fechaIso,
         params.observaciones,
+        cajaId,
+        params.metodoPago ?? null,
+        params.createdBy ?? null,
+        params.usuarioNombre ?? null,
       ]
     );
 
