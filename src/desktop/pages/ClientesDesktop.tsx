@@ -188,6 +188,8 @@ function documentoCliente(c: Cliente): string {
   return c.ruc?.trim() || c.documento?.trim() || "—";
 }
 
+// Lo usaba la columna «Vendedor responsable», ya comentada.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function VendedorResponsableCell({ cliente }: { cliente: Cliente }) {
   const nombre = cliente.vendedor_usuario_nombre?.trim();
   const email = cliente.vendedor_usuario_email?.trim();
@@ -366,14 +368,17 @@ function buildClienteColumns(): ClienteColumnDef[] {
       className: `${td} text-sm text-slate-600 whitespace-nowrap`,
       render: (c) => c.email ?? "—",
     },
-    {
-      key: "vendedor_responsable",
-      label: "Vendedor responsable",
-      visibleDefault: false,
-      headerClassName: th,
-      className: `${td} text-xs text-slate-500 whitespace-nowrap`,
-      render: (c) => <VendedorResponsableCell cliente={c} />,
-    },
+    // «Vendedor responsable» — COMENTADA. Ya venía apagada por defecto, pero
+    // seguía ofreciéndose en el selector «Columnas»; es del sistema base, donde
+    // Neura asigna un vendedor por cuenta.
+    // {
+    //   key: "vendedor_responsable",
+    //   label: "Vendedor responsable",
+    //   visibleDefault: false,
+    //   headerClassName: th,
+    //   className: `${td} text-xs text-slate-500 whitespace-nowrap`,
+    //   render: (c) => <VendedorResponsableCell cliente={c} />,
+    // },
     // «Project Manager» — COMENTADA, misma razón que «Plan activo» y «Tipo
     // servicio»: es del sistema base, donde Neura lleva proyectos por cliente.
     // Acá mostraba «Sin asignar» en todas las filas.
