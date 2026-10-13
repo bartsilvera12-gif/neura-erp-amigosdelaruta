@@ -155,6 +155,25 @@ export default function CitaFormModal({
     }
   }, [open, mode, cita, prefill, options.responsables]);
 
+  /* Clientes para elegir: los activos que trae la API. Si la cita que se esta
+     editando apunta a uno dado de baja, se lo agrega igual y se aclara: sacarlo
+     de la lista haria que el selector quedara en blanco y que al guardar la cita
+     perdiera su cliente sin que nadie lo pidiera. */
+  const opcionesCliente = useMemo(() => {
+    const base = [
+      { value: "", label: "— Sin cliente —" },
+      ...options.clientes.map((c) => ({ value: c.id, label: c.nombre ?? c.id })),
+    ];
+    const actual = cita?.cliente_id;
+    if (actual && !options.clientes.some((c) => c.id === actual)) {
+      base.push({
+        value: actual,
+        label: (cita?.cliente?.nombre ?? actual) + " (dado de baja)",
+      });
+    }
+    return base;
+  }, [options.clientes, cita]);
+
   // Disponibilidad (advertencia no bloqueante).
   useEffect(() => {
     if (!open) return;
@@ -313,10 +332,17 @@ export default function CitaFormModal({
                       setResponsableId(ids[0] ?? "");
                     }}
                   />
-                  <p className="mt-1 text-[11px] text-slate-400">
-                    El primero es el responsable principal; el horario se valida contra su agenda.
-                    Todos reciben el recordatorio.
-                  </p>
+                  {options.responsables.length === 0 ? (
+                    <p className="mt-1 text-[11px] font-medium text-amber-700">
+                      No hay usuarios activos para asignar como responsable, así que la cita no se
+                      va a poder guardar. Revisá los usuarios de la empresa.
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      El primero es el responsable principal; el horario se valida contra su agenda.
+                      Todos reciben el recordatorio.
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className={labelCls}>Tipo</label>
@@ -423,10 +449,7 @@ export default function CitaFormModal({
                   placeholder="— Sin cliente —"
                   value={clienteId}
                   onChange={setClienteId}
-                  options={[
-                    { value: "", label: "— Sin cliente —" },
-                    ...options.clientes.map((c) => ({ value: c.id, label: c.nombre ?? c.id })),
-                  ]}
+                  options={opcionesCliente}
                 />
               ) : (
                 <div className="space-y-3 rounded-2xl border border-[#4FAEB2]/20 bg-[#4FAEB2]/5 p-4">
@@ -474,10 +497,20 @@ export default function CitaFormModal({
             </div>
           </section>
 
-          {error && <div className="rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-700">{error}</div>}
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-slate-100 bg-slate-50/60 px-5 py-4">
+        {/* El error va en el pie, al lado de Guardar. Antes era el ultimo hijo
+            del area con scroll: aparecia abajo de todo, fuera de la vista, y
+            quien tocaba Guardar veia el panel abierto sin ningun mensaje. */}
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/60 px-5 py-4">
+          {error && (
+            <div
+              role="alert"
+              className="mr-auto rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-medium text-rose-700"
+            >
+              {error}
+            </div>
+          )}
           <button onClick={onClose} className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:border-[#4FAEB2]/60 hover:text-[#4FAEB2]">
             Cancelar
           </button>

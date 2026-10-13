@@ -41,8 +41,12 @@ export async function GET(request: Request) {
         .order("nombre", { ascending: true }),
       sb
         .from("clientes")
-        .select("id,tipo_cliente,empresa,nombre_contacto,nombre,razon_social,telefono")
+        .select("id,tipo_cliente,empresa,nombre_contacto,nombre,razon_social,telefono,estado,baja_operativa_at,deleted_at")
         .eq("empresa_id", empresaId)
+        // `deleted_at IS NULL` es el filtro de "no borrado" que usa el resto del
+        // ERP (ver /api/clientes). Acá faltaba, y por eso la agenda ofrecía
+        // clientes que ya no existían en ninguna otra pantalla.
+        .is("deleted_at", null)
         .order("nombre_contacto", { ascending: true })
         .limit(1000),
     ]);
@@ -50,16 +54,28 @@ export async function GET(request: Request) {
     if (usuariosR.error) {
       return NextResponse.json(errorResponse(usuariosR.error.message), { status: 400 });
     }
+    /* Antes este error no se miraba: la consulta fallaba y el formulario se
+       abria con el selector de clientes vacio, sin decir nada. */
+    if (clientesR.error) {
+      return NextResponse.json(errorResponse(clientesR.error.message), { status: 400 });
+    }
 
     const responsables = ((usuariosR.data ?? []) as Record<string, unknown>[])
       .filter((u) => (u.estado == null || u.estado === "activo"))
       .map((u) => ({ id: String(u.id), nombre: (u.nombre as string | null) ?? null, rol: (u.rol as string | null) ?? null }));
 
-    const clientes = ((clientesR.data ?? []) as Record<string, unknown>[]).map((c) => ({
-      id: String(c.id),
-      nombre: nombreClienteDisplay(c, "") || null,
-      telefono: (c.telefono as string | null) ?? null,
-    }));
+    /* Un cliente dado de baja no se puede agendar: se filtra con el mismo
+       criterio que los usuarios de arriba. La cita que YA lo tenia no se toca
+       -- el formulario lo agrega a mano desde los datos de la cita (ver
+       CitaFormModal) -- para no romper el historial ni perder el vinculo al
+       editar. */
+    const clientes = ((clientesR.data ?? []) as Record<string, unknown>[])
+      .filter((c) => c.baja_operativa_at == null && (c.estado == null || c.estado === "activo"))
+      .map((c) => ({
+        id: String(c.id),
+        nombre: nombreClienteDisplay(c, "") || null,
+        telefono: (c.telefono as string | null) ?? null,
+      }));
 
     return NextResponse.json(
       successResponse({ responsables, clientes, tipos: TIPOS_SUGERIDOS })
