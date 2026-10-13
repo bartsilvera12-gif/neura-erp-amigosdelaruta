@@ -443,27 +443,6 @@ export default function NuevaVentaPage() {
               />
             </div>
 
-            {/* Solo en contado: a crédito todavía no entró plata, así que no hay
-                medio de pago que sumar al turno. */}
-            {tipoVenta === "CONTADO" && (
-              <div>
-                <label className={labelClass}>Método de pago</label>
-                <select
-                  value={metodoPago}
-                  onChange={(e) => setMetodoPago(e.target.value as MetodoPagoVenta)}
-                  className={inputClass}
-                >
-                  {METODOS_PAGO_VENTA.map((m) => (
-                    <option key={m.value} value={m.value}>{m.label}</option>
-                  ))}
-                </select>
-                <p className="mt-1 text-xs text-slate-400">
-                  Define a qué columna del arqueo suma esta venta. Solo el efectivo
-                  cuenta para el conteo del cajón.
-                </p>
-              </div>
-            )}
-
             {/* Fila 2: sub-campos condicionales (alineados bajo su parent) */}
             {moneda === "USD" && (
               <div className="md:col-start-1">
@@ -780,6 +759,29 @@ export default function NuevaVentaPage() {
                       <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
                         Cobro
                       </p>
+                      {/* El método de pago vive acá y no arriba, en «Condiciones de la
+                          venta»: ahí estaba antes de que la pantalla abriera sola el
+                          buscador de productos, y quien cobra no sube a buscarlo —
+                          QA reportó que directamente no existía. Va donde se cobra,
+                          al lado del total y del monto recibido. */}
+                      <div>
+                        <label className="block text-xs text-gray-600 mb-1">
+                          Método de pago
+                        </label>
+                        <select
+                          value={metodoPago}
+                          onChange={(e) => setMetodoPago(e.target.value as MetodoPagoVenta)}
+                          className={inputClass}
+                        >
+                          {METODOS_PAGO_VENTA.map((m) => (
+                            <option key={m.value} value={m.value}>{m.label}</option>
+                          ))}
+                        </select>
+                        <p className="mt-1 text-[11px] text-gray-500">
+                          Define a qué columna del arqueo suma la venta. Sólo el efectivo
+                          cuenta para el conteo del cajón.
+                        </p>
+                      </div>
                       <div>
                         <label className="block text-xs text-gray-600 mb-1">
                           Monto recibido (Gs.)
