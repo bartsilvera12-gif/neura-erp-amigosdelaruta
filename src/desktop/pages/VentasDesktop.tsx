@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { FileText, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import EdgeScrollArea from "@/components/ui/EdgeScrollArea";
 import { FancySelect } from "@/app/dashboard/proyectos/components/FancySelect";
-import { NuevaFacturaCajaModal } from "@/components/caja/NuevaFacturaCajaModal";
+// import { NuevaFacturaCajaModal } from "@/components/caja/NuevaFacturaCajaModal"; // Nueva factura — COMENTADO
 import CajaControlPanel from "@/components/caja/CajaControlPanel";
 import { getVentas } from "@/lib/ventas/storage";
 import type { Venta, TipoVenta, TipoIvaVenta } from "@/lib/ventas/types";
@@ -175,7 +175,7 @@ export default function VentasDesktop() {
   const [busqueda, setBusqueda] = useState("");
   const [filtroTipo, setFiltroTipo] = useState<TipoVenta | "">("");
   const [filtroIva, setFiltroIva] = useState<TipoIvaVenta | "">("");
-  const [facturaOpen, setFacturaOpen] = useState(false);
+  // const [facturaOpen, setFacturaOpen] = useState(false); // Nueva factura — COMENTADO
 
   useEffect(() => {
     let cancelled = false;
@@ -239,7 +239,19 @@ export default function VentasDesktop() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <button
+          {/* ── «Nueva factura» (factura suelta por RUC) — COMENTADO ──────────────
+              Se saca de la pantalla a pedido: no toca inventario y convivía raro al
+              lado de la venta real, que sí descuenta stock.
+
+              Queda comentado y no borrado porque el documento funcional pide un
+              módulo de Facturación; si se arma, esto es el punto de partida. Para
+              reactivarlo hay que descomentar cuatro cosas, todas rotuladas igual en
+              este archivo: el import, el estado, el botón y el modal.
+
+              La ruta /api/caja/cliente-por-ruc que usa este modal sigue existiendo
+              (es la que crea clientes con origen CAJA): sólo se quitó la entrada.
+              ──────────────────────────────────────────────────────────────────── */}
+          {/* <button
             type="button"
             onClick={() => setFacturaOpen(true)}
             className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:border-[#4FAEB2]/60 hover:text-[#4FAEB2]"
@@ -247,7 +259,7 @@ export default function VentasDesktop() {
           >
             <FileText className="h-4 w-4" />
             Nueva factura
-          </button>
+          </button> */}
           <Link
             href="/ventas/nueva"
             className="inline-flex items-center gap-2 rounded-xl bg-[#4FAEB2] px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-[#4FAEB2]/25 transition-colors hover:bg-[#3F8E91]"
@@ -435,7 +447,8 @@ export default function VentasDesktop() {
         </EdgeScrollArea>
       </div>
 
-      <NuevaFacturaCajaModal open={facturaOpen} onClose={() => setFacturaOpen(false)} />
+      {/* Nueva factura — COMENTADO
+      <NuevaFacturaCajaModal open={facturaOpen} onClose={() => setFacturaOpen(false)} /> */}
     </div>
   );
 }

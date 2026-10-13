@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
   Banknote,
-  BookOpen,
+  // BookOpen, // COMENTADO: lo usaba solo «Ayuda en línea»
   Building2,
   CalendarDays,
   FileText,
@@ -130,10 +130,12 @@ const SECTIONS: Section[] = [
       { href: "/configuracion", label: "Configuración", icon: Settings },
     ],
   },
-  {
-    title: "Soporte",
-    items: [{ href: "/ayuda", label: "Ayuda en línea", icon: BookOpen }],
-  },
+  // Grupo "Soporte" (Ayuda en línea) — COMENTADO, igual que en la barra de
+  // escritorio: apunta a una base de conocimiento que en esta instancia está vacía.
+  // {
+  //   title: "Soporte",
+  //   items: [{ href: "/ayuda", label: "Ayuda en línea", icon: BookOpen }],
+  // },
 ];
 
 export default function MobileMenu({

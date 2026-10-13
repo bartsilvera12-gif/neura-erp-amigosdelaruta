@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { FileText, Plus } from "lucide-react";
-import { NuevaFacturaCajaModal } from "@/components/caja/NuevaFacturaCajaModal";
+import { Plus } from "lucide-react";
+// import { NuevaFacturaCajaModal } from "@/components/caja/NuevaFacturaCajaModal"; // Nueva factura — COMENTADO
 import CajaControlPanel from "@/components/caja/CajaControlPanel";
 import { getVentas } from "@/lib/ventas/storage";
 import type { Venta } from "@/lib/ventas/types";
@@ -33,7 +33,7 @@ function esDeHoy(iso: string): boolean {
 }
 
 export default function VentasMobile() {
-  const [open, setOpen] = useState(false);
+  // const [open, setOpen] = useState(false); // Nueva factura — COMENTADO
   const [ventas, setVentas] = useState<Venta[]>([]);
   const [cargando, setCargando] = useState(true);
 
@@ -90,6 +90,7 @@ export default function VentasMobile() {
           <Plus className="h-5 w-5" />
           Nueva venta
         </Link>
+        {/* Nueva factura — COMENTADO (ver VentasDesktop para el porqué)
         <button
           type="button"
           onClick={() => setOpen(true)}
@@ -97,7 +98,7 @@ export default function VentasMobile() {
         >
           <FileText className="h-5 w-5" />
           Nueva factura
-        </button>
+        </button> */}
       </div>
 
       <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -135,7 +136,8 @@ export default function VentasMobile() {
         )}
       </div>
 
-      <NuevaFacturaCajaModal open={open} onClose={() => setOpen(false)} />
+      {/* Nueva factura — COMENTADO
+      <NuevaFacturaCajaModal open={open} onClose={() => setOpen(false)} /> */}
     </div>
   );
 }

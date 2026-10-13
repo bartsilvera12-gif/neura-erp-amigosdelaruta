@@ -1,14 +1,14 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import Link from "next/link";
+// import Link from "next/link"; // COMENTADO: lo usaba solo «Ayuda en línea»
 import { useRouter } from "next/navigation";
-import { ChevronDown, HelpCircle, LogOut, Menu } from "lucide-react";
+import { ChevronDown, LogOut, Menu } from "lucide-react";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import { signOut } from "@/lib/auth";
 import NotificacionesBell from "@/components/layout/NotificacionesBell";
 import ChatPestanaBadge from "@/components/layout/ChatPestanaBadge";
-import GuardiasBoton from "@/components/layout/GuardiasBoton";
+// import GuardiasBoton from "@/components/layout/GuardiasBoton"; // COMENTADO junto al botón
 
 type HeaderUsuario = {
   nombre: string | null;
@@ -107,8 +107,16 @@ export default function Header({ onOpenMobileSidebar }: HeaderProps = {}) {
       <div className="flex items-center gap-2">
         {/* Asistente de ayuda (Neurita) — desactivado temporalmente. */}
 
-        {/* Ayuda en línea — acceso transversal, disponible en cualquier pantalla. */}
-        <Link
+        {/* ── «Ayuda en línea» y «Guardias» — COMENTADOS ────────────────────────
+            Los dos vienen del sistema base y no son de esta instancia: la ayuda
+            apunta a una base de conocimiento que acá está vacía, y las guardias
+            son turnos de soporte de Neura, no de Amigos de la Ruta.
+
+            Quedan comentados y no borrados; las páginas (/ayuda, /dashboard/guardias)
+            y sus APIs siguen existiendo, sólo se quitó el acceso desde la barra.
+            Para reactivarlos: descomentar esto y el import correspondiente arriba.
+            ──────────────────────────────────────────────────────────────────── */}
+        {/* <Link
           href="/ayuda"
           title="Ayuda en línea"
           aria-label="Ayuda en línea"
@@ -117,11 +125,7 @@ export default function Header({ onOpenMobileSidebar }: HeaderProps = {}) {
           <HelpCircle className="h-5 w-5 shrink-0" />
           <span className="hidden lg:inline">Ayuda en línea</span>
         </Link>
-
-        {/* Guardias: visible para todo el equipo. Ver quién está de turno no
-            pide permisos; asignar sigue siendo de administradores (el enlace
-            "Asignar" del modal y el PUT de la API lo controlan). */}
-        <GuardiasBoton />
+        <GuardiasBoton /> */}
 
         {/* Notificaciones */}
         <NotificacionesBell />
