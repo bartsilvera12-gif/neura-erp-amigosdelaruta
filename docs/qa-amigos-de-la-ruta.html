@@ -232,7 +232,7 @@
     <ul>
       <li>Entrá con <b>Ctrl+F5</b> la primera vez: el navegador cachea el JS y podés quedar con una versión vieja.</li>
       <li>Probá en Chrome y, si podés, repetí <b>Acceso y menú</b> y <b>Eventos</b> en el celular. <b>El sitio público</b> probalo también en el celular: es donde más se usa.</li>
-      <li>La base arranca vacía. Los bloques <b>Clientes</b>, <b>Inventario</b>, <b>Ventas</b> y <b>Compras</b> crean los datos que usan los demás: no los saltees.</li>
+      <li>La base arranca vacía. Los bloques <b>Clientes</b>, <b>Inventario</b>, <b>Caja</b> y <b>Compras</b> crean los datos que usan los demás: no los saltees.</li>
       <li>Si algo falla, anotá qué hiciste, qué esperabas y qué pasó. El texto va al reporte.</li>
     </ul>
   </div>
@@ -249,7 +249,7 @@
       pasos: [
         { a: "Entrar con una contraseña equivocada.", e: "Rechaza con un mensaje claro. <b>No</b> entra ni queda cargando." },
         { a: "Entrar con el usuario y la contraseña que te pasó el equipo.", e: "Llega al Dashboard." },
-        { a: "Contar los ítems del menú lateral.", e: "Son <b>16</b>: Dashboard, Gerencia, Reportes, Ventas, Inventario, Clientes, Compras, Gastos, Pagos, Cobranzas, Notas de crédito, Gestión Clientes, Proyectos, Agenda, Eventos y Web." },
+        { a: "Contar los ítems del menú lateral.", e: "Son <b>16</b>: Dashboard, Gerencia, Reportes, Caja, Inventario, Clientes, Compras, Gastos, Pagos, Cobranzas, Notas de crédito, Gestión Clientes, Proyectos, Agenda, Eventos y Web." },
         { a: "Buscar Usuarios o Configuración en el menú.", e: "<b>No</b> aparecen. Es lo esperado." },
         { a: "Colapsar y expandir el menú con el botón de la izquierda.", e: "Se achica a íconos y vuelve, sin tapar el contenido." },
         { a: "Marcar un favorito con la estrella de cualquier ítem.", e: "Sube a Favoritos y sigue ahí al recargar." },
@@ -325,10 +325,12 @@
       ]
     },
     {
-      t: "Ventas", ruta: "/ventas",
-      porque: "Es la caja: tiene que descontar stock de verdad, no sólo registrar.",
+      t: "Caja", ruta: "/ventas", pill: "pantalla nueva",
+      porque: "Tiene que descontar stock de verdad, no sólo registrar. La portada del módulo se rehizo: antes era sólo el botón de factura y la venta con productos no se podía abrir desde el menú.",
       pasos: [
-        { a: "Hacer una venta al primer cliente con 2 unidades del producto de stock 10.", e: "La venta se registra con su número." },
+        { a: "Abrir Caja desde el menú.", e: "Muestra el resumen de hoy (facturación, ventas, ticket promedio, unidades), la lista de órdenes de venta y <b>dos</b> botones: «Nueva venta» y «Nueva factura»." },
+        { a: "Entender la diferencia entre los dos botones.", e: "«Nueva venta» usa productos del inventario y descuenta stock. «Nueva factura» emite una factura suelta por nombre, RUC y monto, sin tocar inventario." },
+        { a: "Tocar «Nueva venta» y hacer una venta al primer cliente con 2 unidades del producto de stock 10.", e: "La venta se registra con su número y al volver aparece en la lista de Caja." },
         { a: "Volver a Inventario y mirar ese producto.", e: "El stock bajó a <b>8</b>. Si no bajó, es falla." },
         { a: "Intentar vender más unidades de las que hay en stock.", e: "Avisa o lo impide. <b>No</b> puede dejar el stock en negativo sin decir nada." },
         { a: "Hacer una venta a crédito.", e: "Queda con saldo pendiente y aparece en Cobranzas." },
@@ -359,7 +361,7 @@
       t: "Pagos", ruta: "/pagos",
       porque: "",
       pasos: [
-        { a: "Registrar un pago contra la venta a crédito del bloque <b>Ventas</b>.", e: "Se imputa y baja el saldo del cliente." },
+        { a: "Registrar un pago contra la venta a crédito del bloque <b>Caja</b>.", e: "Se imputa y baja el saldo del cliente." },
         { a: "Volver a Cobranzas y mirar ese cliente.", e: "La deuda bajó por el monto pagado." },
         { a: "Registrar un pago parcial.", e: "Queda saldo remanente, no se cancela toda la deuda." }
       ]
@@ -370,7 +372,7 @@
       pasos: [
         { a: "Abrir el módulo.", e: "Lista los clientes con deuda y el total por tramo de vencimiento." },
         { a: "Abrir el detalle de un cliente.", e: "Muestra las facturas pendientes y los pagos hechos." },
-        { a: "Cruzar los montos contra lo cargado en <b>Ventas</b> y <b>Pagos</b>.", e: "Los números <b>coinciden</b>." }
+        { a: "Cruzar los montos contra lo cargado en <b>Caja</b> y <b>Pagos</b>.", e: "Los números <b>coinciden</b>." }
       ]
     },
     {
@@ -387,7 +389,7 @@
       porque: "Lee de todo lo cargado hasta acá.",
       pasos: [
         { a: "Abrir cada reporte disponible.", e: "Todos cargan; los vacíos muestran “sin datos” y no un error." },
-        { a: "Cruzar el reporte de ventas contra las ventas del bloque <b>Ventas</b>.", e: "Los totales coinciden." },
+        { a: "Cruzar el reporte de ventas contra las ventas del bloque <b>Caja</b>.", e: "Los totales coinciden." },
         { a: "Exportar a Excel donde haya botón.", e: "Baja el archivo y abre bien." }
       ]
     },

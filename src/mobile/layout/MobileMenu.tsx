@@ -79,7 +79,7 @@ const SECTIONS: Section[] = [
       { href: "/clientes", label: "Clientes", icon: Users },
       { href: "/crm", label: "CRM Funnel", icon: Sparkles },
       { href: "/gestion-clientes", label: "Gestión Clientes", icon: Users },
-      { href: "/ventas", label: "Ventas", icon: ShoppingCart },
+      { href: "/ventas", label: "Caja", icon: ShoppingCart },
       { href: "/comisiones", label: "Comisiones", icon: Percent },
       { href: "/planes", label: "Planes", icon: FileText },
       { href: "/dashboard/agenda", label: "Agenda", icon: CalendarDays },

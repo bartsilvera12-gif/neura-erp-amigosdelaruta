@@ -137,7 +137,7 @@ const MENU_STRUCTURE_COMPLETO: MenuItem[] = [
     href: "/dashboard/monitoreo",
     icon: Activity,
   },
-  { key: "ventas", slug: "ventas", label: "Ventas", href: "/ventas", icon: ShoppingCart },
+  { key: "ventas", slug: "ventas", label: "Caja", href: "/ventas", icon: ShoppingCart },
   { key: "inventario", slug: "inventario", label: "Inventario", href: "/inventario", icon: Package, children: [
     { label: "Productos", href: "/inventario" },
     { label: "Movimientos", href: "/inventario/movimientos" },
