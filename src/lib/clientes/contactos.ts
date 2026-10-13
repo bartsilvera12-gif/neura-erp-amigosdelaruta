@@ -1,6 +1,7 @@
 import "server-only";
 import { getChatServiceClientForEmpresa } from "@/app/api/chat/_chat-service-client";
 import { getUserAndEmpresa } from "@/lib/middleware/auth";
+import { errorEmail, normalizarEmail } from "@/lib/clientes/validar-contacto";
 
 export type ContactoCliente = {
   id: string;
@@ -40,8 +41,22 @@ export function leerContacto(body: Record<string, unknown> | null):
   if (!nombre) return { ok: false, mensaje: "El nombre es obligatorio" };
   const telefono = texto(body.telefono, 40);
   if (telefono && telefono.replace(/\D/g, "").length < 6) return { ok: false, mensaje: "Teléfono inválido" };
-  const email = texto(body.email, 150);
-  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, mensaje: "Correo inválido" };
+  /*
+   * El correo se guarda SIEMPRE en minúsculas. Se validaba con una expresión
+   * suelta y se guardaba tal cual vino, así que "MATIAS@GMAIL.COM" quedaba en
+   * mayúsculas y el mismo contacto cargado dos veces con distinta caja parecía
+   * dos contactos distintos. Se normaliza acá, en el único punto por el que
+   * pasan tanto el alta como la edición.
+   *
+   * La validación pasa a ser la misma que usan Clientes y Proveedores, que
+   * además detecta dominios mal escritos ("gmail.commpresa").
+   */
+  const emailCrudo = texto(body.email, 150);
+  const email = emailCrudo ? normalizarEmail(emailCrudo) : null;
+  if (email) {
+    const malEmail = errorEmail(email, "El correo");
+    if (malEmail) return { ok: false, mensaje: malEmail };
+  }
   if (!telefono && !email) return { ok: false, mensaje: "Cargá al menos un teléfono o un correo" };
   return { ok: true, datos: { nombre, telefono, email, cargo: texto(body.cargo, 100), notas: texto(body.notas, 1000) } };
 }

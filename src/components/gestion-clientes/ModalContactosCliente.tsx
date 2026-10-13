@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Loader2, Mail, Pencil, Phone, Plus, Trash2, UserRound, Users, X } from "lucide-react";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
+import { normalizarEmail } from "@/lib/clientes/validar-contacto";
 
 type Contacto = {
   id: string;
@@ -196,7 +197,23 @@ export function ModalContactosCliente({
                 </div>
                 <div>
                   <span className={claseEtiqueta}>Correo</span>
-                  <input className={claseCampo} value={form.email} maxLength={150} type="email" onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} placeholder="Ej.: maria@empresa.com" />
+                  {/* Se pasa a minúsculas al SALIR del campo, no en cada tecla: un
+                      input type="email" no expone la posición del cursor, así que
+                      transformarlo mientras se escribe lo manda al final (es el mismo
+                      problema que tuvimos en el alta de clientes). El servidor lo
+                      normaliza igual; esto es para que se vea al instante. */}
+                  <input
+                    className={claseCampo}
+                    value={form.email}
+                    maxLength={150}
+                    type="email"
+                    onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+                    onBlur={(e) => {
+                      const limpio = normalizarEmail(e.target.value);
+                      if (limpio !== form.email) setForm((f) => ({ ...f, email: limpio }));
+                    }}
+                    placeholder="Ej.: maria@empresa.com"
+                  />
                 </div>
               </div>
               <div>

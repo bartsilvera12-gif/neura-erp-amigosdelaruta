@@ -1142,7 +1142,20 @@ function GestionClientesPageInner() {
                 </div>
 
                 <div className="mt-3 flex flex-wrap gap-1.5 border-t border-slate-100 pt-3">
+                  {/* «Tipificación» — COMENTADO ─────────────────────────────────
+                      Es el registro de gestiones de la mesa de ayuda de Neura
+                      (consulta, reclamo, promesa de pago…) con escalamiento a un
+                      ticket de Soporte. Amigos de la Ruta no tiene eso.
+
+                      Además hoy es un callejón sin salida: el catálogo de estados
+                      está vacío —la propia pantalla lo dice— pero al guardar exige
+                      estado y sub-estado, así que no se puede completar. QA lo
+                      reportó como error y tenía razón.
+
+                      La pantalla (/clientes/[id]/tipificacion), su API y el reporte
+                      siguen en el repo; sólo se quita la entrada.
                   <BotonOperativo label="Tipificación" icon="📋" activo href={`/clientes/${selected.id}/tipificacion`} />
+                  */}
                   <BotonOperativo label="Contactos" icon="👥" activo onClick={() => setModalContactos(true)} />
                   <BotonOperativo
                     label="Facturación"
