@@ -209,7 +209,7 @@
     <div class="meta">
       <span><b>URL</b> amigosdelaruta.neura.com.py</span>
       <span><b>Usuario</b> te lo pasa el equipo</span>
-      <span><b>Build</b> 9wW9qKTFCq0UdHVf_cNmC</span>
+      <span><b>Build</b> <span id="buildId">—</span></span>
     </div>
   </header>
 
@@ -497,6 +497,14 @@
       ]
     }
   ];
+
+  /* El build se lee del propio ERP. Antes iba escrito a mano y quedaba viejo en
+     cada deploy, que es justo lo contrario de para qué sirve: QA lo usa para
+     saber si está mirando la versión que se le pidió probar. */
+  fetch("/api/deploy-info")
+    .then((r) => r.json())
+    .then((d) => { if (d && d.build_id) document.getElementById("buildId").textContent = d.build_id; })
+    .catch(() => { document.getElementById("buildId").textContent = "no disponible"; });
 
   const CLAVE = "qa-adr-v1";
   let estado = {};
