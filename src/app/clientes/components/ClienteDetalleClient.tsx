@@ -108,13 +108,24 @@ type ProyectoClienteRow = {
   responsable_comercial?: { nombre?: string | null } | null;
 };
 
+/*
+ * Pestañas de la ficha.
+ *
+ * «Suscripciones», «Proyectos» y «Actividad» quedan COMENTADAS: vienen del
+ * sistema base, donde Neura factura servicios recurrentes y lleva proyectos por
+ * cliente. En Amigos de la Ruta no aplican — lo que el cliente tiene son
+ * reservas de viaje, que viven en el módulo Eventos.
+ *
+ * El código de las tres sigue abajo, intacto: sólo se quita la entrada. Para
+ * reactivarlas alcanza con descomentar la línea de acá.
+ */
 const TABS: { id: TabId; label: string; showWhen?: (c: Cliente) => boolean }[] = [
   { id: "informacion",   label: "Información"      },
   { id: "estado_cuenta", label: "Estado de cuenta" },
-  { id: "suscripciones", label: "Suscripciones"    },
+  // { id: "suscripciones", label: "Suscripciones"    },
   { id: "marketing",     label: "Marketing",        showWhen: (c) => c.tipo_servicio_cliente === "marketing" },
-  { id: "proyectos",     label: "Proyectos"         },
-  { id: "actividad",     label: "Actividad"         },
+  // { id: "proyectos",     label: "Proyectos"         },
+  // { id: "actividad",     label: "Actividad"         },
   { id: "notas",         label: "Notas"             },
 ];
 
@@ -1271,6 +1282,9 @@ export default function ClienteDetalleClient({
             </div>
           </div>
           <div className="mt-5 flex flex-wrap gap-2 border-t border-slate-200/70 pt-4">
+            {/* «Nueva suscripción» — COMENTADO, misma razón que la pestaña:
+                esta instancia no vende servicios recurrentes. El modal y toda su
+                lógica siguen en el archivo.
             <button
               type="button"
               onClick={() => {
@@ -1303,7 +1317,7 @@ export default function ClienteDetalleClient({
                 <path d="M12 5v14M5 12h14" />
               </svg>
               Nueva suscripción
-            </button>
+            </button> */}
             <button
               type="button"
               onClick={() => {

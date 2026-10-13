@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { getClientes, clienteNombre } from "@/lib/clientes/storage";
 import type { Cliente } from "@/lib/clientes/types";
-import { etiquetaVisibleTipoServicio, type ClienteTipoServicioRow } from "@/lib/clientes/tipo-servicio-catalogo";
+import { type ClienteTipoServicioRow } from "@/lib/clientes/tipo-servicio-catalogo";
 import { filasTiposDesdeSistemaEstatico, fetchTiposFormCliente } from "@/lib/clientes/fetch-tipos-servicio-form";
 import { FancySelect } from "@/app/dashboard/proyectos/components/FancySelect";
 import EdgeScrollArea from "@/components/ui/EdgeScrollArea";
@@ -118,18 +118,19 @@ function avatarInitial(label: string): string {
   return (m?.[0] ?? "?").toUpperCase();
 }
 
-// ── Tipo servicio: chip turquesa cuando hay valor ────────────────────────────
-
-function TipoServicioCell({ slug, mapNombreTipo }: { slug: string | null; mapNombreTipo: Record<string, string> }) {
-  const label = etiquetaVisibleTipoServicio(slug, mapNombreTipo);
-  if (!label || label === "—") return <span className="text-xs text-slate-400">—</span>;
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-700">
-      <span aria-hidden="true" className="h-1 w-1 rounded-full bg-[#4FAEB2]" />
-      {label}
-    </span>
-  );
-}
+// ── Tipo servicio: chip turquesa cuando hay valor — COMENTADO ────────────────
+// Lo usaba la columna «Tipo servicio», que se ocultó (ver la nota en las columnas).
+//
+// function TipoServicioCell({ slug, mapNombreTipo }: { slug: string | null; mapNombreTipo: Record<string, string> }) {
+//   const label = etiquetaVisibleTipoServicio(slug, mapNombreTipo);
+//   if (!label || label === "—") return <span className="text-xs text-slate-400">—</span>;
+//   return (
+//     <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+//       <span aria-hidden="true" className="h-1 w-1 rounded-full bg-[#4FAEB2]" />
+//       {label}
+//     </span>
+//   );
+// }
 
 // ── Columnas configurables ────────────────────────────────────────────────────
 
@@ -166,9 +167,7 @@ const DEFAULT_VISIBLE_COLUMN_KEYS: ClienteColumnKey[] = [
   "empresa_nombre",
   "contacto",
   "telefono",
-  "plan_activo",
   "origen",
-  "tipo_servicio",
   "estado",
   "desde",
   "project_manager",
@@ -213,7 +212,7 @@ function VendedorResponsableCell({ cliente }: { cliente: Cliente }) {
   return <span className="text-slate-400">Sin asignar</span>;
 }
 
-function buildClienteColumns(mapNombreTipo: Record<string, string>): ClienteColumnDef[] {
+function buildClienteColumns(): ClienteColumnDef[] {
   const th =
     "text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500 px-3 py-2 whitespace-nowrap";
   const td = "px-3 py-2.5";
@@ -291,22 +290,26 @@ function buildClienteColumns(mapNombreTipo: Record<string, string>): ClienteColu
       className: `${td} text-sm tabular-nums text-slate-600 whitespace-nowrap`,
       render: (c) => c.telefono ?? "—",
     },
-    {
-      key: "plan_activo",
-      label: "Plan activo",
-      visibleDefault: true,
-      headerClassName: th,
-      className: td,
-      render: (c) =>
-        c.plan_activo ? (
-          <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-[#4FAEB2]/30 bg-[#4FAEB2]/10 px-2 py-0.5 text-[11px] font-semibold text-[#3F8E91]">
-            <span aria-hidden="true" className="h-1 w-1 rounded-full bg-[#4FAEB2]" />
-            {c.plan_activo}
-          </span>
-        ) : (
-          <span className="whitespace-nowrap text-xs italic text-slate-400">Sin suscripción</span>
-        ),
-    },
+    /* ── «Plan activo» y «Tipo servicio» — COMENTADAS ────────────────────────
+       Las dos vienen del sistema base, donde Neura vende suscripciones y
+       servicios (Marketing, SaaS, Branding…). Para Amigos de la Ruta no
+       aplican: la de plan mostraba «Sin suscripción» en todas las filas y la
+       de servicio un guión.
+
+       Se quitan las DEFINICIONES y no sólo el default visible, a propósito:
+       las columnas visibles se guardan en localStorage, así que a quien ya
+       abrió la pantalla el default no le cambia nada. Sin definición,
+       `normalizeVisibleColumnKeys` las descarta de las preferencias guardadas
+       y además desaparecen del selector «Columnas».
+       ──────────────────────────────────────────────────────────────────────── */
+    // {
+    //   key: "plan_activo",
+    //   label: "Plan activo",
+    //   visibleDefault: true,
+    //   headerClassName: th,
+    //   className: td,
+    //   render: (c) => c.plan_activo ? (...) : "Sin suscripción",
+    // },
     {
       key: "origen",
       label: "Origen",
@@ -315,14 +318,15 @@ function buildClienteColumns(mapNombreTipo: Record<string, string>): ClienteColu
       className: td,
       render: (c) => <BadgeOrigen origen={c.origen} />,
     },
-    {
-      key: "tipo_servicio",
-      label: "Tipo servicio",
-      visibleDefault: true,
-      headerClassName: th,
-      className: `${td} whitespace-nowrap`,
-      render: (c) => <TipoServicioCell slug={c.tipo_servicio_cliente ?? null} mapNombreTipo={mapNombreTipo} />,
-    },
+    // «Tipo servicio» — COMENTADA, ver la nota de arriba.
+    // {
+    //   key: "tipo_servicio",
+    //   label: "Tipo servicio",
+    //   visibleDefault: true,
+    //   headerClassName: th,
+    //   className: `${td} whitespace-nowrap`,
+    //   render: (c) => <TipoServicioCell slug={c.tipo_servicio_cliente ?? null} mapNombreTipo={mapNombreTipo} />,
+    // },
     {
       key: "estado",
       label: "Estado",
@@ -406,12 +410,14 @@ export default function ClientesPage() {
   const [columnasInicializadas, setColumnasInicializadas] = useState(false);
   const [visibleColumnKeys, setVisibleColumnKeys] = useState<ClienteColumnKey[]>(DEFAULT_VISIBLE_COLUMN_KEYS);
   const [filasTipoCatalogo, setFilasTipoCatalogo] = useState<ClienteTipoServicioRow[]>(() => filasTiposDesdeSistemaEstatico());
+  // Sólo lo usaban la columna «Tipo servicio» y su filtro, ambos comentados.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const mapNombreTipo = useMemo(() => {
     const m: Record<string, string> = {};
     for (const t of filasTipoCatalogo) m[t.slug] = t.nombre;
     return m;
   }, [filasTipoCatalogo]);
-  const clienteColumns = useMemo(() => buildClienteColumns(mapNombreTipo), [mapNombreTipo]);
+  const clienteColumns = useMemo(() => buildClienteColumns(), []);
   const visibleColumnSet = useMemo(() => new Set(visibleColumnKeys), [visibleColumnKeys]);
   const visibleColumns = useMemo(
     () => clienteColumns.filter((col) => visibleColumnSet.has(col.key)),
@@ -458,6 +464,8 @@ export default function ClientesPage() {
     }
   }, [visibleColumnKeys, columnasInicializadas]);
 
+  // Sólo alimentaba el filtro «Todos los servicios», comentado más abajo.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const slugsExtraFiltro = useMemo(() => {
     const known = new Set(filasTipoCatalogo.map((f) => f.slug));
     const u = new Set<string>();
@@ -647,6 +655,8 @@ export default function ClientesPage() {
             { value: "CAJA", label: "Caja" },
           ]}
         />
+        {/* Filtro «Todos los servicios» — COMENTADO junto con la columna «Tipo
+            servicio»: filtrar por una columna que no se muestra no tiene sentido.
         <FancySelect
           size="sm"
           className="min-w-[160px] shrink-0"
@@ -662,7 +672,7 @@ export default function ClientesPage() {
               label: etiquetaVisibleTipoServicio(slug, mapNombreTipo),
             })),
           ]}
-        />
+        /> */}
         {hayFiltros && (
           <button
             onClick={() => {
