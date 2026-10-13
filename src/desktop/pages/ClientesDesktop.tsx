@@ -51,8 +51,18 @@ function BadgeEstado({ cliente }: { cliente: Cliente }) {
   );
 }
 
+/**
+ * Etiqueta del origen.
+ *
+ * El acceso al diccionario va con respaldo a propósito: `origen` es una columna
+ * de texto y basta con que alguien inserte un valor nuevo —pasó con `CAJA`, que
+ * escribe la factura rápida por RUC— para que esto devuelva `undefined` y tire
+ * abajo TODA la pantalla de clientes con "Cannot read properties of undefined".
+ * Una etiqueta sin color es un problema de estética; una lista que no abre es
+ * un problema de verdad.
+ */
 function BadgeOrigen({ origen }: { origen: Cliente["origen"] }) {
-  const cfg: Record<Cliente["origen"], { cls: string; dot: string }> = {
+  const cfg: Record<string, { cls: string; dot: string }> = {
     CRM: {
       cls: "border-violet-200 bg-violet-50 text-violet-700",
       dot: "bg-violet-500",
@@ -65,14 +75,21 @@ function BadgeOrigen({ origen }: { origen: Cliente["origen"] }) {
       cls: "border-slate-200 bg-slate-50 text-slate-600",
       dot: "bg-slate-400",
     },
+    CAJA: {
+      cls: "border-amber-200 bg-amber-50 text-amber-700",
+      dot: "bg-amber-500",
+    },
   };
-  const it = cfg[origen];
+  const it = cfg[origen] ?? {
+    cls: "border-slate-200 bg-slate-50 text-slate-600",
+    dot: "bg-slate-400",
+  };
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${it.cls}`}
     >
       <span aria-hidden="true" className={`h-1 w-1 rounded-full ${it.dot}`} />
-      {origen}
+      {origen || "—"}
     </span>
   );
 }
@@ -380,7 +397,7 @@ export default function ClientesPage() {
   /** Id del cliente recién dado de baja (viene en ?baja_id=), para nombrarlo en el aviso. */
   const [bajaOk,      setBajaOk]      = useState<string | null>(null);
   const [filtroEstado, setFiltroEstado] = useState<"" | "activo" | "inactivo" | "anulado">("");
-  const [filtroOrigen, setFiltroOrigen] = useState<"" | "CRM" | "VENTA" | "MANUAL">("");
+  const [filtroOrigen, setFiltroOrigen] = useState<"" | "CRM" | "VENTA" | "MANUAL" | "CAJA">("");
   const [filtroTipo,   setFiltroTipo]   = useState<"" | "empresa" | "persona">("");
   const [filtroTipoServicio, setFiltroTipoServicio] = useState<"" | string>("");
   const [nuevoOpen, setNuevoOpen] = useState(false);
@@ -621,12 +638,13 @@ export default function ClientesPage() {
           ariaLabel="Filtrar por origen"
           placeholder="Todos los orígenes"
           value={filtroOrigen}
-          onChange={(v) => setFiltroOrigen(v as "" | "CRM" | "VENTA" | "MANUAL")}
+          onChange={(v) => setFiltroOrigen(v as "" | "CRM" | "VENTA" | "MANUAL" | "CAJA")}
           options={[
             { value: "", label: "Todos los orígenes" },
             { value: "CRM", label: "CRM" },
             { value: "VENTA", label: "Venta" },
             { value: "MANUAL", label: "Manual" },
+            { value: "CAJA", label: "Caja" },
           ]}
         />
         <FancySelect

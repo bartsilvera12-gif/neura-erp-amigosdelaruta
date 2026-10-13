@@ -171,16 +171,27 @@ function EstadoBadge({ estado, anulado }: { estado: EstadoCliente; anulado?: boo
   );
 }
 
+/** Mismo respaldo que en escritorio: un origen desconocido no puede romper nada. */
 function OrigenBadge({ origen }: { origen: OrigenCliente }) {
-  const cfg: Record<OrigenCliente, string> = {
+  const cfg: Record<string, string> = {
     CRM: "bg-violet-50 text-violet-700",
     VENTA: "bg-[#4FAEB2]/10 text-[#3F8E91]",
     MANUAL: "bg-slate-100 text-slate-600",
+    CAJA: "bg-amber-50 text-amber-700",
   };
-  const label = origen === "CRM" ? "CRM" : origen === "VENTA" ? "Venta" : "Manual";
+  const etiquetas: Record<string, string> = {
+    CRM: "CRM",
+    VENTA: "Venta",
+    MANUAL: "Manual",
+    CAJA: "Caja",
+  };
   return (
-    <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${cfg[origen]}`}>
-      {label}
+    <span
+      className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+        cfg[origen] ?? "bg-slate-100 text-slate-600"
+      }`}
+    >
+      {etiquetas[origen] ?? origen ?? "—"}
     </span>
   );
 }

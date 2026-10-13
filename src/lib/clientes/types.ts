@@ -1,5 +1,10 @@
 export type TipoCliente = "empresa" | "persona";
-export type OrigenCliente = "CRM" | "VENTA" | "MANUAL";
+/**
+ * De dónde salió el cliente. `CAJA` son los que crea la factura rápida por RUC
+ * (/api/caja/cliente-por-ruc): existía en la base desde siempre pero faltaba
+ * acá, y el badge del listado reventaba al encontrarlo.
+ */
+export type OrigenCliente = "CRM" | "VENTA" | "MANUAL" | "CAJA";
 export type EstadoCliente = "activo" | "inactivo";
 
 import {
