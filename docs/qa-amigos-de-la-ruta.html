@@ -209,7 +209,7 @@
     <div class="meta">
       <span><b>URL</b> amigosdelaruta.neura.com.py</span>
       <span><b>Usuario</b> te lo pasa el equipo</span>
-      <span><b>Build</b> s3ooVBynMA7YJuoc-g6Zq</span>
+      <span><b>Build</b> 9wW9qKTFCq0UdHVf_cNmC</span>
     </div>
   </header>
 
@@ -218,7 +218,9 @@
     <ul>
       <li><b>Usuarios</b> y <b>Configuración</b> no están en el menú. Se pidió un sidebar de 16 ítems y esos dos quedaron afuera; se llega sólo por URL directa.</li>
       <li><b>Eventos → Salidas y Reservas son de sólo lectura.</b> Todavía no hay pantalla de alta: las salidas se cargan por SQL y las reservas entran por la API pública.</li>
-      <li><b>El sitio público no está conectado todavía.</b> amigos-de-la-ruta-web sigue mostrando contenido fijo; lo que cargues en el módulo Web no se ve ahí aún.</li>
+      <li><b>El sitio público ya lee el ERP</b>, pero mientras una colección esté vacía muestra su contenido de respaldo. Los viajes y productos de ejemplo que ves hoy en el sitio son ese respaldo, no una falla: desaparecen en cuanto publiques los tuyos (bloque <b>El sitio público</b>).</li>
+      <li><b>Los talles de la tienda</b> no se administran desde el ERP todavía. Un producto nuevo sale en el sitio con talle único.</li>
+      <li><b>Las preguntas del sitio no tienen categoría</b> en el ERP: todas caen en el primer grupo del filtro de FAQ y los otros tres quedan vacíos.</li>
       <li>El Dashboard tiene <b>tres</b> solapas. "Comercial" se sacó porque era el tablero de CRM y este ERP no tiene CRM: mostraba sólo ceros.</li>
       <li>Para subir una imagen hay que <b>guardar la fila primero</b>. En el formulario de alta el botón está deshabilitado y lo aclara.</li>
       <li>Los endpoints públicos tienen tope: <b>5 envíos por minuto</b> y 60 lecturas. Si los golpeás seguido vas a ver 429, y está bien.</li>
@@ -229,8 +231,8 @@
     <h3>Antes de arrancar</h3>
     <ul>
       <li>Entrá con <b>Ctrl+F5</b> la primera vez: el navegador cachea el JS y podés quedar con una versión vieja.</li>
-      <li>Probá en Chrome y, si podés, repetí el bloque 1 y el 15 en el celular.</li>
-      <li>La base arranca vacía. Los bloques 3 a 6 <b>crean</b> los datos que usan los demás: no los saltees.</li>
+      <li>Probá en Chrome y, si podés, repetí <b>Acceso y menú</b> y <b>Eventos</b> en el celular. <b>El sitio público</b> probalo también en el celular: es donde más se usa.</li>
+      <li>La base arranca vacía. Los bloques <b>Clientes</b>, <b>Inventario</b>, <b>Ventas</b> y <b>Compras</b> crean los datos que usan los demás: no los saltees.</li>
       <li>Si algo falla, anotá qué hiciste, qué esperabas y qué pasó. El texto va al reporte.</li>
     </ul>
   </div>
@@ -273,7 +275,24 @@
         { a: "Editar el primero y cambiarle el teléfono.", e: "El cambio persiste al recargar." },
         { a: "Buscar por nombre y por documento.", e: "Filtra en ambos casos." },
         { a: "Intentar crear uno con el mismo documento que otro.", e: "Avisa del duplicado o lo permite de forma consistente; lo que <b>no</b> puede es tirar un error crudo." },
-        { a: "Dar de baja un cliente.", e: "Sale del listado activo sin desaparecer de la base." }
+        { a: "Dar de baja un cliente.", e: "Sale del listado activo sin desaparecer de la base." },
+        { a: "Buscar ese cliente dado de baja con el filtro de estado en <b>Anulado</b>.", e: "Aparece con una etiqueta roja <b>Anulado</b> al lado del nombre y en la columna Estado. Pasando el mouse por la etiqueta se ve la fecha de la baja." },
+        { a: "En el alta de cliente, escribir en el correo <span class=\"cod\">empresa</span> y después <span class=\"cod\">@gmail.com</span>.", e: "Queda <span class=\"cod\">empresa@gmail.com</span>. Lo que se reportó era que el cursor saltaba al final y guardaba <span class=\"cod\">e@gmail.commpresa</span>: eso <b>no</b> tiene que volver a pasar. Probá también escribiendo en el medio de un correo ya cargado." },
+        { a: "Guardar con el correo <span class=\"cod\">empresa@gamil,com</span>.", e: "Lo rechaza y dice que el correo no es válido." },
+        { a: "Guardar con el correo <span class=\"cod\">empresa@gmail.commpresa</span>.", e: "Lo rechaza avisando que el dominio está mal escrito. Este es el caso puntual que se reportó." },
+        { a: "En el nombre de un cliente <b>persona</b>, escribir <span class=\"cod\">Juan 123</span>.", e: "Los números no entran. El nombre de una <b>empresa</b> sí los acepta («Estación 24 S.A.»), pero no puede ser sólo números." },
+        { a: "Guardar un teléfono de 3 dígitos y un RUC como <span class=\"cod\">123</span>.", e: "Avisa que el teléfono está incompleto y que el RUC va con el formato 00000000-0." },
+        { a: "Repetir las mismas pruebas de correo, nombre, teléfono y RUC en <b>Proveedores</b>.", e: "Se comporta igual que en Clientes." }
+      ]
+    },
+    {
+      t: "Gestión del Cliente", ruta: "/gestion-clientes", pill: "se reportó",
+      porque: "Se reportó que con más de 3 clientes la lista no se desplegaba. Hace falta tener varios cargados.",
+      pasos: [
+        { a: "Si todavía no hay, crear clientes hasta tener <b>al menos 6</b>.", e: "Quedan todos en Clientes." },
+        { a: "Abrir Gestión del Cliente sin escribir nada en el buscador.", e: "La lista se despliega completa, con los 6, y se puede bajar con scroll dentro de la lista. Lo que se reportó era que se cortaba a partir del cuarto." },
+        { a: "Escribir parte de un nombre.", e: "Filtra y sigue mostrando todos los que coinciden." },
+        { a: "Elegir un cliente de la lista.", e: "Abre su ficha." }
       ]
     },
     {
@@ -286,7 +305,20 @@
         { a: "Subirle una imagen al producto.", e: "La imagen se ve en la ficha después de guardar." },
         { a: "Crear un segundo producto con stock 0.", e: "Queda marcado como sin stock." },
         { a: "Intentar crear un producto con un SKU ya usado.", e: "Lo rechaza: el SKU es único por empresa." },
-        { a: "Abrir la solapa Movimientos.", e: "Lista el movimiento del alta de stock." }
+        { a: "Abrir la solapa Movimientos.", e: "Lista el movimiento del alta de stock." },
+        { a: "Crear un producto dejando el <b>SKU vacío</b>.", e: "Lo completa solo, con la forma <span class=\"cod\">PRD-00001</span>. El formulario muestra de antemano cuál le va a tocar." },
+        { a: "Crear otro con el SKU vacío.", e: "Le toca el número siguiente, sin repetir." },
+        { a: "Mirar el campo <b>Unidad de medida</b> en el alta.", e: "Es una lista para elegir (Unidad, KG, LT, Caja…), no un campo para escribir a mano." },
+        { a: "Editar un producto que venía de Excel con una unidad rara.", e: "La unidad original sigue en la lista y no se pierde al guardar." },
+        { a: "Mirar el listado de Productos.", e: "La primera columna muestra la <b>miniatura</b> de la foto del producto, y la inicial del nombre cuando no tiene. Lo que se reportó era que la imagen cargada no figuraba en el listado." },
+        { a: "Mirar la última columna del listado.", e: "Dice <b>Acciones</b> y tiene <b>Editar</b> y <b>Borrar</b> separados del margen, sin encimarse con el porcentaje de Margen s/venta." },
+        { a: "Tocar Borrar en un producto que <b>no</b> tenga movimientos, ventas ni compras.", e: "Pide confirmación y lo borra." },
+        { a: "Tocar Borrar en el producto que usaste en una venta.", e: "No lo borra: lo da de baja y avisa que conserva el historial. Sale del listado." },
+        { a: "Entrar con un usuario que no sea admin y mirar esa columna.", e: "Sólo aparece Editar. Borrar es de admin." },
+        { a: "En la solapa Categorías, tocar <b>Editar</b> en una categoría, cambiarle el nombre y guardar.", e: "Se edita en la misma fila y el cambio persiste." },
+        { a: "Tocar <b>Borrar</b> en una categoría que no tenga productos.", e: "La elimina." },
+        { a: "Tocar Borrar en la categoría que sí tiene productos.", e: "No la borra y explica por qué." },
+        { a: "Repetir editar y borrar en <b>Depósitos / Ubicaciones</b>.", e: "Igual que en Categorías. Una ubicación con stock o con sub-ubicaciones no se puede borrar." }
       ]
     },
     {
@@ -324,7 +356,7 @@
       t: "Pagos", ruta: "/pagos",
       porque: "",
       pasos: [
-        { a: "Registrar un pago contra la venta a crédito del bloque 5.", e: "Se imputa y baja el saldo del cliente." },
+        { a: "Registrar un pago contra la venta a crédito del bloque <b>Ventas</b>.", e: "Se imputa y baja el saldo del cliente." },
         { a: "Volver a Cobranzas y mirar ese cliente.", e: "La deuda bajó por el monto pagado." },
         { a: "Registrar un pago parcial.", e: "Queda saldo remanente, no se cancela toda la deuda." }
       ]
@@ -335,7 +367,7 @@
       pasos: [
         { a: "Abrir el módulo.", e: "Lista los clientes con deuda y el total por tramo de vencimiento." },
         { a: "Abrir el detalle de un cliente.", e: "Muestra las facturas pendientes y los pagos hechos." },
-        { a: "Cruzar los montos contra lo cargado en los bloques 5 y 8.", e: "Los números <b>coinciden</b>." }
+        { a: "Cruzar los montos contra lo cargado en <b>Ventas</b> y <b>Pagos</b>.", e: "Los números <b>coinciden</b>." }
       ]
     },
     {
@@ -352,7 +384,7 @@
       porque: "Lee de todo lo cargado hasta acá.",
       pasos: [
         { a: "Abrir cada reporte disponible.", e: "Todos cargan; los vacíos muestran “sin datos” y no un error." },
-        { a: "Cruzar el reporte de ventas contra las ventas del bloque 5.", e: "Los totales coinciden." },
+        { a: "Cruzar el reporte de ventas contra las ventas del bloque <b>Ventas</b>.", e: "Los totales coinciden." },
         { a: "Exportar a Excel donde haya botón.", e: "Baja el archivo y abre bien." }
       ]
     },
@@ -400,7 +432,7 @@
       t: "Web", ruta: "/web", pill: "módulo nuevo",
       porque: "Administra el contenido del sitio público. Las cuatro solapas son pantallas distintas.",
       pasos: [
-        { a: "Abrir Web → Tienda.", e: "Lista los productos activos que creaste en el bloque 4." },
+        { a: "Abrir Web → Tienda.", e: "Lista los productos activos que creaste en <b>Inventario</b>." },
         { a: "Cargarle a un producto el nombre y la descripción en español, portugués e inglés, y tildar Publicado.", e: "Guarda y al recargar sigue ahí." },
         { a: "Mirar el precio y el stock que muestra la ficha.", e: "Son los de Inventario. <b>No</b> se pueden editar desde acá, y está bien: el precio vive en Inventario." },
         { a: "Abrir Motos y crear una moto con nombre y año.", e: "Queda listada." },
@@ -415,11 +447,34 @@
       porque: "Es lo que va a consumir el sitio. Se prueba desde el navegador, sin estar logueado.",
       pasos: [
         { a: "Abrir en una ventana de incógnito: amigosdelaruta.neura.com.py/api/web/catalogo", e: "Devuelve JSON con <span class=\"cod\">\"ok\":true</span>." },
-        { a: "Buscar en esa respuesta el viaje que publicaste en el bloque 15.", e: "Está dentro de <span class=\"cod\">viajes</span>. Si lo dejaste en Borrador, <b>no</b> tiene que estar." },
-        { a: "Buscar el producto que publicaste en el bloque 16.", e: "Está dentro de <span class=\"cod\">tienda</span>, con su precio y su texto." },
+        { a: "Buscar en esa respuesta el viaje que publicaste en <b>Eventos</b>.", e: "Está dentro de <span class=\"cod\">viajes</span>. Si lo dejaste en Borrador, <b>no</b> tiene que estar." },
+        { a: "Buscar el producto que publicaste en <b>Web</b>.", e: "Está dentro de <span class=\"cod\">tienda</span>, con su precio y su texto." },
         { a: "Buscar la moto y la FAQ.", e: "Están en <span class=\"cod\">motos</span> y <span class=\"cod\">faqs</span>." },
         { a: "Despublicar el producto en Web → Tienda y recargar el catálogo.", e: "Ya <b>no</b> aparece en <span class=\"cod\">tienda</span>." },
         { a: "Recargar el catálogo diez veces seguidas rápido.", e: "En algún momento responde 429. Es el tope por minuto y está bien." }
+      ]
+    },
+    {
+      t: "El sitio público", ruta: "amigos-de-la-ruta-web.vercel.app", pill: "ida y vuelta",
+      porque: "Es el cierre del circuito: lo que cargás en el ERP tiene que verse en el sitio, y lo que el visitante manda desde el sitio tiene que entrar al ERP. Necesita hechos los bloques <b>Eventos</b>, <b>Web</b> y <b>API pública del sitio</b>.",
+      pasos: [
+        { a: "Abrir el sitio: <span class=\"cod\">amigos-de-la-ruta-web.vercel.app</span>", e: "Carga completo. Si el ERP estuviera caído el sitio <b>igual</b> tiene que cargar, con su contenido de respaldo: eso es a propósito." },
+        { a: "Buscar en Viajes el viaje que publicaste en <b>Eventos</b>.", e: "Está, con su país, su duración y el precio del paquete más barato." },
+        { a: "Comparar la fecha de salida con la que cargaste.", e: "Coincide." },
+        { a: "Volver al ERP, pasar ese viaje a <b>Borrador</b> y recargar el sitio con Ctrl+F5.", e: "El viaje ya no está en el sitio. Dejalo publicado otra vez antes de seguir." },
+        { a: "Abrir la Tienda del sitio.", e: "Está el producto que publicaste en <b>Web</b>, con el <b>precio de Inventario</b>, no el que diga el módulo Web." },
+        { a: "En el ERP, cambiarle el precio al producto en Inventario y recargar el sitio.", e: "El sitio muestra el precio nuevo." },
+        { a: "Dejar ese producto con stock 0 en Inventario y recargar el sitio.", e: "Aparece marcado como últimas unidades / sin stock." },
+        { a: "Abrir Motos y FAQ en el sitio.", e: "Están la moto y la pregunta que cargaste en <b>Web</b>." },
+        { a: "Cambiar el sitio a <b>portugués</b> y después a <b>inglés</b>.", e: "Lo que cargaste en los tres idiomas se traduce. Lo que cargaste sólo en español se muestra en español: <b>no</b> puede quedar en blanco." },
+        { a: "En el sitio, completar el formulario de inscripción (viaje, salida, paquete, nombre, documento, licencia) y tocar <b>Reservar mi lugar</b>.", e: "Aparece un cartel con el <b>código de la inscripción</b> y además se abre WhatsApp con el pedido escrito." },
+        { a: "Volver al ERP, a Eventos → Reservas.", e: "La reserva está, en estado <b>cotización</b> y origen <b>web</b>, con el participante que cargaste." },
+        { a: "Comparar el precio de la reserva en el ERP con el del paquete.", e: "Coincide. El precio lo pone el ERP leyendo el paquete, no el navegador del visitante." },
+        { a: "Cargar una salida con <b>1</b> cupo e intentar inscribir dos veces desde el sitio.", e: "La segunda avisa que no quedan lugares. No se puede pasar el cupo desde el sitio." },
+        { a: "En la Tienda del sitio, agregar un producto al carrito, abrir el carrito, escribir <b>nombre</b> y tocar Finalizar compra.", e: "Aparece el <b>número de pedido</b> y se abre WhatsApp." },
+        { a: "Repetir sin escribir el nombre.", e: "Se abre WhatsApp igual, pero el pedido <b>no</b> se registra. Es así: el ERP necesita un nombre." },
+        { a: "Volver al ERP y buscar ese pedido.", e: "Está, en estado pendiente, con el producto, la cantidad y el total. Confirmarlo para que genere cliente y venta <b>todavía no está hecho</b>: hasta ahí llega hoy." },
+        { a: "Mandar cinco inscripciones seguidas desde el sitio.", e: "En algún momento avisa que son demasiados intentos. Es el tope por minuto." }
       ]
     },
     {
