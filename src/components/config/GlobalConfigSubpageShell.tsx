@@ -14,12 +14,21 @@ export function GlobalConfigSubpageShell({
   eyebrow = "Ajustes",
   /** Ancho máximo del contenedor. Default `max-w-6xl`; pantallas con tablas anchas pueden pasar `max-w-none`. */
   maxWidthClassName = "max-w-6xl",
+  /**
+   * A dónde vuelve el breadcrumb. Por defecto a Configuración Global, que es de
+   * donde cuelgan casi todas estas sub-páginas; se puede cambiar para las que se
+   * publican fuera de Configuración (ver Bancos, colgada de Cobranzas).
+   */
+  backHref = "/configuracion",
+  backLabel = "Configuración Global",
   children,
 }: {
   title: string;
   description?: string;
   eyebrow?: string;
   maxWidthClassName?: string;
+  backHref?: string;
+  backLabel?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -27,10 +36,10 @@ export function GlobalConfigSubpageShell({
       {/* Breadcrumb */}
       <nav className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
         <Link
-          href="/configuracion"
+          href={backHref}
           className="font-medium text-slate-500 transition-colors hover:text-[#4FAEB2]"
         >
-          Configuración Global
+          {backLabel}
         </Link>
         <span aria-hidden className="text-slate-300">
           /
@@ -58,7 +67,7 @@ export function GlobalConfigSubpageShell({
           ) : null}
         </div>
         <Link
-          href="/configuracion"
+          href={backHref}
           className="inline-flex shrink-0 items-center gap-1.5 self-start rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition-colors hover:border-[#4FAEB2]/60 hover:bg-[#4FAEB2]/5 hover:text-[#3F8E91]"
         >
           <svg
