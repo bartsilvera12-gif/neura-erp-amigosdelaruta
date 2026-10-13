@@ -39,6 +39,8 @@ export default function EditarProductoPage() {
   const [imagenPath, setImagenPath] = useState<string | null>(null);
   const [imagenUrl, setImagenUrl] = useState<string | null>(null);
   const [codigoOriginal, setCodigoOriginal] = useState<string | null>(null);
+  /** SKU que asignará el sistema si el campo queda vacío (solo vista previa). */
+  const [skuSugerido, setSkuSugerido] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [generandoCodigo, setGenerandoCodigo] = useState(false);
 
@@ -49,6 +51,18 @@ export default function EditarProductoPage() {
   const [categorias, setCategorias] = useState<CatRow[]>([]);
   const [ubicaciones, setUbicaciones] = useState<UbiRow[]>([]);
   const [proveedores, setProveedores] = useState<ProvRow[]>([]);
+
+  /* Cuál sería el SKU automático. Se pide una sola vez y sirve para avisar qué
+     pasa si se vacía el campo; el número definitivo lo calcula el servidor al
+     guardar. */
+  useEffect(() => {
+    let cancel = false;
+    fetch("/api/productos/siguiente-sku", { credentials: "include" })
+      .then((r) => r.json())
+      .then((j) => { if (!cancel && j?.success) setSkuSugerido(j.data.sku as string); })
+      .catch(() => undefined);
+    return () => { cancel = true; };
+  }, []);
 
   useEffect(() => {
     let cancel = false;
@@ -325,8 +339,18 @@ export default function EditarProductoPage() {
                 value={form.sku}
                 onChange={handleChange}
                 className={`${inputClass} uppercase`}
-                required
+                placeholder={skuSugerido ? `Automático: ${skuSugerido}` : "Automático"}
               />
+              {/* Sin `required`: vaciarlo asigna el automático, igual que en el alta.
+                  Se avisa de antemano porque cambiar el SKU de un producto que ya
+                  existe también cambia el código con el que se lo busca. */}
+              {form.sku.trim() === "" && (
+                <p className="mt-1.5 text-xs text-amber-700">
+                  Si lo dejás vacío se le asigna{" "}
+                  <span className="font-semibold">{skuSugerido ?? "el siguiente automático"}</span>{" "}
+                  al guardar, y deja de tener el SKU anterior.
+                </p>
+              )}
             </div>
             <div>
               <label className={labelClass}>Unidad de medida</label>

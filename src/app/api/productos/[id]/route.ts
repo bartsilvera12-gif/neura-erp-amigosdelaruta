@@ -7,6 +7,7 @@ import { successResponse, errorResponse } from "@/lib/api/response";
 import { API_ERRORS } from "@/lib/api/errors";
 import {
   updateProductoPg,
+  siguienteSkuPg,
   rowToProductoApi,
   getProductoPg,
   DuplicadoError,
@@ -84,7 +85,19 @@ export async function PATCH(
 
     const patch: Parameters<typeof updateProductoPg>[3] = {};
     if (body.nombre !== undefined) patch.nombre = normalizeUpperText(body.nombre);
-    if (body.sku !== undefined) patch.sku = normalizeUpperText(body.sku);
+    /* SKU vaciado a mano: se le asigna el automatico (PRD-00001...), igual que en
+       el alta. Borrar el campo y guardar no puede dejar el producto sin codigo, y
+       pedirselo al usuario cuando el alta se lo completaba sola es incoherente. */
+    let skuAutomatico = false;
+    if (body.sku !== undefined) {
+      const skuPedido = normalizeUpperText(body.sku);
+      if (skuPedido) {
+        patch.sku = skuPedido;
+      } else {
+        patch.sku = await siguienteSkuPg(schema, empresaId);
+        skuAutomatico = true;
+      }
+    }
     if (body.costo_promedio !== undefined) patch.costo_promedio = Number(body.costo_promedio) || 0;
     if (body.precio_venta !== undefined) patch.precio_venta = Number(body.precio_venta) || 0;
     if (body.stock_actual !== undefined) patch.stock_actual = Number(body.stock_actual) || 0;
@@ -137,7 +150,20 @@ export async function PATCH(
     }
 
     try {
-      const row = await updateProductoPg(schema, empresaId, id, patch);
+      /* Con SKU automatico se reintenta: otro alta puede haber tomado el mismo
+         numero entre el calculo y el UPDATE. Mismo criterio que en el POST. */
+      let row: Awaited<ReturnType<typeof updateProductoPg>> = null;
+      for (let intento = 0; ; intento++) {
+        try {
+          row = await updateProductoPg(schema, empresaId, id, patch);
+          break;
+        } catch (err) {
+          const choqueAuto =
+            skuAutomatico && err instanceof DuplicadoError && err.campo === "sku";
+          if (!choqueAuto || intento >= 4) throw err;
+          patch.sku = await siguienteSkuPg(schema, empresaId);
+        }
+      }
       if (!row) {
         return NextResponse.json(errorResponse(API_ERRORS.NOT_FOUND), { status: 404 });
       }
