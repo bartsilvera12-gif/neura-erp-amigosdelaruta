@@ -159,9 +159,12 @@ const MENU_STRUCTURE_COMPLETO: MenuItem[] = [
     ],
   },
   { key: "gastos", slug: "gastos", label: "Gastos", href: "/gastos", icon: Receipt },
-  { key: "pagos", slug: "pagos", label: "Pagos", href: "/pagos", icon: Banknote },
+  // Se llama "Cobros" y no "Pagos" porque es lo que hace: cobrar facturas de
+  // clientes. El nombre viejo hacia buscar ahi los pagos a proveedores, que
+  // esta pantalla nunca manejo. El slug sigue siendo `pagos` para no tocar
+  // empresa_modulos.
+  { key: "pagos", slug: "pagos", label: "Cobros", href: "/pagos", icon: Banknote },
   { key: "cobranzas", slug: "cobranzas", label: "Cobranzas", href: "/cobranzas", icon: HandCoins, children: [
-    { label: "Cobros", href: "/cobranzas" },
     // Bancos cuelga de acá y no de Configuración, que no está en el menú de esta
     // instancia: sin esto el catálogo era inalcanzable. Es además donde se usan.
     { label: "Bancos", href: "/cobranzas/bancos" },

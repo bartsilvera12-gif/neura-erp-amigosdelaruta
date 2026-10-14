@@ -57,7 +57,7 @@ export default function PagosMobile() {
     <div className="mx-auto max-w-md p-4 pb-24">
       {/* Header con KPI */}
       <header className="mb-4">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">Pagos</h1>
+        <h1 className="text-xl font-bold tracking-tight text-slate-900">Cobros</h1>
         <div className="mt-2 rounded-2xl border border-amber-200 bg-gradient-to-br from-white to-amber-50 p-4">
           <div className="flex items-center gap-2">
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-100 text-amber-700">

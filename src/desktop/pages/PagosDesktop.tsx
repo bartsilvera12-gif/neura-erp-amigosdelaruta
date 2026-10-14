@@ -388,9 +388,9 @@ export default function PagosPage() {
               Cobranzas
             </p>
           </div>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">Pagos</h1>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">Cobros</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Registrar pagos de facturas pendientes de cobro
+            Registrar cobros de las facturas pendientes
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap gap-1 rounded-2xl border border-[#4FAEB2]/45 bg-white p-1.5 shadow-sm">

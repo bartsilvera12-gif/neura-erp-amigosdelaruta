@@ -88,7 +88,7 @@ const SECTIONS: Section[] = [
   {
     title: "Finanzas",
     items: [
-      { href: "/pagos", label: "Pagos", icon: Banknote },
+      { href: "/pagos", label: "Cobros", icon: Banknote },
       { href: "/gastos", label: "Gastos y Servicios", icon: Receipt },
       { href: "/compras", label: "Compras", icon: Package },
       { href: "/compras/ordenes", label: "Órdenes de Compra", icon: Package },
