@@ -535,35 +535,67 @@ export async function deleteCliente(id: string): Promise<void> {
 
 /** Obtiene notas del cliente desde Supabase. Fallback a [] si no hay datos. */
 export async function getNotasCliente(clienteId: string): Promise<NotaCliente[]> {
-  const supabase = await getBrowserSupabaseForEmpresaData();
-  const { data, error } = await supabase
-    .from("clientes")
-    .select("notas")
-    .eq("id", clienteId)
-    .single();
-
-  if (error || !data) return [];
-  return parseNotas((data as { notas: unknown }).notas);
+  const res = await fetchWithSupabaseSession(
+    `/api/clientes/${encodeURIComponent(clienteId)}/notas`,
+    { cache: "no-store" }
+  );
+  const json = (await res.json().catch(() => ({}))) as { success?: boolean; data?: unknown };
+  if (!res.ok || !json?.success) return [];
+  return parseNotas(json.data);
 }
 
-/** Añade una nota al cliente y persiste en Supabase. */
+/*
+ * Las notas pasan por la API, como el resto de la ficha. Antes escribían a
+ * `clientes` directo desde el navegador y el update lo rechazaba PostgREST:
+ * el error terminaba en la consola, la función devolvía la nota igual y la
+ * pantalla se recargaba vacía, como si nunca se hubiera guardado.
+ *
+ * Por eso ahora cada una lanza si falla: una nota que no se guardó tiene que
+ * avisarlo, no desaparecer en silencio.
+ */
+async function notasFetch(
+  clienteId: string,
+  init: RequestInit & { qs?: string }
+): Promise<unknown> {
+  const { qs, ...rest } = init;
+  const res = await fetchWithSupabaseSession(
+    `/api/clientes/${encodeURIComponent(clienteId)}/notas${qs ?? ""}`,
+    rest
+  );
+  const json = (await res.json().catch(() => ({}))) as { success?: boolean; data?: unknown; error?: string };
+  if (!res.ok || !json?.success) {
+    throw new Error(json?.error || "No se pudo guardar la nota.");
+  }
+  return json.data;
+}
+
+/** Añade una nota al cliente. */
 export async function addNotaCliente(clienteId: string, texto: string): Promise<NotaCliente> {
-  const supabase = await getBrowserSupabaseForEmpresaData();
-  const notas = await getNotasCliente(clienteId);
-  const nota: NotaCliente = {
-    id:    Date.now(),
-    texto: texto.trim(),
-    fecha: new Date().toISOString(),
-  };
-  const nuevas = [...notas, nota];
+  const data = await notasFetch(clienteId, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ texto }),
+  });
+  return parseNotas([data])[0];
+}
 
-  const { error } = await supabase
-    .from("clientes")
-    .update({ notas: nuevas, updated_at: new Date().toISOString() })
-    .eq("id", clienteId);
+/** Cambia el texto de una nota ya guardada. */
+export async function updateNotaCliente(
+  clienteId: string,
+  notaId: number,
+  texto: string
+): Promise<NotaCliente> {
+  const data = await notasFetch(clienteId, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: notaId, texto }),
+  });
+  return parseNotas([data])[0];
+}
 
-  if (error) console.error("[clientes] addNotaCliente:", error.message);
-  return nota;
+/** Borra una nota. */
+export async function deleteNotaCliente(clienteId: string, notaId: number): Promise<void> {
+  await notasFetch(clienteId, { method: "DELETE", qs: `?nota_id=${encodeURIComponent(String(notaId))}` });
 }
 
 export async function toggleEstado(id: string, estado: EstadoCliente): Promise<void> {

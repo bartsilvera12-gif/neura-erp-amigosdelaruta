@@ -535,15 +535,16 @@ function DonutChart({
         {segments.map((seg, i) => {
           const pct = total > 0 ? (seg.value / total) * 100 : 0;
           return (
-            /* `items-start` + texto que envuelve, en vez de `truncate`: con el
-               panel angosto la etiqueta quedaba cortada a dos letras («Con…»,
-               «Sin c…») o directamente invisible, y la leyenda dejaba de
-               explicar el gráfico, que es lo único que hace. Preferimos que
-               crezca hacia abajo antes que esconder el texto. */
-            <div key={i} className="flex items-start gap-2.5">
-              <div className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: seg.color }} />
+            /* La etiqueta nunca se corta: ni con `truncate` (quedaba «Con…»,
+               «Sin c…» y la leyenda dejaba de explicar el gráfico) ni partida a
+               la mitad de la palabra, que es lo que pasaba con `break-words`
+               cuando el panel se angosta («Saludabl» y la «e» abajo).
+               Va en una sola línea, y si el número no entra al lado es el
+               número el que baja, no el texto. */
+            <div key={i} className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
+              <div className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: seg.color }} />
               <span
-                className={`min-w-0 flex-1 break-words text-xs leading-tight ${isZ ? "" : "text-gray-600"}`}
+                className={`whitespace-nowrap text-xs leading-normal ${isZ ? "" : "text-gray-600"}`}
                 style={isZ ? { color: Z.text } : undefined}
                 title={seg.label}
               >
@@ -551,13 +552,13 @@ function DonutChart({
               </span>
               {legendDetail ? (
                 <span
-                  className="shrink-0 text-xs font-semibold tabular-nums"
+                  className="ml-auto shrink-0 text-xs font-semibold tabular-nums"
                   style={{ color: isZ ? Z.muted : "#1f2937" }}
                 >
                   {formatValue(seg.value)} · {pct.toFixed(1)}%
                 </span>
               ) : (
-                <span className={`shrink-0 text-xs font-bold tabular-nums ${isZ ? "" : "text-gray-800"}`} style={isZ ? { color: Z.muted } : undefined}>
+                <span className={`ml-auto shrink-0 text-xs font-bold tabular-nums ${isZ ? "" : "text-gray-800"}`} style={isZ ? { color: Z.muted } : undefined}>
                   {formatValue(seg.value)}
                 </span>
               )}

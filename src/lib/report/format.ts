@@ -9,13 +9,20 @@
 /** Monto completo con separador de miles: `Gs 1.234.567`. */
 export const gs = (n: number): string => "Gs " + Math.round(n || 0).toLocaleString("es-PY");
 
-/** Monto compacto: `Gs 1.2MM` / `Gs 3M` / `Gs 450K`. */
+/**
+ * Monto compacto: `Gs 1.2MM` / `Gs 3M` / `Gs 450.000`.
+ *
+ * Sin escalón de miles. En guaraníes los miles son la unidad de todos los días
+ * —una factura de Gs 450.000 es chica— y abreviarla a «Gs 450K» obliga a
+ * reconstruir el número mentalmente para leer algo que entraba entero.
+ * Los millones sí se abrevian: ahí la cifra completa no entra en una tarjeta
+ * ni en el eje de un gráfico.
+ */
 export const gsShort = (n: number): string => {
   const v = Math.abs(n || 0);
   if (v >= 1e9) return "Gs " + (n / 1e9).toFixed(1) + "MM";
   if (v >= 1e6) return "Gs " + (n / 1e6).toFixed(1) + "M";
-  if (v >= 1e3) return "Gs " + (n / 1e3).toFixed(0) + "K";
-  return "Gs " + Math.round(n || 0);
+  return "Gs " + Math.round(n || 0).toLocaleString("es-PY");
 };
 
 /** Variación con signo: `+12.3%` / `-4.0%` / `—` (null = no calculable). */

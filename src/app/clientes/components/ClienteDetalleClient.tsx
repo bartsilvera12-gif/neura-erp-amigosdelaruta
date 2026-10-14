@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   addNotaCliente,
+  updateNotaCliente,
+  deleteNotaCliente,
   clienteNombre,
   getCliente,
   toggleEstado,
@@ -408,6 +410,10 @@ export default function ClienteDetalleClient({
   const [nuevaNota,     setNuevaNota]     = useState("");
   const [guardandoNota, setGuardandoNota] = useState(false);
   const notaRef = useRef<HTMLTextAreaElement>(null);
+  /** Nota que se está editando y el texto en curso. */
+  const [notaEditando, setNotaEditando] = useState<{ id: number; texto: string } | null>(null);
+  /** Si el guardado falla hay que decirlo: antes el error moría en la consola. */
+  const [errorNota, setErrorNota] = useState<string | null>(null);
 
   // Suscripciones
   const [suscripciones, setSuscripciones] = useState<Suscripcion[]>([]);
@@ -1021,11 +1027,47 @@ export default function ClienteDetalleClient({
     e.preventDefault();
     if (!nuevaNota.trim()) return;
     setGuardandoNota(true);
-    await addNotaCliente(id, nuevaNota);
-    setNuevaNota("");
-    await cargar();
-    setGuardandoNota(false);
-    setTimeout(() => notaRef.current?.focus(), 0);
+    setErrorNota(null);
+    try {
+      await addNotaCliente(id, nuevaNota);
+      setNuevaNota("");
+      await cargar();
+    } catch (err) {
+      setErrorNota(err instanceof Error ? err.message : "No se pudo guardar la nota.");
+    } finally {
+      setGuardandoNota(false);
+      setTimeout(() => notaRef.current?.focus(), 0);
+    }
+  }
+
+  async function handleGuardarEdicionNota() {
+    if (!notaEditando || !notaEditando.texto.trim()) return;
+    setGuardandoNota(true);
+    setErrorNota(null);
+    try {
+      await updateNotaCliente(id, notaEditando.id, notaEditando.texto);
+      setNotaEditando(null);
+      await cargar();
+    } catch (err) {
+      setErrorNota(err instanceof Error ? err.message : "No se pudo guardar la nota.");
+    } finally {
+      setGuardandoNota(false);
+    }
+  }
+
+  async function handleBorrarNota(notaId: number) {
+    if (!window.confirm("¿Borrar esta nota? No se puede deshacer.")) return;
+    setGuardandoNota(true);
+    setErrorNota(null);
+    try {
+      await deleteNotaCliente(id, notaId);
+      if (notaEditando?.id === notaId) setNotaEditando(null);
+      await cargar();
+    } catch (err) {
+      setErrorNota(err instanceof Error ? err.message : "No se pudo borrar la nota.");
+    } finally {
+      setGuardandoNota(false);
+    }
   }
 
   async function handleGuardarTarea(e: React.FormEvent) {
@@ -2736,14 +2778,70 @@ export default function ClienteDetalleClient({
                 </button>
               </form>
 
+              {errorNota && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  {errorNota}
+                </div>
+              )}
+
               {cliente.notas.length === 0 ? (
                 <p className="text-sm text-gray-400 italic">No hay notas registradas aún.</p>
               ) : (
                 <div className="space-y-3">
                   {[...cliente.notas].reverse().map((nota: NotaCliente) => (
                     <div key={nota.id} className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3">
-                      <p className="text-sm text-gray-700 whitespace-pre-wrap">{nota.texto}</p>
-                      <p className="text-xs text-gray-400 mt-2">{formatFechaHora(nota.fecha)}</p>
+                      {notaEditando?.id === nota.id ? (
+                        <>
+                          <textarea
+                            value={notaEditando.texto}
+                            onChange={(e) =>
+                              setNotaEditando((n) => (n ? { ...n, texto: e.target.value } : n))
+                            }
+                            rows={3}
+                            className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[#4FAEB2]"
+                          />
+                          <div className="mt-2 flex gap-2">
+                            <button
+                              type="button"
+                              disabled={!notaEditando.texto.trim() || guardandoNota}
+                              onClick={() => void handleGuardarEdicionNota()}
+                              className="rounded-lg bg-[#4FAEB2] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-[#3F8E91] disabled:opacity-40"
+                            >
+                              Guardar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setNotaEditando(null)}
+                              className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-sm text-gray-700 whitespace-pre-wrap">{nota.texto}</p>
+                          <div className="mt-2 flex items-center justify-between gap-2">
+                            <p className="text-xs text-gray-400">{formatFechaHora(nota.fecha)}</p>
+                            <div className="flex gap-3">
+                              <button
+                                type="button"
+                                onClick={() => setNotaEditando({ id: nota.id, texto: nota.texto })}
+                                className="text-xs font-medium text-[#3F8E91] hover:underline"
+                              >
+                                Editar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleBorrarNota(nota.id)}
+                                className="text-xs font-medium text-rose-600 hover:underline"
+                              >
+                                Borrar
+                              </button>
+                            </div>
+                          </div>
+                        </>
+                      )}
                     </div>
                   ))}
                 </div>
