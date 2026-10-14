@@ -165,6 +165,15 @@ const MENU_STRUCTURE_COMPLETO: MenuItem[] = [
     // Bancos cuelga de acá y no de Configuración, que no está en el menú de esta
     // instancia: sin esto el catálogo era inalcanzable. Es además donde se usan.
     { label: "Bancos", href: "/cobranzas/bancos" },
+    /*
+     * Conciliacion bancaria existia como pantalla pero no estaba en el menu, y
+     * es donde se APRUEBAN los cobros. Cobrar una factura (desde Pagos o desde
+     * Cobranzas) no descuenta el saldo: crea un pendiente que alguien tiene que
+     * aprobar aca. Sin esta entrada los cobros se acumulaban sin que nadie
+     * pudiera cerrarlos, y la factura quedaba pendiente para siempre. QA lo
+     * reporto como "no registra el pago".
+     */
+    { label: "Conciliación bancaria", href: "/cobranzas/conciliacion" },
   ]},
   { key: "comisiones", slug: "comisiones", label: "Comisiones", href: "/comisiones", icon: Percent },
   {
