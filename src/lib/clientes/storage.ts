@@ -80,6 +80,24 @@ function parseNotas(notas: unknown): NotaCliente[] {
     }));
 }
 
+/*
+ * Tipo de cliente tolerante a cómo esté escrito en la base.
+ *
+ * Antes era `row.tipo_cliente === "persona" ? "persona" : "empresa"`: cualquier
+ * cosa que no fuera exactamente «persona» —un NULL, un «Persona» con mayúscula,
+ * un «física» heredado— caía en «empresa». El resultado era que el filtro por
+ * Empresa mostraba a todos y el filtro por Persona no mostraba a nadie, que es
+ * justo lo que reportó QA.
+ */
+function tipoClienteDe(v: unknown): Cliente["tipo_cliente"] {
+  const t = String(v ?? "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase();
+  return t === "persona" || t === "fisica" || t === "particular" ? "persona" : "empresa";
+}
+
 function rowToCliente(row: SupabaseRow): Cliente {
   const nombreContacto = row.nombre_contacto ?? row.nombre ?? "";
   const now = new Date().toISOString();
@@ -87,7 +105,7 @@ function rowToCliente(row: SupabaseRow): Cliente {
   const c: Cliente = {
     id:                  idRow,
     codigo_cliente:      idRow ? `CL-${idRow.slice(0, 8).toUpperCase()}` : "CL-????????",
-    tipo_cliente:        (row.tipo_cliente === "persona" ? "persona" : "empresa") as Cliente["tipo_cliente"],
+    tipo_cliente:        tipoClienteDe(row.tipo_cliente),
     empresa:             row.empresa ?? undefined,
     razon_social:        row.razon_social ?? undefined,
     ruc_factura:         row.ruc_factura ?? undefined,

@@ -115,6 +115,20 @@ export default function EventosClient({ seccion }: { seccion: SeccionEventos }) 
   const valorDe = (clave: string, fila: Fila | null, campo: string) =>
     draft[clave]?.[campo] !== undefined ? draft[clave][campo] : fila?.[campo];
 
+  /*
+   * La base exige que el slug sea `^[a-z0-9]+(-[a-z0-9]+)*$`. Escribirlo a mano
+   * terminaba casi siempre en un error de Postgres sin traducir
+   * («violates check constraint "eventos_slug_chk"»), porque cualquier
+   * mayúscula, acento o espacio lo rompe. Se normaliza mientras se escribe.
+   */
+  const aSlug = (v: string): string =>
+    v
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")   // saca los acentos: «Ñ» → «N», «á» → «a»
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+
   const nombreEvento = (id: unknown) => {
     const e = data.eventos.find((x) => String(x.id) === String(id));
     return e ? textoDe(e.nombre, "es") || String(e.slug ?? "") : "—";
@@ -129,8 +143,19 @@ export default function EventosClient({ seccion }: { seccion: SeccionEventos }) 
             className={input}
             placeholder="route-66"
             value={String(valorDe(clave, e, "slug") ?? "")}
-            onChange={(ev) => setCampo(clave, "slug", ev.target.value)}
+            onChange={(ev) => setCampo(clave, "slug", aSlug(ev.target.value))}
+            onBlur={() => {
+              // Vacío al salir: se deduce del nombre en castellano.
+              if (String(valorDe(clave, e, "slug") ?? "").trim()) return;
+              const nom = valorDe(clave, e, "nombre");
+              const es = nom && typeof nom === "object" ? (nom as Record<string, unknown>).es : nom;
+              const auto = aSlug(typeof es === "string" ? es : "");
+              if (auto) setCampo(clave, "slug", auto);
+            }}
           />
+          <p className="mt-1 text-[11px] text-slate-400">
+            Sólo minúsculas, números y guiones. Si lo dejás vacío se arma con el nombre.
+          </p>
         </div>
         <div>
           <div className={lbl}>País</div>
@@ -226,8 +251,13 @@ export default function EventosClient({ seccion }: { seccion: SeccionEventos }) 
           <input
             type="number"
             className={input}
-            value={Number(valorDe(clave, e, "orden") ?? 0)}
-            onChange={(ev) => setCampo(clave, "orden", Number(ev.target.value))}
+            /* Sin `Number()` sobre el valor mostrado: con el campo en 0, borrar
+               el 0 daba "" y `Number("")` lo devolvia a 0, asi que no habia
+               forma de vaciarlo y todo lo que se escribia quedaba detras del
+               cero. Se guarda el texto y se convierte al salir. */
+            value={String(valorDe(clave, e, "orden") ?? "")}
+            onChange={(ev) => setCampo(clave, "orden", ev.target.value)}
+            onBlur={(ev) => setCampo(clave, "orden", ev.target.value === "" ? 0 : Number(ev.target.value))}
           />
         </div>
       </div>
