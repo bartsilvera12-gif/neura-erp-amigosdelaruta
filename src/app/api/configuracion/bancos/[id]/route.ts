@@ -3,6 +3,7 @@ import { esRolAdminEmpresaOGlobal } from "@/lib/auth/rol-empresa";
 import { errorResponse, successResponse } from "@/lib/api/response";
 import { getChatServiceClientForEmpresa } from "@/lib/supabase/chat-service-role-empresa";
 import { requireTenantUserApiAccess } from "@/lib/contabilidad/contabilidad-auth";
+import { TIPOS_ENTIDAD } from "@/app/api/configuracion/bancos/route";
 
 export const runtime = "nodejs";
 
@@ -29,6 +30,8 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
       nombre?: unknown;
       activo?: unknown;
       sort_order?: unknown;
+      codigo?: unknown;
+      tipo?: unknown;
     };
     const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (typeof body.nombre === "string") {
@@ -39,6 +42,13 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
     }
     if (typeof body.activo === "boolean") patch.activo = body.activo;
     if (body.sort_order != null && Number.isFinite(Number(body.sort_order))) patch.sort_order = Number(body.sort_order);
+    /* Sólo si la pantalla los mandó: la base puede no tener esas columnas
+       todavía (script 07) y la pantalla no las ofrece en ese caso. */
+    if (typeof body.codigo === "string") {
+      const c = body.codigo.trim().toUpperCase().slice(0, 20);
+      patch.codigo = c || null;
+    }
+    if (typeof body.tipo === "string" && TIPOS_ENTIDAD.includes(body.tipo)) patch.tipo = body.tipo;
 
     const supabase = await getChatServiceClientForEmpresa(auth.empresaId);
     const { data, error } = await supabase
@@ -46,7 +56,7 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
       .update(patch)
       .eq("id", id)
       .eq("empresa_id", auth.empresaId)
-      .select("id, nombre, activo, sort_order")
+      .select("*")
       .single();
 
     if (error) {
@@ -58,5 +68,48 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
   } catch (e) {
     const message = e instanceof Error ? e.message : "No se pudo actualizar el banco";
     return NextResponse.json(errorResponse(message), { status: 400 });
+  }
+}
+
+/**
+ * DELETE — borra un banco del catálogo. Solo admin.
+ *
+ * Existe porque hasta ahora sólo se podía desactivar, y un banco cargado mal
+ * (un nombre con una errata) quedaba para siempre ocupando el nombre, que es
+ * único por empresa. Si el banco ya se usó en algún cobro, la FK lo impide y se
+ * devuelve el motivo en lugar de un error crudo: ahí corresponde desactivarlo.
+ */
+export async function DELETE(request: Request, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    const auth = await requireTenantUserApiAccess(request);
+    if (!auth.ok) return NextResponse.json(errorResponse(auth.message), { status: auth.status });
+    if (!esAdmin(auth.rol)) {
+      return NextResponse.json(errorResponse("Sin permiso para editar el catálogo de bancos"), { status: 403 });
+    }
+
+    const { id } = await ctx.params;
+    if (!id) return NextResponse.json(errorResponse("Falta el id"), { status: 400 });
+
+    const supabase = await getChatServiceClientForEmpresa(auth.empresaId);
+    const { error } = await supabase
+      .from("bancos")
+      .delete()
+      .eq("empresa_id", auth.empresaId)
+      .eq("id", id);
+
+    if (error) {
+      // 23503 = foreign_key_violation: el banco ya figura en un cobro.
+      if (error.code === "23503") {
+        return NextResponse.json(
+          errorResponse("Ese banco ya se usó en un cobro, así que no se puede borrar. Desactivalo para que deje de ofrecerse."),
+          { status: 409 }
+        );
+      }
+      return NextResponse.json(errorResponse(error.message), { status: 400 });
+    }
+    return NextResponse.json(successResponse({ ok: true }));
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "No se pudo borrar el banco";
+    return NextResponse.json(errorResponse(message), { status: 500 });
   }
 }

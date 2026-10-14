@@ -1,6 +1,6 @@
 "use client";
 
-import { Wallet, ShoppingCart, Scale, Megaphone, BookText, BookOpen, Layers, HandCoins, BookMarked, Repeat, Tags } from "lucide-react";
+import { Wallet, ShoppingCart, Scale, Megaphone, BookText, BookOpen, Layers, HandCoins, BookMarked, Repeat } from "lucide-react";
 import { SettingsModuleCard } from "@/components/config/SettingsModuleCard";
 
 type ReporteCard = {
@@ -92,14 +92,18 @@ const REPORTES: ReporteCard[] = [
     icon: Megaphone,
     href: "/reportes/campanas-meta",
   },
-  {
-    title: "Tipificaciones",
-    subtitle: "Atención",
-    description:
-      "Volumen de tipificaciones por Estado (Solicitud, Reclamo, Consulta…) con desglose en sub-estados y ranking por usuario. Marca cuántas generaron un ticket de Soporte. Filtrable por fecha, cliente y usuario.",
-    icon: Tags,
-    href: "/reportes/tipificaciones",
-  },
+  // «Tipificaciones» — COMENTADO. Es el mismo módulo que se quitó de Gestión de
+  // clientes: mide volumen de tipificaciones por estado y cuántas generaron un
+  // ticket de Soporte. Sin forma de crearlas, el reporte queda vacío para
+  // siempre. La pantalla y su API siguen en el repo.
+  // {
+  //   title: "Tipificaciones",
+  //   subtitle: "Atención",
+  //   description:
+  //     "Volumen de tipificaciones por Estado (Solicitud, Reclamo, Consulta…) con desglose en sub-estados y ranking por usuario. Marca cuántas generaron un ticket de Soporte. Filtrable por fecha, cliente y usuario.",
+  //   icon: Tags,
+  //   href: "/reportes/tipificaciones",
+  // },
 ];
 
 export default function ReportesPage() {
