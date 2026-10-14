@@ -250,7 +250,7 @@
       pasos: [
         { a: "Entrar con una contraseña equivocada.", e: "Rechaza con un mensaje claro. <b>No</b> entra ni queda cargando." },
         { a: "Entrar con el usuario y la contraseña que te pasó el equipo.", e: "Llega al Dashboard." },
-        { a: "Contar los ítems del menú lateral.", e: "Son <b>16</b>: Dashboard, Gerencia, Reportes, Caja, Inventario, Clientes, Compras, Gastos, Pagos, Cobranzas, Notas de crédito, Gestión Clientes, Proyectos, Agenda, Eventos y Web." },
+        { a: "Contar los ítems del menú lateral.", e: "Son <b>16</b>: Dashboard, Gerencia, Reportes, Caja, Inventario, Clientes, Compras, Gastos, Pagos, Cobranzas, Notas de crédito, Gestión Clientes, Operación, Agenda, Eventos y Web." },
         { a: "Buscar Usuarios o Configuración en el menú.", e: "<b>No</b> aparecen. Es lo esperado." },
         { a: "Colapsar y expandir el menú con el botón de la izquierda.", e: "Se achica a íconos y vuelve, sin tapar el contenido." },
         { a: "Marcar un favorito con la estrella de cualquier ítem.", e: "Sube a Favoritos y sigue ahí al recargar." },
@@ -411,13 +411,19 @@
       ]
     },
     {
-      t: "Proyectos", ruta: "/dashboard/proyectos",
-      porque: "Depende del script 04: sin esos catálogos el Kanban abre sin columnas.",
+      t: "Operación", ruta: "/dashboard/operacion", pill: "módulo nuevo",
+      porque: "Reemplaza al viejo Proyectos, que servía para gestionar desarrollos de software. Necesita al menos un viaje con su salida cargados en Eventos.",
       pasos: [
-        { a: "Abrir el módulo.", e: "El Kanban muestra sus <b>13</b> columnas, de “Nuevo / Pendiente de brief” a “Cancelado”." },
-        { a: "Crear un proyecto.", e: "Aparece en la primera columna. Si no deja crear, faltó correr el 04." },
-        { a: "Arrastrarlo a otra columna.", e: "Queda en la nueva y se mantiene al recargar." },
-        { a: "Abrir la ficha del proyecto.", e: "Se puede asignar prioridad entre Baja, Media, Alta y Urgente." }
+        { a: "Abrir <b>Operación</b> desde el menú (antes decía Proyectos).", e: "Lista las salidas cargadas en Eventos, con su fecha, cuántas reservas tiene, el avance de la preparación, los ingresos, los costos y el margen." },
+        { a: "Si no hay ninguna salida, abrir Eventos y crear un viaje con una salida.", e: "Al volver a Operación, esa salida aparece en la lista." },
+        { a: "Tocar una salida.", e: "Se abre abajo el detalle, con dos paneles: <b>Preparación</b> y <b>Costos</b>." },
+        { a: "Agregar una tarea, por ejemplo «Reservar hotel», categoría Hotel y una fecha límite.", e: "Queda listada como Pendiente." },
+        { a: "Cambiarle el estado a <b>Hecha</b> con el desplegable de la propia tarea.", e: "Cambia de color y la barra de preparación de esa salida sube." },
+        { a: "Agregar un costo, por ejemplo «15 noches hotel», con un monto estimado.", e: "Aparece en la tabla y el margen de la salida baja en ese monto." },
+        { a: "Cargarle el <b>monto real</b> a ese costo, distinto del estimado.", e: "El margen se recalcula con el real. El estimado se sigue viendo al lado: no se pisa." },
+        { a: "Dejar un segundo costo <b>sin</b> monto real y mirar el total.", e: "Ese usa el estimado y el otro el real. Es a propósito: mientras un proveedor facturó y otro no, el margen tiene que usar lo mejor que hay de cada línea." },
+        { a: "Mirar los ingresos contra las reservas de esa salida en Eventos.", e: "Coinciden, contando sólo las que ya son venta. Una reserva en estado <b>cotización</b> no suma: es una consulta, no una venta." },
+        { a: "Borrar una tarea y un costo.", e: "Piden confirmación y desaparecen; los totales se recalculan." }
       ]
     },
     {

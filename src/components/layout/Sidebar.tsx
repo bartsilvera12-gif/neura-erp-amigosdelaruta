@@ -242,10 +242,13 @@ const MENU_STRUCTURE_COMPLETO: MenuItem[] = [
     icon: Gauge,
   },
   {
+    // «Operación» ocupa el lugar que tenía Proyectos. Conserva el slug para no
+    // tocar `empresa_modulos`: el permiso es el mismo, cambia la pantalla.
+    // El tablero viejo (desarrollos de software) sigue en el repo, sin entrada.
     key: "proyectos",
     slug: "proyectos",
-    label: "Proyectos",
-    href: "/dashboard/proyectos",
+    label: "Operación",
+    href: "/dashboard/operacion",
     icon: FolderKanban,
   },
   {

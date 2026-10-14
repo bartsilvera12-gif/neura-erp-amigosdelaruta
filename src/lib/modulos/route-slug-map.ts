@@ -24,7 +24,7 @@ const SIDEBAR_SLUG_HREF_ORDER: { slug: string; href: string }[] = [
   { slug: "gastos", href: "/gastos" },
   { slug: "notas_credito", href: "/notas-credito" },
   { slug: "reportes", href: "/reportes" },
-  { slug: "proyectos", href: "/dashboard/proyectos" },
+  { slug: "proyectos", href: "/dashboard/operacion" },
   { slug: "agenda", href: "/dashboard/agenda" },
   { slug: "eventos", href: "/eventos" },
   { slug: "web", href: "/web" },
@@ -108,6 +108,8 @@ export function pathRequiresModuleSlug(pathname: string): string | null {
     // Gerencia tenía su gate faltante y caía al fallback "conversaciones" (bug); explícito acá.
     if (p.startsWith("/dashboard/gerencia")) return "gerencia";
     if (p.startsWith("/dashboard/proyectos")) return "proyectos";
+  // «Operación» reemplaza a Proyectos y comparte su permiso.
+  if (p.startsWith("/dashboard/operacion")) return "proyectos";
     if (p.startsWith("/dashboard/agenda")) return "agenda";
     if (p.startsWith("/dashboard/conversaciones-finalizadas")) return "conversaciones-finalizadas";
     if (p.startsWith("/dashboard/historial-omnicanal")) return "historial-omnicanal";
