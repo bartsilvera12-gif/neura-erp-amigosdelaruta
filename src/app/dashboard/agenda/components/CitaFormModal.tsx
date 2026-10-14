@@ -42,7 +42,8 @@ function diffMin(hi: string, hf: string): number | null {
 }
 
 import { FancySelect } from "@/app/dashboard/proyectos/components/FancySelect";
-import { ResponsablesSelect } from "@/app/dashboard/agenda/components/ResponsablesSelect";
+// Oculto junto con el campo Responsables (ver el bloque comentado más abajo).
+// import { ResponsablesSelect } from "@/app/dashboard/agenda/components/ResponsablesSelect";
 import { FechaSelect } from "@/components/ui/FechaSelect";
 
 const inputCls =
@@ -319,6 +320,12 @@ export default function CitaFormModal({
                 <input className={inputCls} value={titulo} onChange={(e) => setTitulo(e.target.value)} placeholder="Ej: Demo con cliente" />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {/* Responsables: oculto a pedido de ADR. La lista de personas del ERP
+                    no es la gente que opera una salida, y la cita queda igual a cargo
+                    de quien la crea: la API completa el responsable con el usuario de
+                    la sesión cuando no viene ninguno. Se deja comentado por si vuelve
+                    a hacer falta.
+
                 <div className="col-span-1 sm:col-span-2 lg:col-span-3">
                   <label className={labelCls}>Responsables</label>
                   <ResponsablesSelect
@@ -327,18 +334,16 @@ export default function CitaFormModal({
                     principalId={responsableId || null}
                     onChange={(ids) => {
                       setResponsableIds(ids);
-                      // El principal es SIEMPRE el primero de la lista. Si se
-                      // lo saca, hereda el siguiente; si no queda ninguno, se
-                      // vacía y el formulario lo pide al guardar.
                       setResponsableId(ids[0] ?? "");
                     }}
                   />
                   <p className="mt-1 text-[11px] text-slate-400">
-                    Si no elegís a nadie, la cita queda a tu cargo. El primero de la lista es el
-                    responsable principal; el horario se valida contra su agenda y todos reciben
-                    el recordatorio.
+                    Si no elegís a nadie, la cita queda a tu cargo. El primero de la lista
+                    es el responsable principal; el horario se valida contra su agenda y
+                    todos reciben el recordatorio.
                   </p>
                 </div>
+                */}
                 <div>
                   <label className={labelCls}>Tipo</label>
                   <FancySelect
