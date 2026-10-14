@@ -44,8 +44,8 @@ export default function ZentraLoader({
 
       <div className="relative z-10 h-32 w-[15rem] sm:h-40 sm:w-[18rem]">
         <Image
-          src="/brand/zentra-logo-official.png"
-          alt="ZENTRA"
+          src="/brand/adr-logo.png"
+          alt="Amigos de la Ruta"
           fill
           sizes="(min-width: 640px) 18rem, 15rem"
           className="object-contain object-center drop-shadow-[0_8px_30px_rgba(0,0,0,0.15)]"

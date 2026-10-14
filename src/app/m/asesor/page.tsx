@@ -125,7 +125,7 @@ export default function MAsesorInboxPage() {
         style={{ paddingTop: "calc(env(safe-area-inset-top) + 0.75rem)" }}
       >
         <h1 className="text-base font-semibold">{supervision ? "Conversaciones" : "Mis conversaciones"}</h1>
-        <p className="text-[11px] text-white/80">Contact Center · Neura</p>
+        <p className="text-[11px] text-white/80">Contact Center</p>
         <input
           type="search"
           inputMode="search"

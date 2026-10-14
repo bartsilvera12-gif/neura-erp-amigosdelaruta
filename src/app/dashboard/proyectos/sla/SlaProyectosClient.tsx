@@ -534,7 +534,7 @@ export default function SlaProyectosClient() {
         @media print{body{margin:14mm}}
       </style></head><body>
       <div class="head">
-        <div><div class="brand">NEURA · ERP</div><h1>Dashboard SLA — Proyectos</h1><div class="muted">Resumen diario para Directorio</div></div>
+        <div><div class="brand">AMIGOS DE LA RUTA</div><h1>Dashboard SLA — Proyectos</h1><div class="muted">Resumen diario para Directorio</div></div>
         <div class="muted">Fecha: ${data.fecha_ref}<br/>Generado: ${new Date().toLocaleString("es-PY")}</div>
       </div>
       <div class="kpis">
