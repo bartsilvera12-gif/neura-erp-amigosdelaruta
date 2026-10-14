@@ -225,7 +225,8 @@ export default function CitaFormModal({
     const inicioIso = combinar(fecha, horaInicio);
     const finIso = combinar(fecha, horaFin);
     if (mode !== "reprogramar" && !titulo.trim()) return setError("El título es obligatorio.");
-    if (!responsableId) return setError("Elegí al menos un responsable.");
+    /* El responsable dejó de ser obligatorio: si no se elige a nadie, el
+       servidor deja la cita a cargo de quien la está creando. */
     if (!inicioIso || !finIso) return setError("Indicá fecha, hora de inicio y fin.");
     if (Date.parse(finIso) <= Date.parse(inicioIso)) return setError("El fin debe ser posterior al inicio.");
 
@@ -319,7 +320,7 @@ export default function CitaFormModal({
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 <div className="col-span-1 sm:col-span-2 lg:col-span-3">
-                  <label className={labelCls}>Responsables *</label>
+                  <label className={labelCls}>Responsables</label>
                   <ResponsablesSelect
                     opciones={options.responsables}
                     valor={responsableIds}
@@ -332,17 +333,11 @@ export default function CitaFormModal({
                       setResponsableId(ids[0] ?? "");
                     }}
                   />
-                  {options.responsables.length === 0 ? (
-                    <p className="mt-1 text-[11px] font-medium text-amber-700">
-                      No hay usuarios activos para asignar como responsable, así que la cita no se
-                      va a poder guardar. Revisá los usuarios de la empresa.
-                    </p>
-                  ) : (
-                    <p className="mt-1 text-[11px] text-slate-400">
-                      El primero es el responsable principal; el horario se valida contra su agenda.
-                      Todos reciben el recordatorio.
-                    </p>
-                  )}
+                  <p className="mt-1 text-[11px] text-slate-400">
+                    Si no elegís a nadie, la cita queda a tu cargo. El primero de la lista es el
+                    responsable principal; el horario se valida contra su agenda y todos reciben
+                    el recordatorio.
+                  </p>
                 </div>
                 <div>
                   <label className={labelCls}>Tipo</label>

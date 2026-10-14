@@ -246,11 +246,11 @@
   const PLAN = [
     {
       t: "Acceso y menú", ruta: "/login", pill: "bloquea todo",
-      porque: "Si el menú no muestra los 15 ítems, el problema está en empresa_modulos y no tiene sentido seguir.",
+      porque: "Si el menú no muestra los 16 ítems, el problema está en empresa_modulos y no tiene sentido seguir.",
       pasos: [
         { a: "Entrar con una contraseña equivocada.", e: "Rechaza con un mensaje claro. <b>No</b> entra ni queda cargando." },
         { a: "Entrar con el usuario y la contraseña que te pasó el equipo.", e: "Llega al Dashboard." },
-        { a: "Contar los ítems del menú lateral.", e: "Son <b>15</b>: Dashboard, Gerencia, Reportes, Caja, Inventario, Clientes, Compras, Gastos, Pagos, Cobranzas, Notas de crédito, Gestión Clientes, Proyectos, Eventos y Web. <b>Agenda ya no está</b>: se quitó el módulo." },
+        { a: "Contar los ítems del menú lateral.", e: "Son <b>16</b>: Dashboard, Gerencia, Reportes, Caja, Inventario, Clientes, Compras, Gastos, Pagos, Cobranzas, Notas de crédito, Gestión Clientes, Proyectos, Agenda, Eventos y Web." },
         { a: "Buscar Usuarios o Configuración en el menú.", e: "<b>No</b> aparecen. Es lo esperado." },
         { a: "Colapsar y expandir el menú con el botón de la izquierda.", e: "Se achica a íconos y vuelve, sin tapar el contenido." },
         { a: "Marcar un favorito con la estrella de cualquier ítem.", e: "Sube a Favoritos y sigue ahí al recargar." },
@@ -418,6 +418,20 @@
         { a: "Crear un proyecto.", e: "Aparece en la primera columna. Si no deja crear, faltó correr el 04." },
         { a: "Arrastrarlo a otra columna.", e: "Queda en la nueva y se mantiene al recargar." },
         { a: "Abrir la ficha del proyecto.", e: "Se puede asignar prioridad entre Baja, Media, Alta y Urgente." }
+      ]
+    },
+    {
+      t: "Agenda", ruta: "/dashboard/agenda", pill: "se reportó",
+      porque: "Necesita clientes cargados y al menos uno dado de baja para probar el filtro del selector.",
+      pasos: [
+        { a: "Abrir el módulo.", e: "Carga el calendario." },
+        { a: "Tocar + (Nueva Cita), poner título, fecha y hora, y guardar <b>sin elegir responsable</b>.", e: "Guarda igual y la cita queda a tu cargo. El campo ya <b>no</b> es obligatorio: antes exigía elegir de una lista que podía estar vacía, y entonces no se podía guardar ninguna cita." },
+        { a: "Abrir el desplegable de <b>Responsables</b>.", e: "Estás vos en la lista, aunque no haya otros usuarios cargados." },
+        { a: "Abrir el desplegable de <b>Cliente</b>.", e: "Sólo aparecen clientes existentes. Un cliente borrado o dado de baja <b>no</b> tiene que estar." },
+        { a: "Llenar mal el formulario a propósito (por ejemplo sin título) y tocar Guardar.", e: "El error aparece <b>al lado del botón Guardar</b>, donde se ve sin scrollear." },
+        { a: "Dar de baja en Clientes a un cliente que ya tenga una cita, y después abrir esa cita para editarla.", e: "El cliente sigue ahí, con la aclaración «(dado de baja)». No puede quedar en blanco ni perder el cliente al guardar." },
+        { a: "Reprogramar la cita a otro día.", e: "Se mueve y persiste." },
+        { a: "Cambiar de vista (día / semana / mes / listado).", e: "Las cuatro vistas cargan bien." }
       ]
     },
     {

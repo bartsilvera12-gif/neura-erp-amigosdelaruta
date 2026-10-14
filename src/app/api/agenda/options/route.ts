@@ -64,6 +64,16 @@ export async function GET(request: Request) {
       .filter((u) => (u.estado == null || u.estado === "activo"))
       .map((u) => ({ id: String(u.id), nombre: (u.nombre as string | null) ?? null, rol: (u.rol as string | null) ?? null }));
 
+    /*
+     * Quien está usando el ERP figura siempre, aunque su ficha no haya salido en
+     * la consulta de arriba (ficha sin `estado`, dada de baja, o lista vacía).
+     * Sin esto el selector podía quedar en cero y no había manera de guardar una
+     * cita, que es lo que reportó QA.
+     */
+    if (auth.usuarioCatalogId && !responsables.some((r) => r.id === auth.usuarioCatalogId)) {
+      responsables.unshift({ id: auth.usuarioCatalogId, nombre: "Yo", rol: null });
+    }
+
     /* Un cliente dado de baja no se puede agendar: se filtra con el mismo
        criterio que los usuarios de arriba. La cita que YA lo tenia no se toca
        -- el formulario lo agrega a mano desde los datos de la cita (ver

@@ -79,7 +79,16 @@ export async function POST(request: Request) {
     }
 
     const titulo = typeof body.titulo === "string" ? body.titulo.trim() : "";
-    const responsableId = optStr(body.responsable_id);
+    /*
+     * Si no se eligió responsable, queda a cargo de quien crea la cita.
+     *
+     * Antes era obligatorio elegirlo de una lista, y esa lista sale de los
+     * usuarios de la empresa: en una instancia sin usuarios cargados no había
+     * forma de guardar NINGUNA cita. Quien está agendando es, por definición,
+     * un usuario de la empresa, así que siempre hay un responsable válido a
+     * mano. Elegir a otro sigue siendo posible; ya no es un requisito.
+     */
+    const responsableId = optStr(body.responsable_id) ?? auth.usuarioCatalogId ?? null;
     const inicioIso = parseIso(body.inicio_at);
     const finIso = parseIso(body.fin_at);
 
@@ -87,7 +96,11 @@ export async function POST(request: Request) {
       return NextResponse.json(errorResponse("titulo es obligatorio"), { status: 400 });
     }
     if (!responsableId) {
-      return NextResponse.json(errorResponse("responsable_id es obligatorio"), { status: 400 });
+      // Sólo si además el que llama no tiene ficha de usuario, que no debería pasar.
+      return NextResponse.json(
+        errorResponse("No se pudo determinar el responsable de la cita."),
+        { status: 400 }
+      );
     }
     if (!inicioIso || !finIso) {
       return NextResponse.json(errorResponse("inicio_at y fin_at deben ser fechas válidas"), {
