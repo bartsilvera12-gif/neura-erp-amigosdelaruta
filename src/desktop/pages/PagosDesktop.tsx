@@ -146,10 +146,38 @@ export default function PagosPage() {
     [rangoFechas]
   );
 
+  /*
+   * Facturas con un cobro ya enviado y esperando aprobacion en Conciliacion
+   * bancaria. Sin esto la pantalla miente: el cobro se registro, pero la
+   * factura sigue con su saldo intacto (recien se descuenta cuando un
+   * administrador lo aprueba) y el boton "Cobrar" sigue ahi, como si no
+   * hubiera pasado nada. QA lo reporto como "no registra el pago".
+   *
+   * El listado de pendientes es de cobranzas: si el usuario no tiene ese
+   * permiso la llamada falla y no se muestra ningun aviso, que es exactamente
+   * el comportamiento anterior.
+   */
+  const [facturasEnAprobacion, setFacturasEnAprobacion] = useState<Set<string>>(new Set());
+
+  const cargarPendientesDeAprobacion = useCallback(async () => {
+    try {
+      const res = await fetchWithSupabaseSession("/api/cobranzas/conciliacion?estado=pendiente", { cache: "no-store" });
+      if (!res.ok) return;
+      const json = (await res.json()) as { success?: boolean; data?: { factura_id?: string }[] };
+      if (!json?.success || !Array.isArray(json.data)) return;
+      setFacturasEnAprobacion(
+        new Set(json.data.map((r) => r?.factura_id).filter((x): x is string => !!x))
+      );
+    } catch {
+      // Sin permiso o sin red: se sigue sin el aviso.
+    }
+  }, []);
+
   useEffect(() => {
     getFacturas().then(setFacturas);
     getClientes().then(setClientes);
-  }, []);
+    void cargarPendientesDeAprobacion();
+  }, [cargarPendientesDeAprobacion]);
 
   const mapNombreTipoServicio = useMapNombreTipoServicioCatalogo(clientes);
 
@@ -613,17 +641,29 @@ export default function PagosPage() {
                         </span>
                       </td>
                       <td className="whitespace-nowrap py-3 pl-1 pr-3 last:pr-5 sm:pl-1.5 sm:pr-4">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setFacturaSeleccionada(f);
-                            setModalPago(true);
-                          }}
-                          className="inline-flex items-center gap-1 rounded-lg bg-[#4FAEB2] px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-sm shadow-[#4FAEB2]/25 transition-colors hover:bg-[#3F8E91]"
-                        >
-                          <IconCash className="h-3.5 w-3.5" />
-                          Cobrar
-                        </button>
+                        {facturasEnAprobacion.has(f.id) ? (
+                          /* Ya se mando un cobro por esta factura. El saldo no baja
+                             hasta que lo aprueben, asi que sin este aviso la fila se
+                             ve identica a una sin cobrar. */
+                          <span
+                            className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] font-semibold text-amber-700"
+                            title="El cobro ya se registro y espera aprobacion en Conciliacion bancaria. El saldo se actualiza cuando lo aprueben."
+                          >
+                            Cobro enviado · esperando aprobación
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFacturaSeleccionada(f);
+                              setModalPago(true);
+                            }}
+                            className="inline-flex items-center gap-1 rounded-lg bg-[#4FAEB2] px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-sm shadow-[#4FAEB2]/25 transition-colors hover:bg-[#3F8E91]"
+                          >
+                            <IconCash className="h-3.5 w-3.5" />
+                            Cobrar
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -866,6 +906,7 @@ export default function PagosPage() {
         }}
         onExito={async () => {
           getFacturas().then(setFacturas);
+          void cargarPendientesDeAprobacion();
           if (tab === "cobrados") fetchCobrados();
         }}
       />

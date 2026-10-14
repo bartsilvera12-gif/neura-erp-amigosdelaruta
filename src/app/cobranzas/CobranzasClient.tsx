@@ -1040,7 +1040,10 @@ function RegistrarPagoModal({
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4" onClick={onCancel}>
-      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+      {/* El formulario es largo (fecha, banco, numero de operacion, comprobante):
+          sin tope de alto el panel crece mas que la ventana y los botones quedan
+          fuera de alcance, porque el fondo fijo no scrollea. */}
+      <div className="flex max-h-[90dvh] w-full max-w-md flex-col overflow-y-auto overscroll-contain rounded-2xl border border-slate-200 bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <h3 className="text-base font-semibold text-slate-900">Registrar cobro</h3>
         <p className="mt-0.5 text-[11px] text-slate-500">
           Cobro por transferencia. Queda <b>pendiente de aprobación</b> en Conciliación bancaria.
