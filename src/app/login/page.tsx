@@ -46,8 +46,8 @@ export default function LoginPage() {
       <div className="flex w-full max-w-[22rem] shrink-0 flex-col items-center gap-3 sm:max-w-sm sm:gap-4">
         <div className="w-full max-w-[13.5rem] shrink-0 sm:max-w-[15rem]">
           <Image
-            src="/brand/adr-logo.png"
-            alt="Amigos de la Ruta"
+            src="/brand/zentra-logo-official.png"
+            alt="ZENTRA"
             width={480}
             height={264}
             priority

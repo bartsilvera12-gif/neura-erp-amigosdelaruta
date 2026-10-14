@@ -210,8 +210,8 @@ export default function MobileMenu({
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[color:var(--zentra-sidebar-border)] bg-[color:var(--zentra-sidebar-elevated)]/35 px-3 py-3">
           <Link href="/" onClick={onClose} className="flex items-center">
             <Image
-              src="/brand/adr-logo.png"
-              alt="Amigos de la Ruta"
+              src="/brand/zentra-logo-official.png"
+              alt="ZENTRA"
               width={160}
               height={48}
               sizes="160px"
