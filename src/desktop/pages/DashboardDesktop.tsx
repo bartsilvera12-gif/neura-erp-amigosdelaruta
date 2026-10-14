@@ -243,6 +243,33 @@ function formatGsM(n: number): string {
   return num.toLocaleString("es-PY");
 }
 
+/**
+ * Abrevia `n` con la unidad que le corresponde a `referencia`, no a sí mismo.
+ *
+ * Sirve para parejas avance/objetivo: si la meta está en millones, el avance
+ * también se muestra en millones aunque sea chico. Comparar «100K» contra
+ * «80M» obliga a hacer la cuenta mentalmente; «0,1M» contra «80M», no.
+ */
+function formatGsEscala(n: number, referencia: number): string {
+  const num = Number(n);
+  const ref = Math.abs(Number(referencia));
+  if (!Number.isFinite(num)) return "0";
+  // Cero es cero: «0M» no dice nada que «0» no diga, y encima confunde.
+  if (num === 0) return "0";
+
+  /** Recorta los ceros que sobran a la derecha: 1,50 → 1,5 · 2,0 → 2. */
+  const limpio = (x: number, decimales: number) =>
+    x
+      .toFixed(decimales)
+      .replace(/\.?0+$/, "")
+      .replace(".", ",");
+
+  if (ref >= 1_000_000_000) return `${limpio(num / 1_000_000_000, 2)}B`;
+  if (ref >= 1_000_000) return `${limpio(num / 1_000_000, 1)}M`;
+  if (ref >= 1_000) return `${Math.round(num / 1_000)}K`;
+  return Math.round(num).toLocaleString("es-PY");
+}
+
 function formatFecha(s: string): string {
   const cal = s.slice(0, 10);
   if (/^\d{4}-\d{2}-\d{2}$/.test(cal)) {
@@ -508,10 +535,15 @@ function DonutChart({
         {segments.map((seg, i) => {
           const pct = total > 0 ? (seg.value / total) * 100 : 0;
           return (
-            <div key={i} className="flex items-center gap-2.5">
-              <div className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: seg.color }} />
+            /* `items-start` + texto que envuelve, en vez de `truncate`: con el
+               panel angosto la etiqueta quedaba cortada a dos letras («Con…»,
+               «Sin c…») o directamente invisible, y la leyenda dejaba de
+               explicar el gráfico, que es lo único que hace. Preferimos que
+               crezca hacia abajo antes que esconder el texto. */
+            <div key={i} className="flex items-start gap-2.5">
+              <div className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: seg.color }} />
               <span
-                className={`min-w-0 flex-1 truncate text-xs ${isZ ? "" : "text-gray-600"}`}
+                className={`min-w-0 flex-1 break-words text-xs leading-tight ${isZ ? "" : "text-gray-600"}`}
                 style={isZ ? { color: Z.text } : undefined}
                 title={seg.label}
               >
@@ -571,8 +603,18 @@ function ProgressBar({
           ? "bg-amber-400"
           : "bg-blue-500"
       : "";
+  /*
+   * Avance y objetivo se abrevian con LA MISMA unidad, la que corresponda al
+   * objetivo. Antes cada uno elegía la suya y quedaba «Gs. 100K / Gs. 80M»:
+   * para comparar esos dos números hay que convertirlos de cabeza, que es justo
+   * lo que la barra tendría que evitar. Ahora dice «Gs. 0,1M / Gs. 80M».
+   */
   const fmt = (n: number) =>
-    format === "gs" ? `Gs. ${formatGsM(n)}` : format === "pct" ? `${n.toFixed(1)}%` : String(n);
+    format === "gs"
+      ? `Gs. ${formatGsEscala(n, m > 0 ? m : v)}`
+      : format === "pct"
+        ? `${n.toFixed(1)}%`
+        : String(n);
   const metaLabel =
     m > 0 ? fmt(m) : format === "gs" ? "sin meta" : "—";
   const isZ = variant === "zentra";

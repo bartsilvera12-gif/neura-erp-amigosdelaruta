@@ -159,7 +159,11 @@ export function RegistrarPagoModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose} role="presentation">
       <div
-        className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl"
+        /* `max-h` + scroll propio: el panel no tenia alto maximo, asi que en una
+           pantalla baja el formulario se salia por abajo y no habia forma de
+           llegar al boton de guardar salvo bajando el zoom del navegador.
+           Reportado por QA, que tenia que ponerla al 80%. */
+        className="flex max-h-[90dvh] w-full max-w-lg flex-col overflow-y-auto overscroll-contain rounded-xl bg-white p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
