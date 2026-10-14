@@ -625,6 +625,11 @@ export default function NotificacionesBell() {
             </div>
           ) : null}
 
+          {/* Bandejas General / Soporte: ocultas a pedido de ADR. "Soporte" son
+              los tickets de soporte de Neura, no de Amigos de la Ruta. Sin la
+              solapa, `bandeja` se queda en "general" y esas notificaciones no
+              se muestran, que es lo que se pidio. Se deja comentado.
+
           <div className="flex gap-1 border-b border-slate-100 px-2.5 py-1.5" role="tablist">
             {(
               [
@@ -658,6 +663,7 @@ export default function NotificacionesBell() {
               );
             })}
           </div>
+          */}
 
           <ul className="max-h-[26rem] divide-y divide-slate-100 overflow-y-auto">
             {itemsBandeja.length === 0 ? (

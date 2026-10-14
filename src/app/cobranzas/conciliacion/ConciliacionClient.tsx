@@ -224,6 +224,11 @@ export default function ConciliacionClient() {
           <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">Conciliación bancaria</h1>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {/* Cargar extracto: oculto a pedido de ADR. Sube un PDF o Excel del
+              banco y lo cruza con IA contra las transferencias aprobadas del mes.
+              Se deja comentado por si vuelve a hacer falta; el endpoint
+              /api/cobranzas/conciliacion/analizar-extracto sigue existiendo.
+
           <input ref={fileRef} type="file" accept=".pdf,.xlsx,.xls,.csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" className="hidden"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) analizarExtracto(f); }} />
           <button onClick={() => fileRef.current?.click()} disabled={analizando}
@@ -231,6 +236,7 @@ export default function ConciliacionClient() {
             className="rounded-xl border border-[#4FAEB2] bg-white px-3.5 py-2 text-sm font-semibold text-[#3F8E91] shadow-sm transition-colors hover:bg-[#4FAEB2]/8 disabled:opacity-60">
             {analizando ? "Analizando…" : "📄 Cargar extracto (PDF o Excel)"}
           </button>
+          */}
           <button onClick={() => setModal(true)} className="rounded-xl bg-[#4FAEB2] px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[#3F8E91]">+ Registrar transferencia</button>
         </div>
       </div>
