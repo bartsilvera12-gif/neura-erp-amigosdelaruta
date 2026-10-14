@@ -10,7 +10,7 @@ import {
   type Costo,
   type SalidaOperacion,
   type Tarea,
-} from "@/lib/operacion/operacion-data";
+} from "@/lib/operacion/operacion-tipos";
 
 /**
  * Operación de las salidas.
