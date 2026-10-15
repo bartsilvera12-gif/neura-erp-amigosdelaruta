@@ -156,6 +156,7 @@ function FacturaRowAccionesSifen({
   facturaId,
   puedeCobrar,
   onCobrar,
+  enAprobacion,
   sifenAprobado,
   tienePago,
   onVerRecibos,
@@ -164,6 +165,8 @@ function FacturaRowAccionesSifen({
   sifenAprobado: boolean;
   puedeCobrar: boolean;
   onCobrar?: () => void;
+  /** Ya se mandó un cobro por esta factura y espera aprobación. */
+  enAprobacion: boolean;
   /** La factura tiene al menos un cobro registrado (saldo < monto o pagada). */
   tienePago: boolean;
   onVerRecibos?: () => void;
@@ -203,12 +206,23 @@ function FacturaRowAccionesSifen({
           <Printer className="w-4 h-4" strokeWidth={1.75} />
         </button>
       )}
-      {puedeCobrar && onCobrar ? (
+      {enAprobacion ? (
+        /* El cobro ya se registro; el saldo no baja hasta que lo aprueben en
+           Conciliacion bancaria. Sin este aviso la fila queda igual que una sin
+           cobrar, con su boton "Cobrar" intacto, y parece que no paso nada.
+           Mismo tratamiento que en Cobros. */
+        <span
+          className="ml-0.5 inline-flex items-center whitespace-nowrap rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700"
+          title="El cobro ya se registro y espera aprobacion en Cobranzas → Conciliacion bancaria."
+        >
+          Cobro enviado · esperando aprobación
+        </span>
+      ) : puedeCobrar && onCobrar ? (
         <button
           type="button"
           onClick={onCobrar}
           className="ml-0.5 inline-flex items-center gap-1 whitespace-nowrap rounded-lg bg-[#4FAEB2] px-2.5 py-1 text-[11px] font-semibold text-white shadow-sm shadow-[#4FAEB2]/20 transition-colors hover:bg-[#3F8E91]"
-          title="Registrar cobro (mismo formulario que en Pagos)"
+          title="Registrar cobro (mismo formulario que en Cobros)"
         >
           Cobrar
         </button>
@@ -748,6 +762,33 @@ function GestionClientesPageInner() {
   const [modalHistorialCliente, setModalHistorialCliente] = useState(false);
   const [modalProyectos, setModalProyectos] = useState(false);
   const [modalContactos, setModalContactos] = useState(false);
+  /*
+   * Facturas con un cobro ya enviado y esperando aprobacion. El cobro no baja
+   * el saldo hasta que lo aprueben en Conciliacion bancaria, asi que sin esto
+   * la fila se ve identica a una sin cobrar. QA lo reporto como "completo los
+   * datos y sigue estando en el apartado".
+   *
+   * La lista de pendientes es de cobranzas: si el usuario no tiene ese permiso
+   * la llamada falla y no se muestra el aviso, igual que antes.
+   */
+  const [facturasEnAprobacion, setFacturasEnAprobacion] = useState<Set<string>>(new Set());
+
+  const cargarPendientesDeAprobacion = useCallback(async () => {
+    try {
+      const res = await fetchWithSupabaseSession("/api/cobranzas/conciliacion?estado=pendiente", { cache: "no-store" });
+      if (!res.ok) return;
+      const json = (await res.json()) as { success?: boolean; data?: { factura_id?: string }[] };
+      if (!json?.success || !Array.isArray(json.data)) return;
+      setFacturasEnAprobacion(new Set(json.data.map((r) => r?.factura_id).filter((x): x is string => !!x)));
+    } catch {
+      // Sin permiso o sin red: se sigue sin el aviso.
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargarPendientesDeAprobacion();
+  }, [cargarPendientesDeAprobacion]);
+
   const [facturaCobroModal, setFacturaCobroModal] = useState<Factura | null>(null);
   const [recibosFactura, setRecibosFactura] = useState<Factura | null>(null);
   const [facturasDetalleAbierto, setFacturasDetalleAbierto] = useState(true);
@@ -1373,6 +1414,7 @@ function GestionClientesPageInner() {
                                     sifenAprobado={sifenPorFactura[f.id]?.estado_sifen === "aprobado"}
                                     puedeCobrar={facturaPermiteCobro(f)}
                                     onCobrar={() => setFacturaCobroModal(f)}
+                                    enAprobacion={facturasEnAprobacion.has(f.id)}
                                     tienePago={f.saldo < f.monto || f._estadoEfectivo === "Pagado"}
                                     onVerRecibos={() => setRecibosFactura(f)}
                                   />
@@ -1502,6 +1544,7 @@ function GestionClientesPageInner() {
         onClose={() => setFacturaCobroModal(null)}
         onExito={async () => {
           if (selected) getFacturas(selected.id).then(setFacturas);
+          void cargarPendientesDeAprobacion();
         }}
       />
 
