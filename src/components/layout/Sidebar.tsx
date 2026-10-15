@@ -159,23 +159,28 @@ const MENU_STRUCTURE_COMPLETO: MenuItem[] = [
     ],
   },
   { key: "gastos", slug: "gastos", label: "Gastos", href: "/gastos", icon: Receipt },
-  // Se llama "Cobros" y no "Pagos" porque es lo que hace: cobrar facturas de
-  // clientes. El nombre viejo hacia buscar ahi los pagos a proveedores, que
-  // esta pantalla nunca manejo. El slug sigue siendo `pagos` para no tocar
-  // empresa_modulos.
-  { key: "pagos", slug: "pagos", label: "Cobros", href: "/pagos", icon: Banknote },
-  { key: "cobranzas", slug: "cobranzas", label: "Cobranzas", href: "/cobranzas", icon: HandCoins, children: [
-    // Bancos cuelga de acá y no de Configuración, que no está en el menú de esta
-    // instancia: sin esto el catálogo era inalcanzable. Es además donde se usan.
+  /*
+   * Cobros (slug `pagos`) es el unico lugar donde se cobra.
+   *
+   * Se llama "Cobros" y no "Pagos" porque es lo que hace: cobrar facturas de
+   * clientes. El nombre viejo hacia buscar ahi los pagos a proveedores, que
+   * esta pantalla nunca manejo. El slug sigue siendo `pagos` para no tocar
+   * empresa_modulos.
+   *
+   * Cobranzas sale del menu: estaba hecho para clientes con suscripcion
+   * mensual (monto mensual, cuotas vencidas, mensaje del mes, tramos de mora),
+   * que es el negocio del sistema base y no el de una operadora de viajes.
+   * Hacia ademas lo mismo que Cobros —registrar un cobro contra el mismo
+   * circuito de aprobacion— con dos pantallas distintas.
+   *
+   * Bancos y Conciliacion bancaria pasan a colgar de aca. Conservan sus rutas
+   * /cobranzas/*, asi que siguen pidiendo el modulo `cobranzas`: se saca la
+   * entrada del menu, no el modulo, y `empresa_modulos` queda intacto.
+   */
+  { key: "pagos", slug: "pagos", label: "Cobros", href: "/pagos", icon: Banknote, children: [
     { label: "Bancos", href: "/cobranzas/bancos" },
-    /*
-     * Conciliacion bancaria existia como pantalla pero no estaba en el menu, y
-     * es donde se APRUEBAN los cobros. Cobrar una factura (desde Pagos o desde
-     * Cobranzas) no descuenta el saldo: crea un pendiente que alguien tiene que
-     * aprobar aca. Sin esta entrada los cobros se acumulaban sin que nadie
-     * pudiera cerrarlos, y la factura quedaba pendiente para siempre. QA lo
-     * reporto como "no registra el pago".
-     */
+    // Donde se APRUEBAN los cobros: cobrar no descuenta el saldo, crea un
+    // pendiente que alguien tiene que aprobar aca.
     { label: "Conciliación bancaria", href: "/cobranzas/conciliacion" },
   ]},
   { key: "comisiones", slug: "comisiones", label: "Comisiones", href: "/comisiones", icon: Percent },
@@ -357,6 +362,8 @@ const INSTANCIA_MENU_KEYS_PERMITIDAS: readonly string[] = [
   "ventas",
   "clientes",
   "gestion-clientes",
+  // `cobranzas` ya no tiene item propio, pero sigue habilitado: Bancos y
+  // Conciliacion bancaria conservan sus rutas /cobranzas/* y cuelgan de Cobros.
   "cobranzas",
   "pagos",
   "compras",
@@ -422,7 +429,7 @@ const MENU_FAMILIES: { id: string; title: string; itemKeys: string[] }[] = [
   {
     id: "finanzas",
     title: "Finanzas",
-    itemKeys: ["ventas", "cobranzas", "pagos", "gastos", "compras", "notas_credito", "reportes"],
+    itemKeys: ["ventas", "pagos", "gastos", "compras", "notas_credito", "reportes"],
   },
   { id: "operaciones", title: "Operaciones", itemKeys: ["inventario", "produccion", "eventos"] },
   { id: "sitio", title: "Sitio web", itemKeys: ["web"] },
