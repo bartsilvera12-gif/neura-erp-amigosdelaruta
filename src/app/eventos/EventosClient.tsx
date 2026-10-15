@@ -17,6 +17,21 @@ import CampoImagen from "@/components/web/CampoImagen";
 
 export type SeccionEventos = "viajes" | "salidas" | "reservas";
 
+/*
+ * Los estados de `salidas`, repetidos acá a propósito: la lista también vive en
+ * `eventos-data.ts`, pero ese módulo es `server-only` e importarlo desde una
+ * pantalla rompe el build de producción. Tiene que coincidir con
+ * `salidas_estado_chk`.
+ */
+const SALIDA_ESTADOS = [
+  { value: "borrador", label: "Borrador" },
+  { value: "abierta", label: "Abierta" },
+  { value: "confirmada", label: "Confirmada" },
+  { value: "lista_espera", label: "Lista de espera" },
+  { value: "cerrada", label: "Cerrada" },
+  { value: "finalizada", label: "Finalizada" },
+] as const;
+
 const SECCIONES: { id: SeccionEventos; label: string; href: string }[] = [
   { id: "viajes", label: "Viajes", href: "/eventos" },
   { id: "salidas", label: "Salidas", href: "/eventos/salidas" },
@@ -87,7 +102,7 @@ export default function EventosClient({ seccion }: { seccion: SeccionEventos }) 
   }, [cargar]);
 
   const guardar = useCallback(
-    async (id: string | null, valores: Fila, clave: string) => {
+    async (id: string | null, valores: Fila, clave: string, tipo: "evento" | "salida" = "evento") => {
       setGuardando(clave);
       setError(null);
       setOkMsg(null);
@@ -95,11 +110,15 @@ export default function EventosClient({ seccion }: { seccion: SeccionEventos }) 
         const r = await fetchWithSupabaseSession("/api/eventos", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id, valores }),
+          body: JSON.stringify({ tipo, id, valores }),
         });
         const j = (await r.json()) as { success?: boolean; error?: string };
         if (!j.success) throw new Error(j.error ?? "No se pudo guardar.");
         setOkMsg("Guardado.");
+        setDraft((d) => {
+          const { [clave]: _ya, ...resto } = d;
+          return resto;
+        });
         await cargar();
       } catch (e) {
         setError(e instanceof Error ? e.message : "Error");
@@ -390,18 +409,137 @@ export default function EventosClient({ seccion }: { seccion: SeccionEventos }) 
           </section>
         </div>
       ) : seccion === "salidas" ? (
-        <Tabla
-          vacio="Todavía no hay salidas cargadas."
-          filas={data.salidas}
-          columnas={[
-            { th: "Viaje", td: (f) => nombreEvento(f.evento_id) },
-            { th: "Código", td: (f) => String(f.codigo ?? "—") },
-            { th: "Desde", td: (f) => String(f.fecha_inicio ?? "—") },
-            { th: "Hasta", td: (f) => String(f.fecha_fin ?? "—") },
-            { th: "Cupo", td: (f) => String(f.cupo_total ?? "—") },
-            { th: "Estado", td: (f) => String(f.estado ?? "—") },
-          ]}
-        />
+        <div className="space-y-6">
+          <Tabla
+            vacio="Todavía no hay salidas cargadas. Creá la primera acá abajo."
+            filas={data.salidas}
+            columnas={[
+              { th: "Viaje", td: (f) => nombreEvento(f.evento_id) },
+              { th: "Código", td: (f) => String(f.codigo ?? "—") },
+              { th: "Desde", td: (f) => String(f.fecha_inicio ?? "—") },
+              { th: "Hasta", td: (f) => String(f.fecha_fin ?? "—") },
+              { th: "Cupo", td: (f) => String(f.cupo_total ?? "—") },
+              { th: "Estado", td: (f) => String(f.estado ?? "—") },
+            ]}
+          />
+
+          {/* Alta de salidas. Sin esto, Operación no tenía de qué colgarse. */}
+          <section className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/50 p-5">
+            <div className="mb-1 text-sm font-semibold text-slate-700">Nueva salida</div>
+            <p className="mb-4 text-xs text-slate-500">
+              La fecha concreta de un viaje. De ella cuelgan las reservas y la preparación en
+              Operación.
+            </p>
+
+            {data.eventos.length === 0 ? (
+              <p className="text-sm text-slate-500">
+                Primero creá un viaje en la pestaña <b>Viajes</b>.
+              </p>
+            ) : (
+              <>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div>
+                    <div className={lbl}>Viaje *</div>
+                    <select
+                      className={input}
+                      value={String(valorDe("sal:nuevo", null, "evento_id") ?? "")}
+                      onChange={(ev) => setCampo("sal:nuevo", "evento_id", ev.target.value)}
+                    >
+                      <option value="">Elegí un viaje…</option>
+                      {data.eventos.map((e) => (
+                        <option key={String(e.id)} value={String(e.id)}>
+                          {textoDe(e.nombre, "es") || String(e.slug ?? "sin nombre")}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <div className={lbl}>Desde *</div>
+                    <input
+                      type="date"
+                      className={input}
+                      value={String(valorDe("sal:nuevo", null, "fecha_inicio") ?? "")}
+                      onChange={(ev) => setCampo("sal:nuevo", "fecha_inicio", ev.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <div className={lbl}>Hasta</div>
+                    <input
+                      type="date"
+                      className={input}
+                      value={String(valorDe("sal:nuevo", null, "fecha_fin") ?? "")}
+                      onChange={(ev) => setCampo("sal:nuevo", "fecha_fin", ev.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-3 grid gap-3 sm:grid-cols-4">
+                  <div>
+                    <div className={lbl}>Código</div>
+                    <input
+                      className={input}
+                      placeholder="R66-2027-07"
+                      value={String(valorDe("sal:nuevo", null, "codigo") ?? "")}
+                      onChange={(ev) => setCampo("sal:nuevo", "codigo", ev.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <div className={lbl}>Cupo</div>
+                    <input
+                      type="number"
+                      min={0}
+                      className={input}
+                      value={String(valorDe("sal:nuevo", null, "cupo_total") ?? "")}
+                      onChange={(ev) => setCampo("sal:nuevo", "cupo_total", ev.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <div className={lbl}>Cierre de inscripción</div>
+                    <input
+                      type="date"
+                      className={input}
+                      value={String(valorDe("sal:nuevo", null, "fecha_limite_inscripcion") ?? "")}
+                      onChange={(ev) =>
+                        setCampo("sal:nuevo", "fecha_limite_inscripcion", ev.target.value)
+                      }
+                    />
+                  </div>
+                  <div>
+                    <div className={lbl}>Estado</div>
+                    <select
+                      className={input}
+                      value={String(valorDe("sal:nuevo", null, "estado") ?? "borrador")}
+                      onChange={(ev) => setCampo("sal:nuevo", "estado", ev.target.value)}
+                    >
+                      {SALIDA_ESTADOS.map((e) => (
+                        <option key={e.value} value={e.value}>
+                          {e.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={guardando === "sal:nuevo"}
+                  onClick={() =>
+                    void guardar(
+                      null,
+                      { estado: "borrador", ...(draft["sal:nuevo"] ?? {}) },
+                      "sal:nuevo",
+                      "salida"
+                    )
+                  }
+                  className="mt-4 inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                >
+                  <Plus className="h-4 w-4" />
+                  {guardando === "sal:nuevo" ? "Creando…" : "Crear salida"}
+                </button>
+              </>
+            )}
+          </section>
+        </div>
       ) : (
         <Tabla
           vacio="Todavía no hay reservas."

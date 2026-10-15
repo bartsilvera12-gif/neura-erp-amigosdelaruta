@@ -115,6 +115,109 @@ export async function cargarReservas(
 }
 
 /** Alta o edición de un evento, filtrando a las columnas permitidas. */
+/** Columnas que la pantalla puede escribir sobre `salidas`. */
+export const CAMPOS_SALIDA = [
+  "evento_id",
+  "codigo",
+  "fecha_inicio",
+  "fecha_fin",
+  "cupo_total",
+  "idioma_guia",
+  "fecha_limite_inscripcion",
+  "estado",
+  "notas",
+] as const;
+
+export const SALIDA_ESTADOS = [
+  { value: "borrador", label: "Borrador" },
+  { value: "abierta", label: "Abierta" },
+  { value: "confirmada", label: "Confirmada" },
+  { value: "lista_espera", label: "Lista de espera" },
+  { value: "cerrada", label: "Cerrada" },
+  { value: "finalizada", label: "Finalizada" },
+] as const;
+
+/**
+ * Alta y edición de una salida.
+ *
+ * La salida es la fecha concreta de un viaje («Route 66, 22/07/2027»): el tour
+ * es el contenido comercial y se vende muchas veces, la salida es una sola. De
+ * ella cuelgan los paquetes, las reservas y toda la Operación.
+ *
+ * Hasta ahora la pantalla mostraba las salidas pero no dejaba crearlas, así que
+ * Operación no tenía de qué colgarse.
+ */
+export async function guardarSalida(
+  sb: AppSupabaseClient,
+  empresaId: string,
+  id: string | null,
+  valores: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const permitidos = new Set<string>(CAMPOS_SALIDA);
+  const campos: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(valores ?? {})) {
+    if (permitidos.has(k)) campos[k] = v === "" ? null : v;
+  }
+  if (Object.keys(campos).length === 0) {
+    throw new Error("No hay campos válidos para guardar.");
+  }
+
+  // Los dos que la base exige y que la pantalla no puede adivinar.
+  if (!id) {
+    if (typeof campos.evento_id !== "string" || !campos.evento_id.trim()) {
+      throw new Error("Elegí el viaje al que pertenece la salida.");
+    }
+    if (typeof campos.fecha_inicio !== "string" || !campos.fecha_inicio.trim()) {
+      throw new Error("La salida necesita una fecha de inicio.");
+    }
+  }
+  // `salidas_fechas_chk`: el mensaje de Postgres no se entiende, este sí.
+  const desde = campos.fecha_inicio;
+  const hasta = campos.fecha_fin;
+  if (typeof desde === "string" && typeof hasta === "string" && hasta && hasta < desde) {
+    throw new Error("La fecha de fin no puede ser anterior a la de inicio.");
+  }
+  if (campos.cupo_total != null && campos.cupo_total !== "") {
+    const n = Number(campos.cupo_total);
+    if (!Number.isFinite(n) || n < 0) throw new Error("El cupo tiene que ser un número positivo.");
+    campos.cupo_total = Math.trunc(n);
+  }
+
+  if (id) {
+    const { data, error } = await sb
+      .from("salidas")
+      .update(campos)
+      .eq("id", id)
+      .eq("empresa_id", empresaId)
+      .select("*")
+      .single();
+    if (error) throw new Error(error.message);
+    return data as Record<string, unknown>;
+  }
+
+  /*
+   * El viaje se valida contra la empresa antes de insertar: `evento_id` viene
+   * del navegador y sin esto se podría colgar una salida del viaje de otra
+   * empresa. La RLS protege la fila nueva, no a quién apunta.
+   */
+  const { data: evento, error: errEv } = await sb
+    .from("eventos")
+    .select("id")
+    .eq("empresa_id", empresaId)
+    .eq("id", String(campos.evento_id))
+    .maybeSingle();
+  if (errEv) throw new Error(errEv.message);
+  if (!evento) throw new Error("Ese viaje no existe.");
+
+  const { data, error } = await sb
+    .from("salidas")
+    .insert({ ...campos, empresa_id: empresaId })
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+  return data as Record<string, unknown>;
+}
+
 export async function guardarEvento(
   sb: AppSupabaseClient,
   empresaId: string,
