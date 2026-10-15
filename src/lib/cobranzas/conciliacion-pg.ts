@@ -240,9 +240,23 @@ export async function listCobrosPendientes(schemaRaw: string, empresaId: string,
   return rows;
 }
 
-export interface AprobarResult { pago_id: string; asiento_id: string; es_anticipo: boolean }
+export interface AprobarResult { pago_id: string; asiento_id: string | null; es_anticipo: boolean }
 
-/** Aprueba una transferencia en UNA transacción atómica: pago + saldo + asiento + estado del pendiente. */
+/**
+ * Aprueba una transferencia en UNA transacción atómica: pago + saldo + asiento
+ * + estado del pendiente.
+ *
+ * El asiento es OPCIONAL. Antes, si faltaban las cuentas contables, la
+ * aprobación entera se caía con «Configurá la cuenta de Banco en Configuración
+ * Contable» y el cobro quedaba pendiente para siempre. En una instancia sin el
+ * módulo de Contabilidad —como Amigos de la Ruta— esas cuentas no existen ni
+ * van a existir, así que el ERP exigía algo imposible para completar un cobro.
+ *
+ * Ahora, sin cuentas configuradas, el cobro se aprueba igual: nace el pago y
+ * baja el saldo, que es lo que el usuario pidió. El pago queda con su
+ * `estado_contable` sin tocar, de modo que si algún día se activa Contabilidad
+ * se lo puede contabilizar después sin perder nada.
+ */
 export async function aprobarTransferencia(schemaRaw: string, empresaId: string, cobroId: string, userId: string | null): Promise<AprobarResult> {
   const schema = assertAllowedChatDataSchema(schemaRaw);
   const tC = quoteSchemaTable(schema, "cobros_pendientes");
@@ -290,30 +304,36 @@ export async function aprobarTransferencia(schemaRaw: string, empresaId: string,
     await client.query(`UPDATE ${tF} SET saldo=$3::numeric, estado=$4, updated_at=now() WHERE id=$1::uuid AND empresa_id=$2::uuid`,
       [c.factura_id, empresaId, nuevoSaldo, nuevoEstado]);
 
-    // 2) Asiento de cobro: Debe Banco / Haber Clientes (o Anticipos).
-    if (!config?.cuenta_banco_id) throw new ContabilidadError("Configurá la cuenta de Banco en Configuración Contable.");
+    /*
+     * 2) Asiento de cobro: Debe Banco / Haber Clientes (o Anticipos).
+     *
+     * Solo si las cuentas están configuradas. Sin Contabilidad activa no hay
+     * plan de cuentas y no hay nada que asentar: el cobro se aprueba igual.
+     */
     const ctaHaber = esAnticipo ? config?.cuenta_anticipos_clientes_id : config?.cuenta_clientes_id;
-    if (!ctaHaber) throw new ContabilidadError(esAnticipo
-      ? "Configurá la cuenta de Anticipos de Clientes en Configuración Contable."
-      : "Configurá la cuenta general de Clientes (CxC) en Configuración Contable.");
-    const lineas: AsientoLineaInput[] = [
-      { cuenta_contable_id: config.cuenta_banco_id, descripcion: "Cobro por transferencia", debe: monto, haber: 0, documento_tipo: "cobro", documento_id: pagoId },
-      { cuenta_contable_id: ctaHaber, descripcion: esAnticipo ? "Anticipos de clientes" : "Clientes / CxC", debe: 0, haber: monto, documento_tipo: "cobro", documento_id: pagoId },
-    ];
-    const asiento = await generarAsientoEnTx(client, schema, empresaId, {
-      origen_tipo: "cobro_cliente", origen_id: pagoId, evento_origen: "conciliacion_aprobada",
-      fecha_contable: c.fecha, glosa: `Cobro transferencia ${f.numero_factura}`,
-      moneda: f.moneda === "USD" ? "USD" : "PYG", tipo_cambio: 1, lineas, createdBy: userId,
-    });
-    await client.query(`UPDATE ${tP} SET estado_contable='contabilizado', asiento_contable_id=$3::uuid WHERE id=$1::uuid AND empresa_id=$2::uuid`,
-      [pagoId, empresaId, asiento.id]);
+    let asientoId: string | null = null;
+
+    if (config?.cuenta_banco_id && ctaHaber) {
+      const lineas: AsientoLineaInput[] = [
+        { cuenta_contable_id: config.cuenta_banco_id, descripcion: "Cobro por transferencia", debe: monto, haber: 0, documento_tipo: "cobro", documento_id: pagoId },
+        { cuenta_contable_id: ctaHaber, descripcion: esAnticipo ? "Anticipos de clientes" : "Clientes / CxC", debe: 0, haber: monto, documento_tipo: "cobro", documento_id: pagoId },
+      ];
+      const asiento = await generarAsientoEnTx(client, schema, empresaId, {
+        origen_tipo: "cobro_cliente", origen_id: pagoId, evento_origen: "conciliacion_aprobada",
+        fecha_contable: c.fecha, glosa: `Cobro transferencia ${f.numero_factura}`,
+        moneda: f.moneda === "USD" ? "USD" : "PYG", tipo_cambio: 1, lineas, createdBy: userId,
+      });
+      asientoId = asiento.id;
+      await client.query(`UPDATE ${tP} SET estado_contable='contabilizado', asiento_contable_id=$3::uuid WHERE id=$1::uuid AND empresa_id=$2::uuid`,
+        [pagoId, empresaId, asiento.id]);
+    }
 
     // 3) Estado del pendiente.
     await client.query(`UPDATE ${tC} SET estado='aprobado', pago_id=$3::uuid, aprobado_by=$4::uuid, aprobado_at=now(), updated_at=now() WHERE id=$1::uuid AND empresa_id=$2::uuid`,
       [cobroId, empresaId, pagoId, userId]);
 
     await client.query("COMMIT");
-    return { pago_id: pagoId, asiento_id: asiento.id, es_anticipo: esAnticipo };
+    return { pago_id: pagoId, asiento_id: asientoId, es_anticipo: esAnticipo };
   } catch (e) {
     await client.query("ROLLBACK").catch(() => null);
     throw e;
