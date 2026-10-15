@@ -182,6 +182,14 @@ const MENU_STRUCTURE_COMPLETO: MenuItem[] = [
     // Donde se APRUEBAN los cobros: cobrar no descuenta el saldo, crea un
     // pendiente que alguien tiene que aprobar aca.
     { label: "Conciliación bancaria", href: "/cobranzas/conciliacion" },
+    /*
+     * Aprobar un cobro genera el asiento Debe Banco / Haber Clientes, y sin las
+     * cuentas configuradas falla con "Configurá la cuenta de Banco en
+     * Configuración Contable". Esa pantalla estaba fuera del menu de esta
+     * instancia, asi que no habia forma de aprobar NINGUN cobro. Mismo caso que
+     * Bancos: se trae el enlace, no el modulo Configuracion entero.
+     */
+    { label: "Configuración contable", href: "/configuracion/contable" },
   ]},
   { key: "comisiones", slug: "comisiones", label: "Comisiones", href: "/comisiones", icon: Percent },
   {
