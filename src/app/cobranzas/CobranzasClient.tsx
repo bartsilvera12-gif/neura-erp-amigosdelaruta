@@ -293,11 +293,36 @@ export default function CobranzasClient() {
   const [promesaOpen, setPromesaOpen] = useState(false);
   const [promesaBusy, setPromesaBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  /*
+   * Facturas con un cobro ya enviado y esperando aprobación en Conciliación
+   * bancaria. El cobro no baja el saldo hasta que un admin lo apruebe, así que
+   * sin este aviso la fila queda igual que una sin cobrar y parece que no pasó
+   * nada (QA lo reportó como "completo los datos y sigue en la lista"). La lista
+   * de pendientes es de cobranzas: si el usuario no tiene ese permiso la llamada
+   * falla y simplemente no se muestra el aviso.
+   */
+  const [facturasEnAprobacion, setFacturasEnAprobacion] = useState<Set<string>>(new Set());
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
     window.setTimeout(() => setToast(null), 3500);
   }, []);
+
+  const cargarEnAprobacion = useCallback(async () => {
+    try {
+      const res = await fetchWithSupabaseSession("/api/cobranzas/conciliacion?estado=pendiente", { cache: "no-store" });
+      if (!res.ok) return;
+      const json = (await res.json()) as { success?: boolean; data?: { factura_id?: string }[] };
+      if (json?.success !== true || !Array.isArray(json.data)) return;
+      setFacturasEnAprobacion(new Set(json.data.map((r) => r?.factura_id).filter((x): x is string => !!x)));
+    } catch {
+      // Sin permiso o sin red: se sigue sin el aviso.
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargarEnAprobacion();
+  }, [cargarEnAprobacion]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -385,9 +410,9 @@ export default function CobranzasClient() {
       setPagoFactura(null);
       showToast(json.data?.warning ?? "Cobro enviado a aprobación en Conciliación bancaria.");
       if (detalleId) await openDetalle(detalleId);
-      await load();
+      await Promise.all([load(), cargarEnAprobacion()]);
     },
-    [detalleId, openDetalle, load, showToast]
+    [detalleId, openDetalle, load, cargarEnAprobacion, showToast]
   );
 
   /** Tipos de SERVICIO presentes (para el selector). */
@@ -804,6 +829,7 @@ export default function CobranzasClient() {
                             onRegistrar={(f) => setPagoFactura(f)}
                             oldestId={oldestPayable?.id ?? null}
                             oldestNumero={oldestPayable?.numero_factura ?? null}
+                            enAprobacion={facturasEnAprobacion}
                           />
                         </div>
                       </div>
@@ -947,6 +973,7 @@ function DetalleSeccion({
   onRegistrar,
   oldestId,
   oldestNumero,
+  enAprobacion,
 }: {
   titulo: string;
   facturas: FacturaLite[];
@@ -954,6 +981,7 @@ function DetalleSeccion({
   onRegistrar: (f: FacturaLite) => void;
   oldestId: string | null;
   oldestNumero: string | null;
+  enAprobacion: Set<string>;
 }) {
   return (
     <div>
@@ -969,7 +997,14 @@ function DetalleSeccion({
               </span>
               <span className="flex shrink-0 items-center gap-2">
                 <span className="font-semibold tabular-nums text-slate-800">{fmtMoney(f.saldo)}</span>
-                {puedeRegistrar ? (
+                {enAprobacion.has(f.id) ? (
+                  <span
+                    className="whitespace-nowrap rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700"
+                    title="El cobro ya se registró y espera aprobación en Cobranzas → Conciliación bancaria. El saldo baja recién al aprobarlo."
+                  >
+                    Cobro enviado · esperando aprobación
+                  </span>
+                ) : puedeRegistrar ? (
                   f.id === oldestId ? (
                     <button
                       type="button"
