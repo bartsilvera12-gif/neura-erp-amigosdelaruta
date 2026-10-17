@@ -1813,7 +1813,7 @@ function DashFinanciero({
         </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:items-start">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <div className={finCard}>
           <div className="flex items-center gap-2">
             <span aria-hidden="true" className="block h-5 w-1 rounded-full bg-[#4FAEB2]" />
@@ -1922,8 +1922,8 @@ function DashFinanciero({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-5 lg:gap-8">
-        <motion.div whileHover={{ y: -2 }} className={`${finCard} lg:col-span-3`}>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <motion.div whileHover={{ y: -2 }} className={finCard}>
           <div className="flex items-center gap-2">
             <span aria-hidden="true" className="block h-5 w-1 rounded-full bg-[#4FAEB2]" />
             <h3 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-600">
@@ -1959,7 +1959,7 @@ function DashFinanciero({
             />
           </div>
         </motion.div>
-        <motion.div whileHover={{ y: -2 }} className={`${finCard} lg:col-span-2`}>
+        <motion.div whileHover={{ y: -2 }} className={finCard}>
           <div className="flex items-center gap-2">
             <span aria-hidden="true" className="block h-5 w-1 rounded-full bg-[#4FAEB2]" />
             <h3 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-600">

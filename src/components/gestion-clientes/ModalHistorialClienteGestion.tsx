@@ -109,7 +109,24 @@ export function ModalHistorialClienteGestion({
           {error && <p className="text-sm text-red-600">{error}</p>}
 
           {!loading && !error && filas.length === 0 && (
-            <p className="text-sm text-slate-500">No hay registros de historial aún. Los cambios de plan quedan trazados aquí.</p>
+            <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50/60 px-4 py-6 text-sm text-slate-500">
+              <p className="font-medium text-slate-700">No hay registros de historial aún.</p>
+              <p className="mt-2">
+                Este historial se completa solo. Se registra una entrada cada vez que pasa algo con el
+                cliente:
+              </p>
+              <ul className="mt-2 list-disc space-y-0.5 pl-5 text-slate-600">
+                <li>alta del cliente y cambios en sus datos,</li>
+                <li>cambios de plan de suscripción,</li>
+                <li>baja operativa y reactivación,</li>
+                <li>anulación de facturas,</li>
+                <li>tickets de soporte creados desde el cliente.</li>
+              </ul>
+              <p className="mt-2 text-xs text-slate-400">
+                Mientras no ocurra ninguna de esas acciones, queda vacío. No es un campo que se cargue a
+                mano.
+              </p>
+            </div>
           )}
 
           {!loading && !error && filas.length > 0 && (

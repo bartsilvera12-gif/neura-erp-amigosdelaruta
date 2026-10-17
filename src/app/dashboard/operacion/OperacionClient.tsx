@@ -227,7 +227,6 @@ export default function OperacionClient() {
                         </td>
                         <td className="px-3 py-3 text-right tabular-nums text-slate-700">
                           {plata(s.costo_vigente, s.moneda)}
-                          {s.costo_real > 0 && s.costo_real !== s.costo_vigente ? null : null}
                         </td>
                         <td
                           className={`px-3 py-3 text-right font-semibold tabular-nums ${
@@ -254,9 +253,10 @@ export default function OperacionClient() {
               </table>
             </div>
             <p className="mt-3 text-[11px] text-slate-400">
-              Los ingresos son las reservas que ya cuentan como venta: la cotización no suma. El
-              costo de cada línea usa el monto real si ya está facturado, y el estimado mientras
-              tanto.
+              Tocá una fila para cargar sus tareas y costos: ahí se editan. Los ingresos se calculan
+              solos con las reservas que ya cuentan como venta (la cotización no suma), por eso no se
+              escriben a mano. El costo de cada línea usa el monto real si ya está facturado, y el
+              estimado mientras tanto.
             </p>
           </div>
 
