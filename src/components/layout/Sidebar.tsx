@@ -137,7 +137,20 @@ const MENU_STRUCTURE_COMPLETO: MenuItem[] = [
     href: "/dashboard/monitoreo",
     icon: Activity,
   },
-  { key: "ventas", slug: "ventas", label: "Caja", href: "/ventas", icon: ShoppingCart },
+  /*
+   * Caja, y debajo la configuracion fiscal: el modo de facturacion y los datos
+   * de SIFEN. Las dos pantallas existian pero vivian bajo Configuracion, que
+   * no esta en el menu de esta instancia. Mismo criterio que Bancos: se trae
+   * el enlace, no el modulo entero.
+   *
+   * Siguen en /configuracion/*, asi que piden el modulo `configuracion`. Si no
+   * esta habilitado en `empresa_modulos`, el enlace aparece pero la pantalla
+   * no abre.
+   */
+  { key: "ventas", slug: "ventas", label: "Caja", href: "/ventas", icon: ShoppingCart, children: [
+    { label: "Modo de facturación", href: "/configuracion/facturacion" },
+    { label: "Facturación electrónica", href: "/configuracion/facturacion-electronica" },
+  ]},
   { key: "inventario", slug: "inventario", label: "Inventario", href: "/inventario", icon: Package, children: [
     { label: "Productos", href: "/inventario" },
     { label: "Movimientos", href: "/inventario/movimientos" },

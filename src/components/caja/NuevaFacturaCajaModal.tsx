@@ -26,6 +26,16 @@ export function NuevaFacturaCajaModal({ open, onClose }: { open: boolean; onClos
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [creada, setCreada] = useState<FacturaCreada | null>(null);
+  /*
+   * Modo de facturacion de la empresa. La pantalla prometia "ya podes emitir
+   * el documento electronico (SIFEN)" a todo el mundo, estuviera SIFEN
+   * configurado o no: quien entraba se encontraba con un panel que no podia
+   * usar y sin ninguna pista de por que.
+   *
+   * `null` mientras carga o si la consulta falla; en ese caso se muestra el
+   * texto neutro de siempre, que no afirma nada.
+   */
+  const [modo, setModo] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -38,6 +48,16 @@ export function NuevaFacturaCajaModal({ open, onClose }: { open: boolean; onClos
       setError(null);
       setCreada(null);
       setGuardando(false);
+      void (async () => {
+        try {
+          const r = await fetchWithSupabaseSession("/api/configuracion/facturacion-modo", { cache: "no-store" });
+          const j = (await r.json()) as { success?: boolean; data?: { facturacion_modo?: { modo?: string; activo?: boolean } } };
+          const fm = j?.success ? j.data?.facturacion_modo : null;
+          setModo(fm && fm.activo !== false ? String(fm.modo ?? "") : null);
+        } catch {
+          setModo(null);
+        }
+      })();
     }
   }, [open]);
 
@@ -116,13 +136,29 @@ export function NuevaFacturaCajaModal({ open, onClose }: { open: boolean; onClos
             <p className="text-sm font-semibold text-slate-900">
               Factura creada{creada.numero_factura ? ` · ${creada.numero_factura}` : ""}
             </p>
-            <p className="mt-1 text-xs text-slate-500">Ya podés abrirla para emitir el documento electrónico (SIFEN).</p>
+            {modo === "sifen" ? (
+              <p className="mt-1 text-xs text-slate-500">
+                Falta emitirla en el SET: abrila y seguí los pasos de la factura electrónica.
+              </p>
+            ) : modo === "autoimpresor" ? (
+              <p className="mt-1 text-xs text-slate-500">
+                Facturación por autoimpresor: abrila para imprimirla.
+              </p>
+            ) : modo === null ? (
+              <p className="mt-1 text-xs text-slate-500">Ya podés abrirla.</p>
+            ) : (
+              <p className="mt-1 text-xs text-amber-700">
+                La facturación electrónica no está activada todavía. Esta factura vale como
+                comprobante interno, no como documento fiscal. Se activa en{" "}
+                <b>Caja → Modo de facturación</b>.
+              </p>
+            )}
             <div className="mt-4 flex items-center justify-center gap-2">
               <Link
                 href={`/facturas/${creada.id}`}
                 className="rounded-lg bg-[#4FAEB2] px-4 py-2 text-sm font-semibold text-white hover:bg-[#3F8E91]"
               >
-                Ver / Emitir factura
+                {modo === "sifen" ? "Emitir en el SET" : "Ver factura"}
               </Link>
               <button
                 type="button"
