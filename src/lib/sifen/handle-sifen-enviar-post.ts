@@ -225,9 +225,11 @@ export async function handleSifenEnviarPost(
   const previousUltima = feRow.sifen_ultima_respuesta_recibe_lote;
   const previousConsultaLote = feRow.sifen_ultima_respuesta_consulta_lote;
 
-  let nuevoEstado: "enviado" | "error_envio";
+  let nuevoEstado: "enviado" | "error_envio" | "aprobado";
   let nuevoError: string | null;
   let nuevoProt: string | null;
+  /** El sincrono resolvio el documento: hay que sellar la fecha de aprobacion. */
+  let aprobadoPorSincrono = false;
 
   const codRecibe = String(resp.dCodRes ?? "").trim();
   const codSinCerosIni = codRecibe.replace(/^0+/, "") || "";
@@ -303,6 +305,51 @@ export async function handleSifenEnviarPost(
     /* Un protocolo de ceros no sirve para consultar: no se guarda, asi la
        pantalla no ofrece «Consultar lote» sobre algo que no existe. */
     nuevoProt = protTrim.length > 0 && !protEsCero ? protTrim : null;
+
+    /*
+     * Reintento por el servicio SINCRONO.
+     *
+     * SIFEN expone dos vias de envio —lote (asincrono) y recibe (sincrono)— y
+     * se habilitan por separado. El 1264, «RUC del emisor no esta habilitado
+     * para utilizar este tipo de servicio», puede significar que el RUC esta
+     * en el regimen pero no autorizado para ESA via, no que no pueda facturar.
+     *
+     * Asi que cuando el lote rebota se prueba la otra puerta con el mismo XML
+     * firmado. El sincrono devuelve el resultado definitivo en el momento
+     * (dEstRes + dProtAut), sin lote que consultar despues.
+     *
+     * Si tambien falla no se pierde nada: queda el error del lote y, si el
+     * sincrono dijo algo util, se agrega al mensaje.
+     */
+    try {
+      const sync = await recibirDeSifenSync({
+        xmlFirmadoRde: xmlDl.data.toString("utf8"),
+        empresaConfig: {
+          ambiente: ambienteSoap,
+          certificadoP12: p12Dl.data,
+          certificadoPassword: p12Password,
+        },
+      });
+
+      const est = (sync.dEstRes ?? "").trim().toLowerCase();
+      if (!sync.soapFault && est === "aprobado") {
+        nuevoEstado = "aprobado" as typeof nuevoEstado;
+        nuevoError = null;
+        nuevoProt = sync.dProtAut?.trim() || null;
+        aprobadoPorSincrono = true;
+      } else if (!sync.soapFault && est === "rechazado") {
+        const g = sync.gResProc[0];
+        const detalle = g
+          ? decodificarEntidadesSoapBasicas(`[${g.dCodRes}] ${g.dMsgRes}`)
+          : "sin detalle";
+        nuevoError = `${nuevoError} · Envío directo: rechazado — ${detalle}`;
+      } else if (!sync.soapFault && sync.gResProc.length > 0) {
+        const g = sync.gResProc[0]!;
+        nuevoError = `${nuevoError} · Envío directo: ${decodificarEntidadesSoapBasicas(`[${g.dCodRes}] ${g.dMsgRes}`)}`;
+      }
+    } catch {
+      /* La via sincrona es un intento extra: si no responde, queda el error del lote. */
+    }
   }
 
   const { data: updatedRow, error: errUpdate } = await supabase
@@ -313,6 +360,7 @@ export async function handleSifenEnviarPost(
       sifen_d_prot_cons_lote: nuevoProt,
       sifen_ultima_respuesta_recibe_lote: respuestaJson,
       sifen_ultima_respuesta_consulta_lote: null,
+      ...(aprobadoPorSincrono ? { sifen_aprobado_at: new Date().toISOString() } : {}),
     })
     .eq("id", feRow.id)
     .eq("empresa_id", auth.empresa_id)
