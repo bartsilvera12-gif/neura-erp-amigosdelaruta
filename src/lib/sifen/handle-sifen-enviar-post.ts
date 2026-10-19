@@ -83,10 +83,27 @@ export async function handleSifenEnviarPost(
     });
   }
 
-  if (String(feRow.estado_sifen) !== "firmado") {
+  /*
+   * Se envía desde `firmado` y también desde `error_envio` cuando el XML
+   * firmado sigue guardado.
+   *
+   * Sin el reintento el documento quedaba en un callejón sin salida: la
+   * pantalla ofrecía «Enviar a SET» y el servidor contestaba que solo se puede
+   * enviar desde "firmado", un estado al que ya no se podía volver. Es
+   * exactamente el caso de un rechazo de SET que se corrige afuera —habilitar
+   * el RUC, cambiar de ambiente— y después se reintenta con el mismo XML.
+   */
+  const estadoFe = String(feRow.estado_sifen ?? "");
+  const tieneXmlFirmado =
+    typeof feRow.xml_firmado_path === "string" && feRow.xml_firmado_path.trim().length > 0;
+  const puedeEnviar = estadoFe === "firmado" || (estadoFe === "error_envio" && tieneXmlFirmado);
+
+  if (!puedeEnviar) {
     return NextResponse.json(
       errorResponse(
-        `Solo se puede enviar a SET con estado "firmado". Estado actual: "${feRow.estado_sifen}".`
+        estadoFe === "error_envio"
+          ? "El envío anterior falló y no quedó XML firmado. Volvé a firmar el documento antes de enviarlo."
+          : `Solo se puede enviar a SET con estado "firmado". Estado actual: "${estadoFe}".`
       ),
       { status: 409 }
     );
