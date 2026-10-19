@@ -217,10 +217,26 @@ export async function handleSifenEnviarPost(
   const codigoEs0300 = codRecibe === "0300" || codSinCerosIni === "300";
   const protTrim = resp.dProtConsLote == null ? "" : String(resp.dProtConsLote).trim();
   const http2xx = resp.httpStatus >= 200 && resp.httpStatus < 300;
+  /*
+   * Un protocolo de ceros NO es un protocolo.
+   *
+   * Es el numero con el que despues se le pregunta a SET que paso con el lote.
+   * Cuando SET rechaza el envio en la puerta —por ejemplo 1264, "RUC del
+   * emisor no esta habilitado para utilizar este tipo de servicio"— responde
+   * HTTP 200 con dProtConsLote = 0: el lote nunca se encolo.
+   *
+   * La condicion de abajo solo exigia que el texto no estuviera vacio, y "0"
+   * no lo esta. El documento quedaba en `enviado` y cada consulta devolvia
+   * "aun no hay detalle por CDC", para siempre, porque no habia lote que
+   * consultar. Y el motivo real del rechazo, que SET si habia mandado en
+   * dMsgRes, no se mostraba en ningun lado.
+   */
+  const protEsCero = protTrim.length > 0 && /^0+$/.test(protTrim);
   const loteAceptadoPorSet =
-    resp.loteRecibido ||
-    codigoEs0300 ||
-    (http2xx && protTrim.length > 0 && !resp.loteNoEncolado);
+    !protEsCero &&
+    (resp.loteRecibido ||
+      codigoEs0300 ||
+      (http2xx && protTrim.length > 0 && !resp.loteNoEncolado));
 
   const consultaLoteHint =
     ambienteSoap === "produccion"
@@ -260,11 +276,16 @@ export async function handleSifenEnviarPost(
   } else {
     nuevoEstado = "error_envio";
     const code = resp.dCodRes?.trim() ?? "";
+    /* El mensaje de SET viene con entidades XML («no est&#225; habilitado»);
+       sin decodificar es incomodo de leer justo cuando mas importa. */
+    const msgSet = resp.dMsgRes ? decodificarEntidadesSoapBasicas(resp.dMsgRes) : null;
     nuevoError =
-      [resp.dMsgRes, code ? `Código ${code}` : null, `HTTP ${resp.httpStatus}`]
+      [msgSet, code ? `Código ${code}` : null, `HTTP ${resp.httpStatus}`]
         .filter(Boolean)
         .join(" — ") || "Respuesta inesperada de recibe-lote.";
-    nuevoProt = protTrim.length > 0 ? protTrim : null;
+    /* Un protocolo de ceros no sirve para consultar: no se guarda, asi la
+       pantalla no ofrece «Consultar lote» sobre algo que no existe. */
+    nuevoProt = protTrim.length > 0 && !protEsCero ? protTrim : null;
   }
 
   const { data: updatedRow, error: errUpdate } = await supabase

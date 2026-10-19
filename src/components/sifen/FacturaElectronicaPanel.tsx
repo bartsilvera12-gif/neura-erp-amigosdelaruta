@@ -335,11 +335,17 @@ export function FacturaElectronicaPanel({
         rec?.httpStatus != null && rec.httpStatus >= 200 && rec.httpStatus < 300;
 
       /** Solo éxito real: no mostrar verde si la API guardó error_envio / rechazo de lote. */
+      /* Un protocolo de ceros significa que SET no encoló el lote: responde
+         HTTP 200 y protocolo 0 cuando rechaza en la puerta (p. ej. 1264, RUC
+         no habilitado). Sin esto la pantalla decía "enviado correctamente" y
+         dejaba consultando un lote que no existe. */
+      const protEsCero = prot.length > 0 && /^0+$/.test(prot);
       const loteAceptado =
-        feResp?.estado_sifen === "enviado" ||
-        rec?.loteRecibido === true ||
-        codigoEs0300 ||
-        (http2xx && prot.length > 0 && rec?.loteNoEncolado !== true);
+        !protEsCero &&
+        (feResp?.estado_sifen === "enviado" ||
+          rec?.loteRecibido === true ||
+          codigoEs0300 ||
+          (http2xx && prot.length > 0 && rec?.loteNoEncolado !== true));
 
       if (!loteAceptado) {
         if (resumen != null && feResp) {
