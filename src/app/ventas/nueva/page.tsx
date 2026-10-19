@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import MontoInput from "@/components/ui/MontoInput";
+import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import ProductPickerModal, { type ProductoPickerItem, type AgregarVentaPayload } from "@/components/inventario/ProductPickerModal";
 import { saveVenta } from "@/lib/ventas/storage";
 import { getProductos } from "@/lib/inventario/storage";
@@ -95,6 +96,22 @@ export default function NuevaVentaPage() {
   /* Cómo se cobra. Lo suma el arqueo del turno de caja, así que se persiste.
      Una venta a crédito no cobra nada ahora: va sin método. */
   const [metodoPago, setMetodoPago] = useState<MetodoPagoVenta>("efectivo");
+  /*
+   * Documento que sale de esta venta.
+   *
+   * «ticket» registra la venta y nada mas, como venia haciendo la caja hasta
+   * ahora. «factura» ademas crea la factura del ERP, que es de donde despues
+   * sale el documento electronico por SIFEN.
+   *
+   * Arranca en «ticket» a proposito: cambiar el default haria que todas las
+   * ventas empiecen a emitir facturas sin que nadie lo haya pedido, y hoy
+   * SIFEN todavia no esta configurado. El selector esta a la vista.
+   */
+  const [tipoDocumento, setTipoDocumento] = useState<"ticket" | "factura">("ticket");
+  /* Receptor de la factura. SIFEN exige uno; se resuelve por RUC igual que en
+     el resto de la caja (lo busca y, si no existe, lo crea). */
+  const [facNombre, setFacNombre] = useState("");
+  const [facRuc, setFacRuc] = useState("");
 
   // ── Cobro (solo CONTADO, no se persiste — solo ayuda al cajero) ───────────
   const [montoRecibido, setMontoRecibido] = useState("");
@@ -372,21 +389,69 @@ export default function NuevaVentaPage() {
     setErrorVenta(null);
     if (!ventaValida) return;
 
-    const resultado = await saveVenta({
-      items,
-      moneda,
-      tipo_cambio:  tipoCambioNum,
-      subtotal:     totalSubtotal,
-      monto_iva:    totalIva,
-      total:        totalGeneral,
-      tipo_venta:   tipoVenta,
-      metodo_pago:  tipoVenta === "CONTADO" ? metodoPago : null,
-      plazo_dias:
-        tipoVenta === "CREDITO" && plazoDias ? parseInt(plazoDias) : undefined,
-    });
+    /*
+     * Receptor de la factura. Se resuelve ANTES de confirmar la venta: si el
+     * cliente no se puede crear, no tiene sentido descontar stock para una
+     * factura que despues no va a poder emitirse.
+     */
+    let clienteId: string | null = null;
+    if (tipoDocumento === "factura") {
+      if (!facNombre.trim() || !facRuc.trim()) {
+        setErrorVenta("Para emitir factura hace falta el cliente y su RUC.");
+        return;
+      }
+      try {
+        const rc = await fetchWithSupabaseSession("/api/caja/cliente-por-ruc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ nombre: facNombre.trim(), ruc: facRuc.trim() }),
+        });
+        const rcj = (await rc.json()) as { success?: boolean; data?: { cliente_id?: string }; error?: string };
+        if (!rcj?.success || !rcj.data?.cliente_id) {
+          throw new Error(rcj?.error ?? "No se pudo resolver el cliente.");
+        }
+        clienteId = String(rcj.data.cliente_id);
+      } catch (e) {
+        setErrorVenta(e instanceof Error ? e.message : "No se pudo resolver el cliente.");
+        return;
+      }
+    }
+
+    const resultado = await saveVenta(
+      {
+        items,
+        moneda,
+        tipo_cambio:  tipoCambioNum,
+        subtotal:     totalSubtotal,
+        monto_iva:    totalIva,
+        total:        totalGeneral,
+        tipo_venta:   tipoVenta,
+        metodo_pago:  tipoVenta === "CONTADO" ? metodoPago : null,
+        plazo_dias:
+          tipoVenta === "CREDITO" && plazoDias ? parseInt(plazoDias) : undefined,
+      },
+      { emitirFactura: tipoDocumento === "factura", clienteId }
+    );
 
     if (!resultado.success) {
       setErrorVenta(resultado.error);
+      return;
+    }
+
+    /*
+     * La venta ya esta hecha. Si el puente fallo se avisa y se queda en la
+     * pantalla: el stock ya se descontó y mandarlo a otro lado sin decir nada
+     * dejaria una venta sin factura que nadie volveria a mirar.
+     */
+    if (resultado.facturaWarning) {
+      setErrorVenta(
+        `La venta se registró, pero la factura no: ${resultado.facturaWarning}`
+      );
+      return;
+    }
+
+    if (resultado.factura) {
+      router.push(`/facturas/${resultado.factura.id}`);
       return;
     }
     router.push("/ventas");
@@ -442,6 +507,49 @@ export default function NuevaVentaPage() {
                 onChange={handleTipoVentaChange}
               />
             </div>
+
+            <div className="md:col-span-2">
+              <label className={labelClass}>Documento</label>
+              <SegmentedControl<"ticket" | "factura">
+                value={tipoDocumento}
+                options={[
+                  { value: "ticket", label: "Solo ticket" },
+                  { value: "factura", label: "Factura" },
+                ]}
+                onChange={setTipoDocumento}
+              />
+              <p className="mt-1 text-xs text-gray-400">
+                {tipoDocumento === "factura"
+                  ? "Al confirmar se crea la factura y vas directo a emitirla."
+                  : "Registra la venta y descuenta el stock, sin emitir factura."}
+              </p>
+            </div>
+
+            {tipoDocumento === "factura" && (
+              <>
+                <div className="md:col-start-1">
+                  <label className={labelClass}>Cliente (razón social) *</label>
+                  <input
+                    value={facNombre}
+                    onChange={(e) => setFacNombre(e.target.value)}
+                    placeholder="Nombre o razón social"
+                    className={inputClass}
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>RUC / CI *</label>
+                  <input
+                    value={facRuc}
+                    onChange={(e) => setFacRuc(e.target.value)}
+                    placeholder="80012345-6"
+                    className={inputClass}
+                  />
+                  <p className="mt-1 text-xs text-gray-400">
+                    Si el cliente no existe se crea solo. La factura necesita un receptor.
+                  </p>
+                </div>
+              </>
+            )}
 
             {/* Fila 2: sub-campos condicionales (alineados bajo su parent) */}
             {moneda === "USD" && (

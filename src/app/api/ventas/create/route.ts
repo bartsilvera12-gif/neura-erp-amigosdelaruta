@@ -6,6 +6,9 @@ import type { CreateVentaItemInput } from "@/lib/ventas/server/create-venta-pg";
 import { successResponse, errorResponse } from "@/lib/api/response";
 import { API_ERRORS } from "@/lib/api/errors";
 import type { Venta, LineaVenta } from "@/lib/ventas/types";
+import { getFacturasServiceClientForEmpresa } from "@/lib/facturacion/facturas-service-client";
+import { crearFacturaDesdeVenta } from "@/lib/ventas/server/venta-a-factura";
+import { fechaMasDiasCalendario } from "@/lib/fechas/calendario";
 
 function asItems(body: unknown): CreateVentaItemInput[] | null {
   if (!body || typeof body !== "object") return null;
@@ -102,6 +105,13 @@ export async function POST(request: NextRequest) {
     const moneda = o.moneda === "USD" ? "USD" : "GS";
     const tipoCambio = Number(o.tipo_cambio) || 1;
     const tipoVenta = o.tipo_venta === "CREDITO" ? "CREDITO" : "CONTADO";
+    /*
+     * `emitir_factura`: la caja elige entre factura y ticket interno. Sin el
+     * campo se asume ticket, que es el comportamiento que tenia esta ruta
+     * antes del puente: asi un cliente viejo de la API no empieza a emitir
+     * documentos sin haberlo pedido.
+     */
+    const emitirFactura = o.emitir_factura === true;
     const plazoDias =
       tipoVenta === "CREDITO" && o.plazo_dias != null && String(o.plazo_dias).trim() !== ""
         ? parseInt(String(o.plazo_dias), 10)
@@ -185,7 +195,49 @@ export async function POST(request: NextRequest) {
       total: tot,
     });
 
-    return NextResponse.json(successResponse({ venta }));
+    /*
+     * Puente venta → factura. Solo si la caja lo pidió (`emitir_factura`): el
+     * cajero puede estar haciendo un ticket interno, y en ese caso no
+     * corresponde emitir un documento.
+     *
+     * Es best-effort a propósito. La venta ya está confirmada y el stock ya se
+     * descontó: si falla la factura no se puede deshacer eso sin inventar una
+     * devolución. Se devuelve `factura_warning` y la caja avisa, en vez de
+     * perder una venta que ya ocurrió en el mostrador.
+     */
+    let factura: { id: string; numero_factura: string } | null = null;
+    let facturaWarning: string | null = null;
+
+    if (emitirFactura) {
+      try {
+        if (!clienteId) {
+          throw new Error("Para emitir una factura hace falta elegir el cliente.");
+        }
+        const sbFac = await getFacturasServiceClientForEmpresa(auth.empresa_id);
+        const fechaCal = fechaIso.slice(0, 10);
+        const r = await crearFacturaDesdeVenta(sbFac, {
+          empresaId: auth.empresa_id,
+          clienteId,
+          ventaId,
+          items,
+          total: tot,
+          moneda,
+          tipoVenta,
+          fecha: fechaCal,
+          fechaVencimiento:
+            tipoVenta === "CREDITO" && Number.isFinite(plazoDias as number) && (plazoDias as number) > 0
+              ? fechaMasDiasCalendario(fechaCal, plazoDias as number)
+              : fechaCal,
+          observaciones,
+        });
+        factura = { id: r.facturaId, numero_factura: r.numeroFactura };
+      } catch (e) {
+        facturaWarning = e instanceof Error ? e.message : "No se pudo crear la factura de la venta.";
+        console.error("[ventas/create] puente venta→factura:", facturaWarning);
+      }
+    }
+
+    return NextResponse.json(successResponse({ venta, factura, factura_warning: facturaWarning }));
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Error al crear la venta.";
     const status =
