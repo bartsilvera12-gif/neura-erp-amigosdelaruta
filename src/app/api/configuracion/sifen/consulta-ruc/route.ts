@@ -98,7 +98,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(
       successResponse({
         ambiente,
-        ruc_consultado: ruc,
+        /* El normalizado, que es el que viajó a la SET: mostrar `80176053-4`
+           cuando se consultó `80176053` hace dudar de qué se pregunto. */
+        ruc_consultado: ruc.trim().split("-")[0]?.replace(/[^0-9]/g, "") ?? ruc,
         veredicto,
         facturador_electronico: r.esFacturadorElectronico,
         razon_social: r.razonSocial,

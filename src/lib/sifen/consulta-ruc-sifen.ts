@@ -81,6 +81,17 @@ function construirSoapConsultaRuc(dId: number, ruc: string): string {
   );
 }
 
+/* La SET devuelve el texto con entidades XML: «SOCIEDAD AN&#211;NIMA». */
+function decodificarEntidades(s: string): string {
+  return s
+    .replace(/&#(\d+);/g, (_, n: string) => String.fromCharCode(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h: string) => String.fromCharCode(parseInt(h, 16)))
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"');
+}
+
 function extraerTextoElemento(xml: string, local: string): string | null {
   const re = new RegExp(
     `<(?:[^\\s/>:]+:)?${local}\\b[^>]*>([\\s\\S]*?)</(?:[^\\s/>:]+:)?${local}\\b[^>]*>`,
@@ -88,7 +99,7 @@ function extraerTextoElemento(xml: string, local: string): string | null {
   );
   const m = xml.match(re);
   if (!m?.[1]) return null;
-  const inner = m[1].replace(/<[^>]+>/g, "").trim();
+  const inner = decodificarEntidades(m[1].replace(/<[^>]+>/g, "")).trim();
   return inner.length > 0 ? inner : null;
 }
 
