@@ -20,6 +20,7 @@ interface VentaRow {
   tipo_venta: string;
   plazo_dias: number | null;
   fecha: string;
+  factura_id: string | null;
 }
 
 interface VentaItemRow {
@@ -71,10 +72,25 @@ export async function GET(request: NextRequest) {
     const tV = quoteSchemaTable(schema, "ventas");
     const tI = quoteSchemaTable(schema, "ventas_items");
 
+    /*
+     * `ventas.factura_id` lo agrega el puente venta→factura y puede no existir
+     * todavia en este esquema. Se pregunta antes de pedirlo: si se incluyera a
+     * ciegas en el SELECT, una instancia sin la columna se quedaria sin lista
+     * de ventas, que es mucho peor que no poder saltar a la factura.
+     */
+    const colQ = await queryWithRetry<{ existe: boolean }>(pool,
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.columns
+          WHERE table_schema = $1 AND table_name = 'ventas' AND column_name = 'factura_id'
+       ) AS existe`,
+      [schema]
+    );
+    const hayFacturaId = colQ.rows[0]?.existe === true;
+
     // Serializado (no Promise.all) para no agotar el pool session-mode (limite 15).
     const ventasQ = await queryWithRetry<VentaRow>(pool,
       `SELECT id, empresa_id, numero_control, moneda, tipo_cambio, subtotal, monto_iva,
-              total, tipo_venta, plazo_dias, fecha
+              total, tipo_venta, plazo_dias, fecha${hayFacturaId ? ", factura_id" : ", NULL::uuid AS factura_id"}
          FROM ${tV} WHERE empresa_id = $1::uuid
         ORDER BY fecha DESC LIMIT 500`,
       [empresaId]
@@ -107,6 +123,7 @@ export async function GET(request: NextRequest) {
         tipo_venta: r.tipo_venta === "CREDITO" ? "CREDITO" : "CONTADO",
         plazo_dias: r.plazo_dias ?? undefined,
         fecha: r.fecha,
+        factura_id: r.factura_id ?? null,
       };
     });
 

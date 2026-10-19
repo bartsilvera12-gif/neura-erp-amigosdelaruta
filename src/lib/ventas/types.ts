@@ -45,6 +45,13 @@ export interface Venta {
   plazo_dias?: number;       // solo si tipo_venta === "CREDITO"
 
   /**
+   * Factura del ERP que nacio de esta venta, si la caja eligio emitirla.
+   * `null` en las ventas que se hicieron como ticket, y en las anteriores al
+   * puente venta->factura.
+   */
+  factura_id?: string | null;
+
+  /**
    * Cómo se cobró. Es lo que suma el arqueo del turno de caja, por eso la lista
    * es cerrada y coincide con el CHECK de `ventas.metodo_pago` en la base.
    * `null` en las ventas anteriores al módulo Caja.

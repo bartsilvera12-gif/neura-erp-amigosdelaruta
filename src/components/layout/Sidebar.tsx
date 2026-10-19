@@ -147,10 +147,15 @@ const MENU_STRUCTURE_COMPLETO: MenuItem[] = [
    * esta habilitado en `empresa_modulos`, el enlace aparece pero la pantalla
    * no abre.
    */
-  { key: "ventas", slug: "ventas", label: "Caja", href: "/ventas", icon: ShoppingCart, children: [
-    { label: "Modo de facturación", href: "/configuracion/facturacion" },
-    { label: "Facturación electrónica", href: "/configuracion/facturacion-electronica" },
-  ]},
+  /*
+   * Los accesos a "Modo de facturacion" y "Facturacion electronica" se quitan
+   * del menu: ahora /configuracion es alcanzable directo, asi que el atajo
+   * duplicaba la entrada. Se dejan comentados por si vuelve a hacer falta.
+   *
+   * { label: "Modo de facturación", href: "/configuracion/facturacion" },
+   * { label: "Facturación electrónica", href: "/configuracion/facturacion-electronica" },
+   */
+  { key: "ventas", slug: "ventas", label: "Caja", href: "/ventas", icon: ShoppingCart },
   { key: "inventario", slug: "inventario", label: "Inventario", href: "/inventario", icon: Package, children: [
     { label: "Productos", href: "/inventario" },
     { label: "Movimientos", href: "/inventario/movimientos" },

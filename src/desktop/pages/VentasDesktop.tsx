@@ -380,19 +380,20 @@ export default function VentasDesktop() {
                 <th className="py-3 pr-4 font-medium">IVA</th>
                 <th className="py-3 pr-4 text-right font-medium">Total</th>
                 <th className="py-3 pr-4 font-medium">Tipo</th>
-                <th className="py-3 font-medium">Fecha</th>
+                <th className="py-3 pr-4 font-medium">Fecha</th>
+                <th className="py-3 font-medium">Factura</th>
               </tr>
             </thead>
             <tbody>
               {cargando ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-gray-400">
+                  <td colSpan={9} className="py-12 text-center text-gray-400">
                     Cargando ventas…
                   </td>
                 </tr>
               ) : filtradas.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-gray-400">
+                  <td colSpan={9} className="py-12 text-center text-gray-400">
                     {todas.length === 0
                       ? "No hay ventas registradas"
                       : "Ninguna venta coincide con los filtros"}
@@ -435,8 +436,22 @@ export default function VentasDesktop() {
                           {v.tipo_venta === "CONTADO" ? "Contado" : `Crédito ${v.plazo_dias ?? ""}d`}
                         </span>
                       </td>
-                      <td className="py-4 align-middle text-xs tabular-nums text-gray-500">
+                      <td className="py-4 pr-4 align-middle text-xs tabular-nums text-gray-500">
                         {formatFecha(v.fecha)}
+                      </td>
+                      <td className="py-4 align-middle">
+                        {/* Solo las ventas hechas en modo "Factura" tienen una.
+                            Las de ticket, y las anteriores al puente, no. */}
+                        {v.factura_id ? (
+                          <Link
+                            href={`/facturas/${v.factura_id}`}
+                            className="inline-flex items-center rounded-lg border border-[#4FAEB2]/40 px-2.5 py-1 text-[11px] font-semibold text-[#3F8E91] transition-colors hover:bg-[#4FAEB2]/10"
+                          >
+                            Ver factura
+                          </Link>
+                        ) : (
+                          <span className="text-[11px] text-gray-400">Sin factura</span>
+                        )}
                       </td>
                     </tr>
                   );
