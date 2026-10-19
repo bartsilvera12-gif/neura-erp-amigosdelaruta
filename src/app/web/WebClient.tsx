@@ -454,7 +454,15 @@ export default function WebClient({ seccion }: { seccion: SeccionWeb }) {
           )}
 
           {seccion === "configuracion" && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-5">
+            <>
+            <ContactoSitio
+              fila={data.config.find((c) => String(c.clave) === "contacto") ?? null}
+              guardando={guardando === "cfg:contacto"}
+              onGuardar={(valor) =>
+                guardar("config", null, { clave: "contacto", valor, nota: "Datos de contacto que muestra el sitio" }, "cfg:contacto")
+              }
+            />
+            <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-5">
               <p className="text-sm text-slate-500">
                 WhatsApp, teléfono, redes, medios de pago, cotizaciones y la seña. El valor se
                 guarda como JSON: un texto va entre comillas, un objeto entre llaves.
@@ -507,10 +515,131 @@ export default function WebClient({ seccion }: { seccion: SeccionWeb }) {
                 })}
               </div>
             </section>
+            </>
           )}
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Datos de contacto del sitio.
+ *
+ * Son los que el sitio muestra en su pie y los que usa el boton de WhatsApp.
+ * Se guardan en la clave `contacto` de `web_config`, que es la misma que el
+ * sitio lee del catalogo; antes habia que escribir ese JSON a mano.
+ *
+ * Un campo vacio NO borra el dato en el sitio: alla se conserva el valor de
+ * respaldo. Es a proposito, para que un borrado accidental no deje al sitio
+ * sin telefono.
+ */
+function ContactoSitio({
+  fila,
+  guardando,
+  onGuardar,
+}: {
+  fila: Fila | null;
+  guardando: boolean;
+  onGuardar: (valor: Record<string, unknown>) => Promise<void> | void;
+}) {
+  const actual = (fila?.valor ?? {}) as Record<string, unknown>;
+  const redesActuales = (actual.redes ?? {}) as Record<string, unknown>;
+  const txt = (v: unknown) => (typeof v === "string" ? v : "");
+
+  const [f, setF] = useState({
+    whatsapp: txt(actual.whatsapp),
+    telefono_visible: txt(actual.telefono_visible),
+    email: txt(actual.email),
+    ubicacion: txt(actual.ubicacion),
+    instagram: txt(redesActuales.instagram),
+    facebook: txt(redesActuales.facebook),
+    youtube: txt(redesActuales.youtube),
+    tiktok: txt(redesActuales.tiktok),
+  });
+
+  // Si llega el dato despues de cargar, el formulario se sincroniza una vez.
+  const idFila = String(fila?.id ?? "");
+  const [visto, setVisto] = useState(idFila);
+  if (idFila !== visto) {
+    setVisto(idFila);
+    setF({
+      whatsapp: txt(actual.whatsapp),
+      telefono_visible: txt(actual.telefono_visible),
+      email: txt(actual.email),
+      ubicacion: txt(actual.ubicacion),
+      instagram: txt(redesActuales.instagram),
+      facebook: txt(redesActuales.facebook),
+      youtube: txt(redesActuales.youtube),
+      tiktok: txt(redesActuales.tiktok),
+    });
+  }
+
+  const campo = (k: keyof typeof f, label: string, placeholder: string, ayuda?: string) => (
+    <div>
+      <div className="mb-1 text-xs font-medium text-slate-500">{label}</div>
+      <input
+        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-800 outline-none focus:border-[#4FAEB2] focus:ring-2 focus:ring-[#4FAEB2]/20"
+        value={f[k]}
+        placeholder={placeholder}
+        onChange={(e) => setF((x) => ({ ...x, [k]: e.target.value }))}
+      />
+      {ayuda ? <p className="mt-1 text-[11px] text-slate-400">{ayuda}</p> : null}
+    </div>
+  );
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5">
+      <h2 className="text-sm font-semibold text-slate-900">Datos de contacto del sitio</h2>
+      <p className="mt-1 text-xs text-slate-500">
+        Lo que el sitio muestra abajo de todo y a donde lleva el botón de WhatsApp. Lo que dejes
+        vacío no se toca: el sitio sigue mostrando lo que tenía.
+      </p>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        {campo("whatsapp", "WhatsApp", "595971123456", "Solo números, con el código de país y sin el +.")}
+        {campo("telefono_visible", "Teléfono como se muestra", "+595 971 123 456", "Si lo dejás vacío se arma con el WhatsApp.")}
+        {campo("email", "Email", "hola@amigosderuta.com")}
+        {campo("ubicacion", "Ubicación", "Asunción · Paraguay")}
+      </div>
+
+      <div className="mt-5 text-xs font-semibold uppercase tracking-wide text-slate-500">Redes</div>
+      <p className="mt-1 text-[11px] text-slate-400">
+        Dirección completa, con https://. La que dejes vacía no aparece en el sitio.
+      </p>
+      <div className="mt-2 grid gap-3 sm:grid-cols-2">
+        {campo("instagram", "Instagram", "https://instagram.com/…")}
+        {campo("facebook", "Facebook", "https://facebook.com/…")}
+        {campo("youtube", "YouTube", "https://youtube.com/@…")}
+        {campo("tiktok", "TikTok", "https://tiktok.com/@…")}
+      </div>
+
+      <button
+        type="button"
+        disabled={guardando}
+        onClick={() =>
+          void onGuardar({
+            whatsapp: f.whatsapp.replace(/[^0-9]/g, ""),
+            telefono_visible: f.telefono_visible.trim(),
+            email: f.email.trim(),
+            ubicacion: f.ubicacion.trim(),
+            redes: {
+              instagram: f.instagram.trim(),
+              facebook: f.facebook.trim(),
+              youtube: f.youtube.trim(),
+              tiktok: f.tiktok.trim(),
+            },
+          })
+        }
+        className="mt-4 inline-flex items-center gap-2 rounded-xl bg-[#4FAEB2] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+      >
+        <Save className="h-4 w-4" />
+        {guardando ? "Guardando…" : "Guardar contacto"}
+      </button>
+      <p className="mt-2 text-[11px] text-slate-400">
+        El sitio lo toma en cuanto alguien lo abre; no hace falta publicar nada.
+      </p>
+    </section>
   );
 }
 
