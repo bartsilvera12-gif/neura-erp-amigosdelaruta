@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Plus } from "lucide-react";
 import EdgeScrollArea from "@/components/ui/EdgeScrollArea";
 import { FancySelect } from "@/app/dashboard/proyectos/components/FancySelect";
 // import { NuevaFacturaCajaModal } from "@/components/caja/NuevaFacturaCajaModal"; // Nueva factura — COMENTADO
 import CajaControlPanel from "@/components/caja/CajaControlPanel";
 import { getVentas } from "@/lib/ventas/storage";
+import DetalleVentaPanel from "@/components/ventas/DetalleVentaPanel";
 import type { Venta, TipoVenta, TipoIvaVenta } from "@/lib/ventas/types";
 
 /**
@@ -177,25 +178,29 @@ export default function VentasDesktop() {
   const [filtroIva, setFiltroIva] = useState<TipoIvaVenta | "">("");
   // const [facturaOpen, setFacturaOpen] = useState(false); // Nueva factura — COMENTADO
 
+  /** Venta abierta en el panel de detalle. */
+  const [detalle, setDetalle] = useState<Venta | null>(null);
+
+  const cargar = useCallback(async () => {
+    const data = await getVentas();
+    const ordenadas = [...data].sort((a, b) => {
+      const ta = new Date(a.fecha).getTime();
+      const tb = new Date(b.fecha).getTime();
+      return tb - ta || b.numero_control.localeCompare(a.numero_control);
+    });
+    setTodas(ordenadas);
+    return ordenadas;
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
-    getVentas()
-      .then((data) => {
-        if (cancelled) return;
-        const ordenadas = [...data].sort((a, b) => {
-          const ta = new Date(a.fecha).getTime();
-          const tb = new Date(b.fecha).getTime();
-          return tb - ta || b.numero_control.localeCompare(a.numero_control);
-        });
-        setTodas(ordenadas);
-      })
-      .finally(() => {
-        if (!cancelled) setCargando(false);
-      });
+    void cargar().finally(() => {
+      if (!cancelled) setCargando(false);
+    });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [cargar]);
 
   const metricas = calcularMetricas(todas);
 
@@ -375,6 +380,7 @@ export default function VentasDesktop() {
               <tr className="bg-slate-50 text-sm font-semibold text-slate-600">
                 <th className="py-3 pr-4 font-medium">Número</th>
                 <th className="py-3 pr-4 font-medium">Productos</th>
+                <th className="py-3 pr-4 font-medium">Cliente</th>
                 <th className="py-3 pr-4 text-center font-medium">Ítems</th>
                 <th className="py-3 pr-4 text-right font-medium">Cant. total</th>
                 <th className="py-3 pr-4 font-medium">IVA</th>
@@ -382,18 +388,19 @@ export default function VentasDesktop() {
                 <th className="py-3 pr-4 font-medium">Tipo</th>
                 <th className="py-3 pr-4 font-medium">Fecha</th>
                 <th className="py-3 font-medium">Factura</th>
+                <th className="py-3 font-medium"></th>
               </tr>
             </thead>
             <tbody>
               {cargando ? (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-gray-400">
+                  <td colSpan={11} className="py-12 text-center text-gray-400">
                     Cargando ventas…
                   </td>
                 </tr>
               ) : filtradas.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-gray-400">
+                  <td colSpan={11} className="py-12 text-center text-gray-400">
                     {todas.length === 0
                       ? "No hay ventas registradas"
                       : "Ninguna venta coincide con los filtros"}
@@ -412,6 +419,18 @@ export default function VentasDesktop() {
                       </td>
                       <td className="py-4 pr-4 align-middle">
                         <ResumenProductos v={v} />
+                      </td>
+                      <td className="py-4 pr-4 align-middle">
+                        {v.cliente_nombre ? (
+                          <>
+                            <div className="text-sm text-gray-700">{v.cliente_nombre}</div>
+                            {v.cliente_ruc ? (
+                              <div className="font-mono text-[11px] text-gray-400">{v.cliente_ruc}</div>
+                            ) : null}
+                          </>
+                        ) : (
+                          <span className="text-[11px] text-gray-400">Sin cliente</span>
+                        )}
                       </td>
                       <td className="py-4 pr-4 text-center align-middle">
                         <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-gray-100 text-xs font-semibold text-gray-600">
@@ -445,13 +464,22 @@ export default function VentasDesktop() {
                         {v.factura_id ? (
                           <Link
                             href={`/facturas/${v.factura_id}`}
-                            className="inline-flex items-center rounded-lg border border-[#4FAEB2]/40 px-2.5 py-1 text-[11px] font-semibold text-[#3F8E91] transition-colors hover:bg-[#4FAEB2]/10"
+                            className="inline-flex items-center rounded-lg border border-[#4FAEB2]/40 px-2.5 py-1 font-mono text-[11px] font-semibold text-[#3F8E91] transition-colors hover:bg-[#4FAEB2]/10"
                           >
-                            Ver factura
+                            {v.factura_numero ?? "Ver factura"}
                           </Link>
                         ) : (
                           <span className="text-[11px] text-gray-400">Sin factura</span>
                         )}
+                      </td>
+                      <td className="py-4 align-middle text-right">
+                        <button
+                          type="button"
+                          onClick={() => setDetalle(v)}
+                          className="rounded-lg px-2.5 py-1 text-[11px] font-semibold text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                        >
+                          Detalle
+                        </button>
                       </td>
                     </tr>
                   );
@@ -464,6 +492,17 @@ export default function VentasDesktop() {
 
       {/* Nueva factura — COMENTADO
       <NuevaFacturaCajaModal open={facturaOpen} onClose={() => setFacturaOpen(false)} /> */}
+
+      <DetalleVentaPanel
+        venta={detalle}
+        onClose={() => setDetalle(null)}
+        onAnulada={async () => {
+          // Se recarga y se vuelve a apuntar al mismo id: el panel queda
+          // abierto mostrando el estado nuevo, con su motivo.
+          const frescas = await cargar();
+          setDetalle((d) => (d ? frescas.find((x) => x.id === d.id) ?? null : null));
+        }}
+      />
     </div>
   );
 }

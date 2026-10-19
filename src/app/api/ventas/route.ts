@@ -21,6 +21,15 @@ interface VentaRow {
   plazo_dias: number | null;
   fecha: string;
   factura_id: string | null;
+  estado: string | null;
+  metodo_pago: string | null;
+  usuario_nombre: string | null;
+  observaciones: string | null;
+  cliente_nombre: string | null;
+  cliente_ruc: string | null;
+  factura_numero: string | null;
+  motivo_anulacion: string | null;
+  anulada_at: string | null;
 }
 
 interface VentaItemRow {
@@ -88,11 +97,38 @@ export async function GET(request: NextRequest) {
     const hayFacturaId = colQ.rows[0]?.existe === true;
 
     // Serializado (no Promise.all) para no agotar el pool session-mode (limite 15).
+    /*
+     * Las columnas de la anulacion tambien son nuevas. Mismo criterio que
+     * `factura_id`: se preguntan antes de pedirlas para que una instancia sin
+     * la migracion no se quede sin lista de ventas.
+     */
+    const colAnulQ = await queryWithRetry<{ existe: boolean }>(pool,
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.columns
+          WHERE table_schema = $1 AND table_name = 'ventas' AND column_name = 'anulada_at'
+       ) AS existe`,
+      [schema]
+    );
+    const hayAnulacion = colAnulQ.rows[0]?.existe === true;
+
+    const tC = quoteSchemaTable(schema, "clientes");
+    const tF = quoteSchemaTable(schema, "facturas");
+
     const ventasQ = await queryWithRetry<VentaRow>(pool,
-      `SELECT id, empresa_id, numero_control, moneda, tipo_cambio, subtotal, monto_iva,
-              total, tipo_venta, plazo_dias, fecha${hayFacturaId ? ", factura_id" : ", NULL::uuid AS factura_id"}
-         FROM ${tV} WHERE empresa_id = $1::uuid
-        ORDER BY fecha DESC LIMIT 500`,
+      `SELECT v.id, v.empresa_id, v.numero_control, v.moneda, v.tipo_cambio, v.subtotal,
+              v.monto_iva, v.total, v.tipo_venta, v.plazo_dias, v.fecha,
+              v.estado, v.metodo_pago, v.usuario_nombre, v.observaciones,
+              ${hayFacturaId ? "v.factura_id" : "NULL::uuid AS factura_id"},
+              ${hayAnulacion ? "v.motivo_anulacion, v.anulada_at" : "NULL::text AS motivo_anulacion, NULL::timestamptz AS anulada_at"},
+              coalesce(nullif(btrim(c.empresa), ''), nullif(btrim(c.nombre_contacto), ''),
+                       nullif(btrim(c.razon_social), '')) AS cliente_nombre,
+              c.ruc AS cliente_ruc,
+              ${hayFacturaId ? "f.numero_factura" : "NULL::text"} AS factura_numero
+         FROM ${tV} v
+         LEFT JOIN ${tC} c ON c.id = v.cliente_id AND c.empresa_id = v.empresa_id
+         ${hayFacturaId ? `LEFT JOIN ${tF} f ON f.id = v.factura_id AND f.empresa_id = v.empresa_id` : ""}
+        WHERE v.empresa_id = $1::uuid
+        ORDER BY v.fecha DESC LIMIT 500`,
       [empresaId]
     );
     const itemsQ = await queryWithRetry<VentaItemRow>(pool,
@@ -109,6 +145,12 @@ export async function GET(request: NextRequest) {
       byVenta.set(row.venta_id, list);
     }
 
+    /* El CHECK de la base y el tipo del front tienen que coincidir; si algún
+       día divergen, se prefiere `null` antes que romper la lista entera. */
+    const METODOS = new Set(["efectivo", "tarjeta", "transferencia", "cheque", "otro"]);
+    const metodoPagoDe = (v: string | null): Venta["metodo_pago"] =>
+      v && METODOS.has(v) ? (v as NonNullable<Venta["metodo_pago"]>) : null;
+
     const ventas: Venta[] = ventasQ.rows.map((r) => {
       const lineRows = byVenta.get(r.id) ?? [];
       return {
@@ -124,6 +166,15 @@ export async function GET(request: NextRequest) {
         plazo_dias: r.plazo_dias ?? undefined,
         fecha: r.fecha,
         factura_id: r.factura_id ?? null,
+        estado: r.estado ?? null,
+        metodo_pago: metodoPagoDe(r.metodo_pago),
+        usuario_nombre: r.usuario_nombre ?? null,
+        observaciones: r.observaciones ?? null,
+        cliente_nombre: r.cliente_nombre ?? null,
+        cliente_ruc: r.cliente_ruc ?? null,
+        factura_numero: r.factura_numero ?? null,
+        motivo_anulacion: r.motivo_anulacion ?? null,
+        anulada_at: r.anulada_at ?? null,
       };
     });
 

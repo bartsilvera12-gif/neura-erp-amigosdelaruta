@@ -50,6 +50,19 @@ export interface Venta {
    * puente venta->factura.
    */
   factura_id?: string | null;
+  /** Numero de la factura (FAC-000001), si la venta la generó. */
+  factura_numero?: string | null;
+
+  /** `completada` o `anulada`. */
+  estado?: string | null;
+  motivo_anulacion?: string | null;
+  anulada_at?: string | null;
+
+  /** Receptor de la venta, cuando se eligió uno. */
+  cliente_nombre?: string | null;
+  cliente_ruc?: string | null;
+  usuario_nombre?: string | null;
+  observaciones?: string | null;
 
   /**
    * Cómo se cobró. Es lo que suma el arqueo del turno de caja, por eso la lista

@@ -101,3 +101,27 @@ export async function saveVenta(
     return { success: false, error: msg };
   }
 }
+
+/** Anula una venta: devuelve el stock y la marca anulada. */
+export async function anularVenta(
+  ventaId: string,
+  motivo: string
+): Promise<{ success: true } | { success: false; error: string }> {
+  try {
+    const res = await fetchWithSupabaseSession(
+      `/api/ventas/${encodeURIComponent(ventaId)}/anular`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ motivo }),
+      }
+    );
+    const json = (await res.json().catch(() => ({}))) as { success?: boolean; error?: string };
+    if (!res.ok || !json?.success) {
+      return { success: false, error: json?.error ?? `No se pudo anular la venta (${res.status}).` };
+    }
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : "Error de red." };
+  }
+}
