@@ -8,15 +8,17 @@ export const SIFEN_WS = {
     recepLote: "https://sifen-test.set.gov.py/de/ws/async/recibe-lote.wsdl",
     consultaLote: "https://sifen-test.set.gov.py/de/ws/consultas/consulta-lote.wsdl",
     recibeSync: "https://sifen-test.set.gov.py/de/ws/sync/recibe.wsdl",
+    consultaRuc: "https://sifen-test.set.gov.py/de/ws/consultas/consulta-ruc.wsdl",
   },
   produccion: {
     recepLote: "https://sifen.set.gov.py/de/ws/async/recibe-lote.wsdl",
     consultaLote: "https://sifen.set.gov.py/de/ws/consultas/consulta-lote.wsdl",
     recibeSync: "https://sifen.set.gov.py/de/ws/sync/recibe.wsdl",
+    consultaRuc: "https://sifen.set.gov.py/de/ws/consultas/consulta-ruc.wsdl",
   },
 } as const satisfies Record<
   AmbienteSifen,
-  { recepLote: string; consultaLote: string; recibeSync: string }
+  { recepLote: string; consultaLote: string; recibeSync: string; consultaRuc: string }
 >;
 
 export function urlRecepLote(ambiente: AmbienteSifen): string {
@@ -29,4 +31,9 @@ export function urlConsultaLote(ambiente: AmbienteSifen): string {
 
 export function urlRecibeSync(ambiente: AmbienteSifen): string {
   return SIFEN_WS[ambiente].recibeSync;
+}
+
+/** Consulta de RUC: dice si el contribuyente es facturador electrónico. */
+export function urlConsultaRuc(ambiente: AmbienteSifen): string {
+  return SIFEN_WS[ambiente].consultaRuc;
 }
