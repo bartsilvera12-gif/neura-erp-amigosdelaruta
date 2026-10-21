@@ -76,6 +76,9 @@ export default function FacturacionElectronicaSifenPage() {
   const [establecimiento, setEstablecimiento] = useState("");
   const [puntoExpedicion, setPuntoExpedicion] = useState("");
   const [csc, setCsc] = useState("");
+  /* Cual de los CSC del contribuyente es: la SET entrega cada codigo con su
+     numero (0001, 0002) y verifica el hash del QR contra ese. */
+  const [idCsc, setIdCsc] = useState("");
   const [activo, setActivo] = useState(true);
   /** Horas desde aprobación SET para permitir cancelación del DE en ERP (config por empresa). */
   const [plazoCancelacionHoras, setPlazoCancelacionHoras] = useState(48);
@@ -129,6 +132,7 @@ export default function FacturacionElectronicaSifenPage() {
         setEstablecimiento(d.establecimiento);
         setPuntoExpedicion(d.punto_expedicion);
         setCsc(d.csc ?? "");
+        setIdCsc(d.id_csc ?? "");
         setActivo(d.activo);
         setPlazoCancelacionHoras(
           typeof d.sifen_plazo_cancelacion_horas === "number" && Number.isFinite(d.sifen_plazo_cancelacion_horas)
@@ -209,6 +213,7 @@ export default function FacturacionElectronicaSifenPage() {
           establecimiento: establecimiento.trim(),
           punto_expedicion: puntoExpedicion.trim(),
           csc: csc.trim() || null,
+          id_csc: idCsc.trim() || null,
           activo,
           sifen_plazo_cancelacion_horas: Math.min(8760, Math.max(1, Math.floor(Number(plazoCancelacionHoras)) || 48)),
         };
@@ -242,6 +247,7 @@ export default function FacturacionElectronicaSifenPage() {
           establecimiento: establecimiento.trim(),
           punto_expedicion: puntoExpedicion.trim(),
           csc: csc.trim() || null,
+          id_csc: idCsc.trim() || null,
           activo,
           certificado_vencimiento: venc,
           sifen_plazo_cancelacion_horas: Math.min(8760, Math.max(1, Math.floor(Number(plazoCancelacionHoras)) || 48)),
@@ -702,6 +708,21 @@ export default function FacturacionElectronicaSifenPage() {
                 autoComplete="off"
               />
             </div>
+            <div>
+              <label className={fLabel}>N° de CSC (IdCSC)</label>
+              <input
+                className={fInput}
+                value={idCsc}
+                onChange={(e) => setIdCsc(e.target.value)}
+                placeholder="0001"
+                autoComplete="off"
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Cuál de los CSC del contribuyente es el de arriba. La SET entrega cada código con
+                su número y verifica el hash del QR contra ése: si acá dice <code>0001</code> y el
+                código es el <code>0002</code>, devuelve «hash del código QR inválido». Vacío = 0001.
+              </p>
+            </div>
           </div>
         </Card>
 
@@ -942,6 +963,7 @@ export default function FacturacionElectronicaSifenPage() {
                   setEstablecimiento(cfg.establecimiento);
                   setPuntoExpedicion(cfg.punto_expedicion);
                   setCsc(cfg.csc ?? "");
+                  setIdCsc(cfg.id_csc ?? "");
                   setActivo(cfg.activo);
                   setCertVenc(isoToDateInput(cfg.certificado_vencimiento));
                 }

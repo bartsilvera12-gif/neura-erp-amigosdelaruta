@@ -179,6 +179,7 @@ export function validateCreateBody(raw: unknown): EmpresaSifenConfigCreateResult
     punto_expedicion,
     ambiente,
     csc: optionalNullableString(b.csc),
+    id_csc: optionalNullableString(b.id_csc),
     certificado_path: optionalNullableString(b.certificado_path),
     certificado_password,
     certificado_vencimiento,
@@ -358,6 +359,7 @@ export function rowFromCreateBody(empresaId: string, body: EmpresaSifenConfigCre
     establecimiento: body.establecimiento,
     punto_expedicion: body.punto_expedicion,
     csc: body.csc ?? null,
+    id_csc: body.id_csc ?? null,
     certificado_path: body.certificado_path ?? null,
     activo: body.activo ?? true,
   };

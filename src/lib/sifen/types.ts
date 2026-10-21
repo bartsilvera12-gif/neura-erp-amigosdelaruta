@@ -26,6 +26,8 @@ export interface EmpresaSifenConfigDTO {
   establecimiento: string;
   punto_expedicion: string;
   csc: string | null;
+  /** Cuál de los CSC del contribuyente es (0001 / 0002). Vacío = 0001. */
+  id_csc: string | null;
   certificado_path: string | null;
   certificado_vencimiento: string | null;
   activo: boolean;
@@ -62,6 +64,8 @@ export interface EmpresaSifenConfigCreateBody {
   punto_expedicion: string;
   ambiente: AmbienteSifen;
   csc?: string | null;
+  /** Cuál de los CSC del contribuyente es (0001 / 0002). Vacío = 0001. */
+  id_csc?: string | null;
   certificado_path?: string | null;
   certificado_password?: string | null;
   certificado_vencimiento?: string | null;
@@ -85,6 +89,8 @@ export interface EmpresaSifenConfigPatchBody {
   punto_expedicion?: string;
   ambiente?: AmbienteSifen;
   csc?: string | null;
+  /** Cuál de los CSC del contribuyente es (0001 / 0002). Vacío = 0001. */
+  id_csc?: string | null;
   certificado_path?: string | null;
   certificado_password?: string | null;
   certificado_vencimiento?: string | null;
@@ -216,6 +222,8 @@ export interface SifenPayloadEmisor {
   punto_expedicion: string;
   /** Código de seguridad del timbrado (SET); obligatorio para generar el DE oficial. */
   csc: string | null;
+  /** Cuál de los CSC del contribuyente es (0001 / 0002). Vacío = 0001. */
+  id_csc?: string | null;
 }
 
 export interface SifenPayloadDocumento {

@@ -43,6 +43,7 @@ export function toEmpresaSifenConfigPublicDto(
     establecimiento: String(row.establecimiento ?? ""),
     punto_expedicion: String(row.punto_expedicion ?? ""),
     csc: row.csc == null ? null : String(row.csc),
+    id_csc: row.id_csc == null ? null : String(row.id_csc),
     certificado_path: row.certificado_path == null ? null : String(row.certificado_path),
     certificado_vencimiento:
       row.certificado_vencimiento == null ? null : String(row.certificado_vencimiento),

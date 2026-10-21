@@ -87,7 +87,7 @@ export async function POST(
 
     const { data: cfg, error: errCfg } = await supabase
       .from("empresa_sifen_config")
-      .select("certificado_path, certificado_password_encrypted, ambiente, csc")
+      .select("certificado_path, certificado_password_encrypted, ambiente, csc, id_csc")
       .eq("empresa_id", auth.empresa_id)
       .maybeSingle();
 
@@ -180,9 +180,19 @@ export async function POST(
 
     let signedXml: string;
     try {
+      /*
+       * `idCsc` identifica CUAL de los CSC del contribuyente se uso para el
+       * hash del QR. La SET entrega el codigo junto con su numero (0001, 0002)
+       * y verifica el hash contra el que corresponde a ese numero: declarar
+       * 0001 usando el codigo del 0002 da "hash del QR invalido" aunque el
+       * codigo este bien copiado.
+       *
+       * Hasta ahora no se mandaba y en produccion siempre salia 0001.
+       */
       signedXml = signSifenDocumentoXml(xmlDl.data.toString("utf8"), material, {
         ambiente,
         csc: cscParaQr,
+        idCsc: cfg.id_csc == null ? undefined : String(cfg.id_csc).trim() || undefined,
       });
     } catch (e) {
       const m = e instanceof Error ? e.message : "Error al firmar el XML";
