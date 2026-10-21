@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import MontoInput from "@/components/ui/MontoInput";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import ProductPickerModal, { type ProductoPickerItem, type AgregarVentaPayload } from "@/components/inventario/ProductPickerModal";
 import { saveVenta } from "@/lib/ventas/storage";
+import { getClientes } from "@/lib/clientes/storage";
+import { nombreClienteDisplay } from "@/lib/clientes/display-name";
+import type { Cliente } from "@/lib/clientes/types";
 import { getProductos } from "@/lib/inventario/storage";
 import type { TipoIvaVenta, TipoVenta, MonedaVenta, LineaVenta, MetodoPagoVenta } from "@/lib/ventas/types";
 import { METODOS_PAGO_VENTA } from "@/lib/ventas/types";
@@ -112,6 +115,15 @@ export default function NuevaVentaPage() {
      el resto de la caja (lo busca y, si no existe, lo crea). */
   const [facNombre, setFacNombre] = useState("");
   const [facRuc, setFacRuc] = useState("");
+  /*
+   * Cliente ya existente elegido de la lista. Cuando esta puesto se usa tal
+   * cual y no se vuelve a resolver por RUC: evita crear un duplicado por una
+   * diferencia de tipeo en el nombre.
+   */
+  const [facClienteId, setFacClienteId] = useState<string | null>(null);
+  const [clientes, setClientes] = useState<Cliente[]>([]);
+  const [buscaCliente, setBuscaCliente] = useState("");
+  const [listaAbierta, setListaAbierta] = useState(false);
 
   // ── Cobro (solo CONTADO, no se persiste — solo ayuda al cajero) ───────────
   const [montoRecibido, setMontoRecibido] = useState("");
@@ -384,6 +396,23 @@ export default function NuevaVentaPage() {
     setItems((prev) => prev.filter((_, i) => i !== index));
   }
 
+  useEffect(() => {
+    if (tipoDocumento !== "factura" || clientes.length > 0) return;
+    void getClientes().then(setClientes);
+  }, [tipoDocumento, clientes.length]);
+
+  const clientesFiltrados = useMemo(() => {
+    const q = buscaCliente.trim().toLowerCase();
+    if (!q) return clientes.slice(0, 8);
+    return clientes
+      .filter((c) => {
+        const n = nombreClienteDisplay(c, "").toLowerCase();
+        const r = String(c.ruc ?? "").toLowerCase();
+        return n.includes(q) || r.includes(q);
+      })
+      .slice(0, 8);
+  }, [clientes, buscaCliente]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setErrorVenta(null);
@@ -394,10 +423,10 @@ export default function NuevaVentaPage() {
      * cliente no se puede crear, no tiene sentido descontar stock para una
      * factura que despues no va a poder emitirse.
      */
-    let clienteId: string | null = null;
-    if (tipoDocumento === "factura") {
+    let clienteId: string | null = facClienteId;
+    if (tipoDocumento === "factura" && !clienteId) {
       if (!facNombre.trim() || !facRuc.trim()) {
-        setErrorVenta("Para emitir factura hace falta el cliente y su RUC.");
+        setErrorVenta("Elegí un cliente de la lista, o cargá su nombre y RUC.");
         return;
       }
       try {
@@ -527,11 +556,64 @@ export default function NuevaVentaPage() {
 
             {tipoDocumento === "factura" && (
               <>
+                <div className="md:col-span-2">
+                  <label className={labelClass}>Buscar cliente</label>
+                  <div className="relative">
+                    <input
+                      value={buscaCliente}
+                      onChange={(e) => {
+                        setBuscaCliente(e.target.value);
+                        setListaAbierta(true);
+                        // Si se vuelve a escribir, deja de estar elegido el de la lista.
+                        setFacClienteId(null);
+                      }}
+                      onFocus={() => setListaAbierta(true)}
+                      placeholder="Nombre o RUC de un cliente ya cargado"
+                      className={inputClass}
+                    />
+                    {listaAbierta && clientesFiltrados.length > 0 && (
+                      <ul className="absolute z-20 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+                        {clientesFiltrados.map((c) => {
+                          const nom = nombreClienteDisplay(c, "Cliente");
+                          return (
+                            <li key={c.id}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setFacClienteId(c.id);
+                                  setFacNombre(nom);
+                                  setFacRuc(String(c.ruc ?? ""));
+                                  setBuscaCliente(nom);
+                                  setListaAbierta(false);
+                                }}
+                                className="flex w-full items-baseline justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-slate-50"
+                              >
+                                <span className="truncate text-slate-800">{nom}</span>
+                                <span className="shrink-0 font-mono text-xs text-slate-400">
+                                  {c.ruc ?? "—"}
+                                </span>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs text-gray-400">
+                    {facClienteId
+                      ? "Cliente elegido de la lista."
+                      : "Elegí uno de la lista, o completá los campos de abajo para uno nuevo."}
+                  </p>
+                </div>
+
                 <div className="md:col-start-1">
                   <label className={labelClass}>Cliente (razón social) *</label>
                   <input
                     value={facNombre}
-                    onChange={(e) => setFacNombre(e.target.value)}
+                    onChange={(e) => {
+                      setFacNombre(e.target.value);
+                      setFacClienteId(null);
+                    }}
                     placeholder="Nombre o razón social"
                     className={inputClass}
                   />
@@ -540,7 +622,10 @@ export default function NuevaVentaPage() {
                   <label className={labelClass}>RUC / CI *</label>
                   <input
                     value={facRuc}
-                    onChange={(e) => setFacRuc(e.target.value)}
+                    onChange={(e) => {
+                      setFacRuc(e.target.value);
+                      setFacClienteId(null);
+                    }}
                     placeholder="80012345-6"
                     className={inputClass}
                   />
