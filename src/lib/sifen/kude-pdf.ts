@@ -334,8 +334,19 @@ export async function buildKudePdfBuffer(input: BuildKudePdfInput): Promise<Buff
   const leftChunks: { lines: string[]; size: number; bold: boolean; col: RGB }[] = [
     { lines: wrapByChars(parsed.emisor.dNomEmi, leftMaxChars), size: 9, bold: true, col: BLACK },
     { lines: wrapByChars(parsed.emisor.dDirEmi, leftMaxChars), size: 7.5, bold: false, col: BLACK },
-    { lines: [`Tel.: ${NEURA_KUDE_TEL}`], size: 7.5, bold: false, col: BLACK },
-    { lines: [`Email: ${NEURA_KUDE_EMAIL}`], size: 7.5, bold: false, col: BLACK },
+    /*
+     * Telefono y email del encabezado: quitados a pedido de ADR.
+     *
+     * No eran datos del emisor sino el contacto de Neura, escritos fijos en
+     * este archivo, y se imprimian en el KuDE de cada cliente como si fueran
+     * suyos. En un documento legal eso es contacto de otra empresa.
+     *
+     * Si alguna vez se quieren mostrar, tienen que salir del XML
+     * (`dTelEmi` / `dEmailE`), que es lo que el emisor declaro ante la SET.
+     *
+     * { lines: [`Tel.: ${NEURA_KUDE_TEL}`], size: 7.5, bold: false, col: BLACK },
+     * { lines: [`Email: ${NEURA_KUDE_EMAIL}`], size: 7.5, bold: false, col: BLACK },
+     */
   ];
 
   const rightLines = 6;
