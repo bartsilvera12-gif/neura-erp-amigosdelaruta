@@ -709,6 +709,26 @@ export function FacturaElectronicaPanel({
                 ) : null}
               </p>
             )}
+            {/*
+              KuDE: la representación impresa del documento, que es lo que se
+              le entrega al cliente. El enlace existía solo en la lista de
+              facturas de Gestión de Clientes, no acá, que es donde se termina
+              de emitir. Va aparte del bloque de cancelación: imprimir tiene
+              que poder hacerse siempre que el documento esté aprobado, haya o
+              no ventana para cancelarlo.
+            */}
+            {fe && estado === "aprobado" && (
+              <div className="pt-2">
+                <a
+                  href={`/api/facturas/${facturaId}/sifen/kude`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition-opacity hover:opacity-90"
+                >
+                  Imprimir factura (KuDE)
+                </a>
+              </div>
+            )}
             {fe && estado === "aprobado" && resumen.cancelacion && (
               <div className="flex flex-wrap gap-2 pt-2">
                 {resumen.cancelacion.puede_cancelar ? (
