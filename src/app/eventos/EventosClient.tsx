@@ -42,8 +42,8 @@ const IDIOMAS = ["es", "pt", "en"] as const;
 
 type Fila = Record<string, unknown>;
 
-type Datos = { eventos: Fila[]; salidas: Fila[]; reservas: Fila[] };
-const VACIO: Datos = { eventos: [], salidas: [], reservas: [] };
+type Datos = { eventos: Fila[]; salidas: Fila[]; reservas: Fila[]; participantes: Fila[] };
+const VACIO: Datos = { eventos: [], salidas: [], reservas: [], participantes: [] };
 
 function textoDe(v: unknown, idioma: string): string {
   if (v == null) return "";
@@ -547,7 +547,38 @@ export default function EventosClient({ seccion }: { seccion: SeccionEventos }) 
           columnas={[
             { th: "Código", td: (f) => String(f.codigo ?? "—") },
             { th: "Viaje", td: (f) => nombreEvento(f.evento_id) },
-            { th: "Personas", td: (f) => String(f.cantidad_participantes ?? "—") },
+            {
+              th: "Personas",
+              td: (f) => {
+                /* Quiénes son, no cuántos: son los que viajan y a los que hay
+                   que reservarles hotel, moto y seguro. */
+                const suyos = data.participantes.filter(
+                  (p) => String(p.reserva_id) === String(f.id)
+                );
+                if (suyos.length === 0) return String(f.cantidad_participantes ?? "—");
+                return (
+                  <div className="space-y-0.5">
+                    {suyos.map((p) => (
+                      <div key={String(p.id)} className="leading-tight">
+                        <span className="text-slate-800">
+                          {[p.nombre, p.apellido].filter(Boolean).join(" ")}
+                        </span>
+                        {p.documento ? (
+                          <span className="ml-2 font-mono text-[11px] text-slate-400">
+                            {String(p.documento)}
+                          </span>
+                        ) : null}
+                        {p.licencia_numero ? (
+                          <span className="ml-2 text-[11px] text-slate-400">
+                            lic. {String(p.licencia_numero)}
+                          </span>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                );
+              },
+            },
             {
               th: "Precio",
               td: (f) => `${String(f.moneda ?? "")} ${String(f.precio_paquete ?? "—")}`,
@@ -567,7 +598,7 @@ function Tabla({
   vacio,
 }: {
   filas: Fila[];
-  columnas: { th: string; td: (f: Fila) => string }[];
+  columnas: { th: string; td: (f: Fila) => React.ReactNode }[];
   vacio: string;
 }) {
   if (filas.length === 0) {

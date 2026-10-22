@@ -5,6 +5,7 @@ import { errorResponse, successResponse } from "@/lib/api/response";
 import {
   cargarEventos,
   cargarReservas,
+  cargarParticipantes,
   cargarSalidas,
   guardarEvento,
   guardarSalida,
@@ -21,12 +22,13 @@ export async function GET(request: Request) {
 
   try {
     const sb = await getChatServiceClientForEmpresa(a.empresaId);
-    const [eventos, salidas, reservas] = await Promise.all([
+    const [eventos, salidas, reservas, participantes] = await Promise.all([
       cargarEventos(sb, a.empresaId),
       cargarSalidas(sb, a.empresaId),
       cargarReservas(sb, a.empresaId),
+      cargarParticipantes(sb, a.empresaId),
     ]);
-    return NextResponse.json(successResponse({ eventos, salidas, reservas }));
+    return NextResponse.json(successResponse({ eventos, salidas, reservas, participantes }));
   } catch (e) {
     return NextResponse.json(
       errorResponse(e instanceof Error ? e.message : "Error"),

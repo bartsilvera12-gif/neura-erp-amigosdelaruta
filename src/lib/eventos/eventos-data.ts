@@ -114,6 +114,28 @@ export async function cargarReservas(
   return (data ?? []) as Record<string, unknown>[];
 }
 
+/**
+ * Participantes de las reservas.
+ *
+ * Las inscripciones de la web ya se guardaban acá —una fila por persona, con
+ * nombre, documento y licencia— pero la pantalla solo mostraba cuántas eran,
+ * no quiénes. Para una operadora de viajes eso es justamente el dato: a esta
+ * gente hay que reservarle hotel, moto y seguro.
+ */
+export async function cargarParticipantes(
+  sb: AppSupabaseClient,
+  empresaId: string
+): Promise<Record<string, unknown>[]> {
+  const { data, error } = await sb
+    .from("participantes")
+    .select("id, reserva_id, nombre, apellido, documento, telefono, email, rol, licencia_numero")
+    .eq("empresa_id", empresaId)
+    .order("created_at", { ascending: true })
+    .limit(2000);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as Record<string, unknown>[];
+}
+
 /** Alta o edición de un evento, filtrando a las columnas permitidas. */
 /** Columnas que la pantalla puede escribir sobre `salidas`. */
 export const CAMPOS_SALIDA = [
