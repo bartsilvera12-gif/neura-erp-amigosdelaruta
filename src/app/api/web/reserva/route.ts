@@ -127,10 +127,64 @@ export async function POST(request: Request) {
     });
     if (errC) throw new Error(errC.message);
 
+    /*
+     * Cliente del ERP para quien reserva.
+     *
+     * Antes la reserva web quedaba con `cliente_id` vacio: la persona que se
+     * inscribia no aparecia en Clientes, no se le podia facturar y no tenia
+     * historial. El titular es el primer participante, que es el que completa
+     * el formulario.
+     *
+     * Se busca por documento antes de crear, para que inscribirse dos veces no
+     * genere dos fichas. Si falla, la reserva se guarda igual: perder la
+     * inscripcion por no poder crear la ficha seria peor.
+     */
+    const titular = participantes[0]!;
+    const emailTitular = textoLimpio(body.email, 160);
+    const telefonoTitular = textoLimpio(body.telefono, 40);
+    let clienteId: string | null = null;
+    try {
+      const doc = titular.documento;
+      if (doc) {
+        const { data: ya } = await sb
+          .from("clientes")
+          .select("id")
+          .eq("empresa_id", empresaId)
+          .or(`documento.eq.${doc},ruc.eq.${doc}`)
+          .limit(1);
+        if (ya && ya.length > 0) clienteId = String((ya[0] as { id: string }).id);
+      }
+      if (!clienteId) {
+        const { data: nuevo } = await sb
+          .from("clientes")
+          .insert([
+            {
+              empresa_id: empresaId,
+              tipo_cliente: "persona",
+              nombre: titular.nombre,
+              nombre_contacto: titular.nombre,
+              razon_social: titular.nombre,
+              documento: doc,
+              email: emailTitular,
+              telefono: telefonoTitular,
+              origen: "WEB",
+              estado: "activo",
+              moneda_preferida: "GS",
+            },
+          ])
+          .select("id")
+          .single();
+        if (nuevo) clienteId = String((nuevo as { id: string }).id);
+      }
+    } catch (e) {
+      console.error("[web/reserva] no se pudo resolver el cliente:", e);
+    }
+
     const { data: reserva, error: errR } = await sb
       .from("reservas")
       .insert({
         empresa_id: empresaId,
+        cliente_id: clienteId,
         codigo: String(codigo),
         evento_id: eventoId,
         salida_id: salidaId,
@@ -149,15 +203,19 @@ export async function POST(request: Request) {
 
     const reservaId = String((reserva as Record<string, unknown>).id);
     const { error: errPart } = await sb.from("participantes").insert(
-      participantes.map((p) => ({
+      participantes.map((p, i) => ({
         empresa_id: empresaId,
         reserva_id: reservaId,
         nombre: p.nombre,
         documento: p.documento,
         licencia_numero: p.licencia_numero,
         rol: p.rol,
-        email: textoLimpio(body.email, 160),
-        telefono: textoLimpio(body.telefono, 40),
+        cliente_id: i === 0 ? clienteId : null,
+        /* El contacto es de quien completo el formulario, no de cada viajero:
+           copiarlo a los tres acompanantes hacia creer que todos dieron su
+           mail y su telefono. */
+        email: i === 0 ? emailTitular : null,
+        telefono: i === 0 ? telefonoTitular : null,
       }))
     );
     if (errPart) throw new Error(errPart.message);
