@@ -1802,6 +1802,10 @@ export default function ClienteDetalleClient({
                   </div>
                 </div>
 
+                {/* Tipo de servicio: oculto a pedido de ADR, igual que en el alta de
+                    clientes y en la columna de la lista. El catálogo son los servicios
+                    del sistema base y no aplica a una operadora de viajes.
+
                 <div>
                   <label className={labelClass}>Tipo de servicio</label>
                   <select
@@ -1819,6 +1823,7 @@ export default function ClienteDetalleClient({
                     ))}
                   </select>
                 </div>
+                */}
 
                 {/* Fila principal: nombre + documento tributario (RUC empresa / CI persona) */}
                 {form.tipo_cliente === "empresa" ? (

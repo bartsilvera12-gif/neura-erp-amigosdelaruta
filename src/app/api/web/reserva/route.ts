@@ -142,9 +142,21 @@ export async function POST(request: Request) {
     const titular = participantes[0]!;
     const emailTitular = textoLimpio(body.email, 160);
     const telefonoTitular = textoLimpio(body.telefono, 40);
+    /*
+     * Datos de facturacion. Son opcionales: quien reserva un viaje puede no
+     * tener RUC, y exigirlo espantaria inscripciones. Si no vienen, la ficha
+     * se crea igual con el documento y el nombre, y se completan despues desde
+     * el ERP cuando haya que facturar.
+     */
+    const rucFact = textoLimpio(body.ruc, 20);
+    const razonFact = textoLimpio(body.razon_social, 160) ?? titular.nombre;
+    /* Con RUC el receptor es un contribuyente; sin el, una persona fisica. */
+    const esContribuyente = !!rucFact && /-/.test(rucFact);
     let clienteId: string | null = null;
     try {
-      const doc = titular.documento;
+      /* Para buscar sirve cualquiera de los dos: el RUC si lo dieron, y si no
+         el documento del titular. */
+      const doc = rucFact ?? titular.documento;
       if (doc) {
         const { data: ya } = await sb
           .from("clientes")
@@ -160,11 +172,13 @@ export async function POST(request: Request) {
           .insert([
             {
               empresa_id: empresaId,
-              tipo_cliente: "persona",
+              tipo_cliente: esContribuyente ? "empresa" : "persona",
               nombre: titular.nombre,
               nombre_contacto: titular.nombre,
-              razon_social: titular.nombre,
-              documento: doc,
+              razon_social: razonFact,
+              documento: titular.documento,
+              ...(rucFact ? { ruc: rucFact, ruc_factura: rucFact } : {}),
+              ...(esContribuyente ? { empresa: razonFact } : {}),
               email: emailTitular,
               telefono: telefonoTitular,
               origen: "WEB",

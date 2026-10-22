@@ -582,6 +582,12 @@ function ClienteNuevoFormInner({ variant = "page", onCreated, onCancel, fromPros
               </div>
             )}
 
+            {/* Tipo de servicio: oculto a pedido de ADR. El catálogo son los
+                servicios del sistema base —Marketing, SaaS, Branding, Web— y no
+                tiene nada que ver con una operadora de viajes. Ya se había
+                quitado la columna de la lista de clientes; esto es el campo del
+                alta. Se deja comentado por si vuelve a hacer falta.
+
             <div>
               <label className={labelClass}>Tipo de servicio</label>
               <select
@@ -598,6 +604,7 @@ function ClienteNuevoFormInner({ variant = "page", onCreated, onCancel, fromPros
                 ))}
               </select>
             </div>
+            */}
 
             {/* Contacto directo: persona de contacto (solo empresa) + teléfono con formato +595 */}
             <div className="grid gap-4 sm:grid-cols-2">
