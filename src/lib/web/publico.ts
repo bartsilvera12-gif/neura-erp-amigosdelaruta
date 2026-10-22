@@ -23,10 +23,20 @@ function origenesPermitidos(): string[] {
   const raw = process.env.WEB_PUBLIC_ORIGINS?.trim();
   if (raw) return raw.split(",").map((s) => s.trim()).filter(Boolean);
   return [
+    /*
+     * El dominio real es `amigosderuta.com`: sin "la" y terminado en `.com`.
+     * La lista solo tenia `amigosdelaruta.com.py`, que no existe, asi que el
+     * sitio publicado quedaba fuera: el ERP no mandaba
+     * `Access-Control-Allow-Origin` y el navegador descartaba la respuesta.
+     * El resultado era un sitio sin catalogo y reservas que nunca llegaban.
+     */
+    "https://amigosderuta.com",
+    "https://www.amigosderuta.com",
     "https://amigosdelaruta.com.py",
     "https://www.amigosdelaruta.com.py",
     "https://amigos-de-la-ruta-web.vercel.app",
     "http://localhost:8000",
+    "http://127.0.0.1:8787",
   ];
 }
 
