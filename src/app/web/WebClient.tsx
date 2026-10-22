@@ -336,6 +336,19 @@ export default function WebClient({ seccion }: { seccion: SeccionWeb }) {
                         onChange={(v) => setDraftCampo(clave, "variantes", v)}
                       />
                       <div className="flex flex-wrap items-end gap-3">
+                        {/* La foto vive en Inventario (`productos.imagen_url`), que es de
+                            donde la toma el sitio. Se sube desde acá porque es donde se
+                            arma la ficha de tienda; se guarda en el producto, no en la
+                            fila web, así no hay dos imágenes que mantener. */}
+                        <div className="min-w-[220px]">
+                          <CampoImagen
+                            label="Foto del producto"
+                            coleccion="producto"
+                            idFila={p.producto_id}
+                            valor={String(valorDe(clave, p.web, "imagen_url") ?? p.imagen_url ?? "")}
+                            onChange={(url) => setDraftCampo(clave, "imagen_url", url)}
+                          />
+                        </div>
                         <div>
                           <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
                             Orden

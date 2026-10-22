@@ -169,6 +169,31 @@ export async function guardarFila(
 ): Promise<Record<string, unknown>> {
   const def = DEFS[coleccion];
   const campos = filtrarCampos(coleccion, valores);
+
+  /*
+   * La foto de un producto vive en Inventario (`productos.imagen_url`), que es
+   * de donde el sitio la toma: `web_producto` no tiene columna de imagen.
+   *
+   * Como la pantalla de Tienda es donde se arma la ficha del sitio, ahi se
+   * sube la foto; la escritura va al producto del inventario, no a la fila
+   * web. Asi no hay dos imagenes que mantener.
+   */
+  const imagenProducto = valores?.imagen_url;
+  if (coleccion === "producto" && typeof imagenProducto === "string") {
+    const prodId = String(valores?.producto_id ?? "").trim();
+    if (!prodId) throw new Error("Falta el producto para guardar la imagen.");
+    const { error } = await sb
+      .from("productos")
+      .update({ imagen_url: imagenProducto.trim() || null })
+      .eq("id", prodId)
+      .eq("empresa_id", empresaId);
+    if (error) throw new Error(error.message);
+    // Si lo unico que se mandaba era la imagen, no hay fila web que tocar.
+    if (Object.keys(campos).length === 0) {
+      return { producto_id: prodId, imagen_url: imagenProducto };
+    }
+  }
+
   if (Object.keys(campos).length === 0) {
     throw new Error("No hay campos válidos para guardar.");
   }
