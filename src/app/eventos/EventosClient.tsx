@@ -15,7 +15,7 @@ import CampoImagen from "@/components/web/CampoImagen";
  * reservas en modo lectura; el alta de salidas, paquetes y reservas va después.
  */
 
-export type SeccionEventos = "viajes" | "salidas" | "reservas";
+export type SeccionEventos = "viajes" | "salidas" | "paquetes" | "reservas";
 
 /*
  * Los estados de `salidas`, repetidos acá a propósito: la lista también vive en
@@ -35,6 +35,7 @@ const SALIDA_ESTADOS = [
 const SECCIONES: { id: SeccionEventos; label: string; href: string }[] = [
   { id: "viajes", label: "Viajes", href: "/eventos" },
   { id: "salidas", label: "Salidas", href: "/eventos/salidas" },
+  { id: "paquetes", label: "Paquetes", href: "/eventos/paquetes" },
   { id: "reservas", label: "Reservas", href: "/eventos/reservas" },
 ];
 
@@ -42,8 +43,8 @@ const IDIOMAS = ["es", "pt", "en"] as const;
 
 type Fila = Record<string, unknown>;
 
-type Datos = { eventos: Fila[]; salidas: Fila[]; reservas: Fila[]; participantes: Fila[] };
-const VACIO: Datos = { eventos: [], salidas: [], reservas: [], participantes: [] };
+type Datos = { eventos: Fila[]; salidas: Fila[]; reservas: Fila[]; participantes: Fila[]; paquetes: Fila[] };
+const VACIO: Datos = { eventos: [], salidas: [], reservas: [], participantes: [], paquetes: [] };
 
 function textoDe(v: unknown, idioma: string): string {
   if (v == null) return "";
@@ -102,7 +103,7 @@ export default function EventosClient({ seccion }: { seccion: SeccionEventos }) 
   }, [cargar]);
 
   const guardar = useCallback(
-    async (id: string | null, valores: Fila, clave: string, tipo: "evento" | "salida" = "evento") => {
+    async (id: string | null, valores: Fila, clave: string, tipo: "evento" | "salida" | "paquete" = "evento") => {
       setGuardando(clave);
       setError(null);
       setOkMsg(null);
@@ -535,6 +536,161 @@ export default function EventosClient({ seccion }: { seccion: SeccionEventos }) 
                 >
                   <Plus className="h-4 w-4" />
                   {guardando === "sal:nuevo" ? "Creando…" : "Crear salida"}
+                </button>
+              </>
+            )}
+          </section>
+        </div>
+      ) : seccion === "paquetes" ? (
+        <div className="space-y-6">
+          <Tabla
+            vacio="Todavía no hay paquetes. Sin al menos uno, el viaje no se puede reservar desde el sitio."
+            filas={data.paquetes}
+            columnas={[
+              { th: "Viaje", td: (f) => nombreEvento(f.evento_id) },
+              { th: "Paquete", td: (f) => textoDe(f.nombre, "es") || "—" },
+              { th: "Personas", td: (f) => String(f.personas ?? "—") },
+              { th: "Motos", td: (f) => String(f.motos ?? "—") },
+              {
+                th: "Precio",
+                td: (f) =>
+                  `${String(f.moneda ?? "USD")} ${Number(f.precio ?? 0).toLocaleString("es-PY")}`,
+              },
+              { th: "Activo", td: (f) => (f.activo === false ? "No" : "Sí") },
+            ]}
+          />
+
+          {/* Alta de paquetes. Sin paquete no hay precio, y sin precio el sitio
+              no ofrece el viaje para reservar. */}
+          <section className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/50 p-5">
+            <div className="mb-1 text-sm font-semibold text-slate-700">Nuevo paquete</div>
+            <p className="mb-4 text-xs text-slate-500">
+              Qué incluye la reserva y cuánto sale. Un viaje necesita al menos uno para poder
+              reservarse desde el sitio.
+            </p>
+
+            {data.eventos.length === 0 ? (
+              <p className="text-sm text-slate-500">
+                Primero creá un viaje en la pestaña <b>Viajes</b>.
+              </p>
+            ) : (
+              <>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div>
+                    <div className={lbl}>Viaje *</div>
+                    <select
+                      className={input}
+                      value={String(valorDe("paq:nuevo", null, "evento_id") ?? "")}
+                      onChange={(ev) => setCampo("paq:nuevo", "evento_id", ev.target.value)}
+                    >
+                      <option value="">Elegí un viaje…</option>
+                      {data.eventos.map((e) => (
+                        <option key={String(e.id)} value={String(e.id)}>
+                          {textoDe(e.nombre, "es") || String(e.slug ?? "sin nombre")}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <div className={lbl}>Nombre del paquete *</div>
+                    <input
+                      className={input}
+                      placeholder="Piloto solo · Piloto + acompañante"
+                      value={String(valorDe("paq:nuevo", null, "nombre_es") ?? "")}
+                      onChange={(ev) => setCampo("paq:nuevo", "nombre_es", ev.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-3 grid gap-3 sm:grid-cols-4">
+                  <div>
+                    <div className={lbl}>Personas</div>
+                    <input
+                      type="number"
+                      min={1}
+                      className={input}
+                      value={String(valorDe("paq:nuevo", null, "personas") ?? "1")}
+                      onChange={(ev) => setCampo("paq:nuevo", "personas", ev.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <div className={lbl}>Motos</div>
+                    <input
+                      type="number"
+                      min={0}
+                      className={input}
+                      value={String(valorDe("paq:nuevo", null, "motos") ?? "1")}
+                      onChange={(ev) => setCampo("paq:nuevo", "motos", ev.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <div className={lbl}>Precio *</div>
+                    <input
+                      type="number"
+                      min={0}
+                      className={input}
+                      placeholder="7900"
+                      value={String(valorDe("paq:nuevo", null, "precio") ?? "")}
+                      onChange={(ev) => setCampo("paq:nuevo", "precio", ev.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <div className={lbl}>Moneda</div>
+                    <select
+                      className={input}
+                      value={String(valorDe("paq:nuevo", null, "moneda") ?? "USD")}
+                      onChange={(ev) => setCampo("paq:nuevo", "moneda", ev.target.value)}
+                    >
+                      <option value="USD">USD</option>
+                      <option value="PYG">PYG</option>
+                      <option value="BRL">BRL</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="mt-3">
+                  <div className={lbl}>Qué incluye</div>
+                  <input
+                    className={input}
+                    placeholder="2 personas · 2 motos · 1 habitación doble"
+                    value={String(valorDe("paq:nuevo", null, "detalle_es") ?? "")}
+                    onChange={(ev) => setCampo("paq:nuevo", "detalle_es", ev.target.value)}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  disabled={guardando === "paq:nuevo"}
+                  onClick={() => {
+                    const d = draft["paq:nuevo"] ?? {};
+                    const nom = String(d.nombre_es ?? "").trim();
+                    if (!nom) {
+                      setError("El paquete necesita un nombre.");
+                      return;
+                    }
+                    /* Los textos del sitio son multilingües; se carga el
+                       castellano y el sitio usa ese como respaldo para los
+                       otros idiomas. */
+                    void guardar(
+                      null,
+                      {
+                        evento_id: d.evento_id,
+                        nombre: { es: nom },
+                        detalle: d.detalle_es ? { es: String(d.detalle_es) } : {},
+                        personas: d.personas ?? 1,
+                        motos: d.motos ?? 0,
+                        precio: d.precio ?? 0,
+                        moneda: d.moneda ?? "USD",
+                        activo: true,
+                      },
+                      "paq:nuevo",
+                      "paquete"
+                    );
+                  }}
+                  className="mt-4 inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                >
+                  <Plus className="h-4 w-4" />
+                  {guardando === "paq:nuevo" ? "Creando…" : "Crear paquete"}
                 </button>
               </>
             )}

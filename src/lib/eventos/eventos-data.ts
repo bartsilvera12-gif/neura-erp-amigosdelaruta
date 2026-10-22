@@ -136,6 +136,109 @@ export async function cargarParticipantes(
   return (data ?? []) as Record<string, unknown>[];
 }
 
+/** Columnas que la pantalla puede escribir sobre `paquetes`. */
+export const CAMPOS_PAQUETE = [
+  "evento_id",
+  "salida_id",
+  "nombre",
+  "detalle",
+  "personas",
+  "motos",
+  "habitacion",
+  "precio",
+  "moneda",
+  "cupo",
+  "orden",
+  "activo",
+] as const;
+
+export async function cargarPaquetes(
+  sb: AppSupabaseClient,
+  empresaId: string
+): Promise<Record<string, unknown>[]> {
+  const { data, error } = await sb
+    .from("paquetes")
+    .select("*")
+    .eq("empresa_id", empresaId)
+    .order("orden", { ascending: true })
+    .limit(500);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as Record<string, unknown>[];
+}
+
+/**
+ * Alta y edición de un paquete.
+ *
+ * El paquete es lo que define QUE se reserva y a QUE precio: cuántas personas,
+ * cuántas motos y cuánto sale. El sitio no ofrece reservar un viaje que no
+ * tenga al menos uno, porque sin precio no hay nada que cobrar — y hasta ahora
+ * no había forma de cargarlos desde el ERP.
+ *
+ * `salida_id` es opcional: sin él, el paquete vale para todas las salidas del
+ * viaje, que es el caso normal. Con él, sólo para esa fecha.
+ */
+export async function guardarPaquete(
+  sb: AppSupabaseClient,
+  empresaId: string,
+  id: string | null,
+  valores: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const permitidos = new Set<string>(CAMPOS_PAQUETE);
+  const campos: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(valores ?? {})) {
+    if (permitidos.has(k)) campos[k] = v === "" ? null : v;
+  }
+  if (Object.keys(campos).length === 0) {
+    throw new Error("No hay campos válidos para guardar.");
+  }
+
+  if (!id && (typeof campos.evento_id !== "string" || !campos.evento_id.trim())) {
+    throw new Error("Elegí el viaje al que pertenece el paquete.");
+  }
+  if (campos.personas != null) {
+    const n = Number(campos.personas);
+    if (!Number.isFinite(n) || n < 1) throw new Error("El paquete tiene que incluir al menos una persona.");
+    campos.personas = Math.trunc(n);
+  }
+  if (campos.motos != null) campos.motos = Math.max(0, Math.trunc(Number(campos.motos) || 0));
+  if (campos.precio != null) {
+    const n = Number(campos.precio);
+    if (!Number.isFinite(n) || n < 0) throw new Error("El precio no puede ser negativo.");
+    campos.precio = n;
+  }
+
+  if (id) {
+    const { data, error } = await sb
+      .from("paquetes")
+      .update(campos)
+      .eq("id", id)
+      .eq("empresa_id", empresaId)
+      .select("*")
+      .single();
+    if (error) throw new Error(error.message);
+    return data as Record<string, unknown>;
+  }
+
+  /* El viaje se valida contra la empresa: `evento_id` viene del navegador y la
+     RLS protege la fila nueva, no a quién apunta. */
+  const { data: evento, error: errEv } = await sb
+    .from("eventos")
+    .select("id")
+    .eq("empresa_id", empresaId)
+    .eq("id", String(campos.evento_id))
+    .maybeSingle();
+  if (errEv) throw new Error(errEv.message);
+  if (!evento) throw new Error("Ese viaje no existe.");
+
+  const { data, error } = await sb
+    .from("paquetes")
+    .insert({ ...campos, empresa_id: empresaId })
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+  return data as Record<string, unknown>;
+}
+
 /** Alta o edición de un evento, filtrando a las columnas permitidas. */
 /** Columnas que la pantalla puede escribir sobre `salidas`. */
 export const CAMPOS_SALIDA = [

@@ -5,9 +5,11 @@ import { errorResponse, successResponse } from "@/lib/api/response";
 import {
   cargarEventos,
   cargarReservas,
+  cargarPaquetes,
   cargarParticipantes,
   cargarSalidas,
   guardarEvento,
+  guardarPaquete,
   guardarSalida,
 } from "@/lib/eventos/eventos-data";
 
@@ -22,13 +24,16 @@ export async function GET(request: Request) {
 
   try {
     const sb = await getChatServiceClientForEmpresa(a.empresaId);
-    const [eventos, salidas, reservas, participantes] = await Promise.all([
+    const [eventos, salidas, reservas, participantes, paquetes] = await Promise.all([
       cargarEventos(sb, a.empresaId),
       cargarSalidas(sb, a.empresaId),
       cargarReservas(sb, a.empresaId),
       cargarParticipantes(sb, a.empresaId),
+      cargarPaquetes(sb, a.empresaId),
     ]);
-    return NextResponse.json(successResponse({ eventos, salidas, reservas, participantes }));
+    return NextResponse.json(
+      successResponse({ eventos, salidas, reservas, participantes, paquetes })
+    );
   } catch (e) {
     return NextResponse.json(
       errorResponse(e instanceof Error ? e.message : "Error"),
@@ -59,6 +64,11 @@ export async function POST(request: Request) {
     if (body.tipo === "salida") {
       const salida = await guardarSalida(sb, a.empresaId, id, valores);
       return NextResponse.json(successResponse({ salida }));
+    }
+
+    if (body.tipo === "paquete") {
+      const paquete = await guardarPaquete(sb, a.empresaId, id, valores);
+      return NextResponse.json(successResponse({ paquete }));
     }
 
     const evento = await guardarEvento(sb, a.empresaId, id, valores);
