@@ -32,6 +32,17 @@ const SALIDA_ESTADOS = [
   { value: "finalizada", label: "Finalizada" },
 ] as const;
 
+/* Igual que SALIDA_ESTADOS: `eventos-data.ts` es server-only. Tiene que
+   coincidir con `reservas_estado_chk`. */
+const RESERVA_ESTADOS = [
+  { value: "cotizacion", label: "Cotización" },
+  { value: "reservada", label: "Reservada" },
+  { value: "pago_parcial", label: "Pago parcial" },
+  { value: "confirmada", label: "Confirmada" },
+  { value: "participo", label: "Participó" },
+  { value: "cancelada", label: "Cancelada" },
+] as const;
+
 const SECCIONES: { id: SeccionEventos; label: string; href: string }[] = [
   { id: "viajes", label: "Viajes", href: "/eventos" },
   { id: "salidas", label: "Salidas", href: "/eventos/salidas" },
@@ -103,7 +114,7 @@ export default function EventosClient({ seccion }: { seccion: SeccionEventos }) 
   }, [cargar]);
 
   const guardar = useCallback(
-    async (id: string | null, valores: Fila, clave: string, tipo: "evento" | "salida" | "paquete" = "evento") => {
+    async (id: string | null, valores: Fila, clave: string, tipo: "evento" | "salida" | "paquete" | "reserva" = "evento") => {
       setGuardando(clave);
       setError(null);
       setOkMsg(null);
@@ -125,6 +136,27 @@ export default function EventosClient({ seccion }: { seccion: SeccionEventos }) 
         setError(e instanceof Error ? e.message : "Error");
       } finally {
         setGuardando(null);
+      }
+    },
+    [cargar]
+  );
+
+  const borrar = useCallback(
+    async (tipo: "evento" | "salida" | "paquete" | "reserva", id: string, etiqueta: string) => {
+      if (!window.confirm(`¿Borrar ${etiqueta}? No se puede deshacer.`)) return;
+      setError(null);
+      setOkMsg(null);
+      try {
+        const r = await fetchWithSupabaseSession(
+          `/api/eventos?tipo=${tipo}&id=${encodeURIComponent(id)}`,
+          { method: "DELETE" }
+        );
+        const j = (await r.json()) as { success?: boolean; error?: string };
+        if (!j.success) throw new Error(j.error ?? "No se pudo borrar.");
+        setOkMsg("Borrado.");
+        await cargar();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Error");
       }
     },
     [cargar]
@@ -420,7 +452,36 @@ export default function EventosClient({ seccion }: { seccion: SeccionEventos }) 
               { th: "Desde", td: (f) => String(f.fecha_inicio ?? "—") },
               { th: "Hasta", td: (f) => String(f.fecha_fin ?? "—") },
               { th: "Cupo", td: (f) => String(f.cupo_total ?? "—") },
-              { th: "Estado", td: (f) => String(f.estado ?? "—") },
+              {
+                th: "Estado",
+                /* Editable en la misma fila: el estado es lo que decide si el
+                   sitio la ofrece, y cambiarlo es la accion mas frecuente. */
+                td: (f) => (
+                  <select
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs"
+                    value={String(f.estado ?? "borrador")}
+                    onChange={(ev) =>
+                      void guardar(String(f.id), { estado: ev.target.value }, `sal:${f.id}`, "salida")
+                    }
+                  >
+                    {SALIDA_ESTADOS.map((e) => (
+                      <option key={e.value} value={e.value}>{e.label}</option>
+                    ))}
+                  </select>
+                ),
+              },
+              {
+                th: "",
+                td: (f) => (
+                  <button
+                    type="button"
+                    onClick={() => void borrar("salida", String(f.id), `la salida del ${String(f.fecha_inicio ?? "")}`)}
+                    className="text-xs font-semibold text-rose-600 hover:underline"
+                  >
+                    Borrar
+                  </button>
+                ),
+              },
             ]}
           />
 
@@ -556,7 +617,39 @@ export default function EventosClient({ seccion }: { seccion: SeccionEventos }) 
                 td: (f) =>
                   `${String(f.moneda ?? "USD")} ${Number(f.precio ?? 0).toLocaleString("es-PY")}`,
               },
-              { th: "Activo", td: (f) => (f.activo === false ? "No" : "Sí") },
+              {
+                th: "Activo",
+                td: (f) => (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void guardar(String(f.id), { activo: f.activo === false }, `paq:${f.id}`, "paquete")
+                    }
+                    className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                      f.activo === false
+                        ? "bg-slate-100 text-slate-500"
+                        : "bg-emerald-50 text-emerald-700"
+                    }`}
+                    title="Un paquete inactivo no se ofrece en el sitio"
+                  >
+                    {f.activo === false ? "No" : "Sí"}
+                  </button>
+                ),
+              },
+              {
+                th: "",
+                td: (f) => (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void borrar("paquete", String(f.id), `el paquete "${textoDe(f.nombre, "es") || ""}"`)
+                    }
+                    className="text-xs font-semibold text-rose-600 hover:underline"
+                  >
+                    Borrar
+                  </button>
+                ),
+              },
             ]}
           />
 
@@ -740,7 +833,52 @@ export default function EventosClient({ seccion }: { seccion: SeccionEventos }) 
               td: (f) => `${String(f.moneda ?? "")} ${String(f.precio_paquete ?? "—")}`,
             },
             { th: "Origen", td: (f) => String(f.origen ?? "—") },
-            { th: "Estado", td: (f) => String(f.estado ?? "—") },
+            {
+              th: "Estado",
+              /* Es la decisión comercial sobre lo que llegó de la web. Importa
+                 mas de lo que parece: Operación suma como ingreso de la salida
+                 solo desde "Reservada" para arriba; una cotización no cuenta. */
+              td: (f) => (
+                <select
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs"
+                  value={String(f.estado ?? "cotizacion")}
+                  onChange={(ev) =>
+                    void guardar(String(f.id), { estado: ev.target.value }, `res:${f.id}`, "reserva")
+                  }
+                >
+                  {RESERVA_ESTADOS.map((e) => (
+                    <option key={e.value} value={e.value}>{e.label}</option>
+                  ))}
+                </select>
+              ),
+            },
+            {
+              th: "",
+              td: (f) => (
+                <div className="flex items-center gap-3">
+                  {f.cliente_id ? (
+                    <Link
+                      href={`/gestion-clientes?cliente=${encodeURIComponent(String(f.cliente_id))}`}
+                      className="text-xs font-semibold text-[#3F8E91] hover:underline"
+                      title="Abrir la ficha para facturarle"
+                    >
+                      Facturar
+                    </Link>
+                  ) : (
+                    <span className="text-[11px] text-slate-400" title="La reserva no tiene cliente asociado">
+                      Sin cliente
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void borrar("reserva", String(f.id), `la reserva ${String(f.codigo ?? "")}`)}
+                    className="text-xs font-semibold text-rose-600 hover:underline"
+                  >
+                    Borrar
+                  </button>
+                </div>
+              ),
+            },
           ]}
         />
       )}

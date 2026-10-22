@@ -8,8 +8,10 @@ import {
   cargarPaquetes,
   cargarParticipantes,
   cargarSalidas,
+  borrarFilaEventos,
   guardarEvento,
   guardarPaquete,
+  guardarReserva,
   guardarSalida,
 } from "@/lib/eventos/eventos-data";
 
@@ -71,11 +73,40 @@ export async function POST(request: Request) {
       return NextResponse.json(successResponse({ paquete }));
     }
 
+    if (body.tipo === "reserva") {
+      if (!id) return NextResponse.json(errorResponse("Falta la reserva."), { status: 400 });
+      const reserva = await guardarReserva(sb, a.empresaId, id, valores);
+      return NextResponse.json(successResponse({ reserva }));
+    }
+
     const evento = await guardarEvento(sb, a.empresaId, id, valores);
     return NextResponse.json(successResponse({ evento }));
   } catch (e) {
     return NextResponse.json(
       errorResponse(e instanceof Error ? e.message : "Error"),
+      { status: 400 }
+    );
+  }
+}
+
+/** DELETE — ?tipo=evento|salida|paquete|reserva&id=… */
+export async function DELETE(request: Request) {
+  const a = await requireModuleAccess(request, "eventos", "Eventos");
+  if (!a.ok) return NextResponse.json(errorResponse(a.message), { status: a.status });
+
+  try {
+    const url = new URL(request.url);
+    const tipo = url.searchParams.get("tipo");
+    const id = url.searchParams.get("id");
+    if (!id || !["evento", "salida", "paquete", "reserva"].includes(String(tipo))) {
+      return NextResponse.json(errorResponse("Faltan tipo e id."), { status: 400 });
+    }
+    const sb = await getChatServiceClientForEmpresa(a.empresaId);
+    await borrarFilaEventos(sb, a.empresaId, tipo as "evento" | "salida" | "paquete" | "reserva", id);
+    return NextResponse.json(successResponse({ ok: true }));
+  } catch (e) {
+    return NextResponse.json(
+      errorResponse(e instanceof Error ? e.message : "No se pudo borrar."),
       { status: 400 }
     );
   }

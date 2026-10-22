@@ -239,6 +239,94 @@ export async function guardarPaquete(
   return data as Record<string, unknown>;
 }
 
+export const RESERVA_ESTADOS = [
+  { value: "cotizacion", label: "Cotización" },
+  { value: "reservada", label: "Reservada" },
+  { value: "pago_parcial", label: "Pago parcial" },
+  { value: "confirmada", label: "Confirmada" },
+  { value: "participo", label: "Participó" },
+  { value: "cancelada", label: "Cancelada" },
+] as const;
+
+/** Columnas que la pantalla puede escribir sobre `reservas`. */
+export const CAMPOS_RESERVA = ["estado", "notas", "motivo_cancelacion"] as const;
+
+/**
+ * Cambio de estado de una reserva.
+ *
+ * Es la decisión comercial sobre lo que llegó de la web: una cotización que se
+ * confirma pasa a contar como ingreso en Operación; una que se cae se cancela.
+ * Hasta ahora no habia forma de hacerlo y toda reserva quedaba como entro.
+ */
+export async function guardarReserva(
+  sb: AppSupabaseClient,
+  empresaId: string,
+  id: string,
+  valores: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const permitidos = new Set<string>(CAMPOS_RESERVA);
+  const campos: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(valores ?? {})) {
+    if (permitidos.has(k)) campos[k] = v === "" ? null : v;
+  }
+  if (Object.keys(campos).length === 0) throw new Error("No hay campos válidos para guardar.");
+
+  if (campos.estado != null) {
+    const e = String(campos.estado);
+    if (!RESERVA_ESTADOS.some((x) => x.value === e)) throw new Error("Ese estado no existe.");
+    // Cancelar deja la marca de cuándo: después nadie recuerda la fecha.
+    campos.cancelada_at = e === "cancelada" ? new Date().toISOString() : null;
+  }
+
+  const { data, error } = await sb
+    .from("reservas")
+    .update(campos)
+    .eq("id", id)
+    .eq("empresa_id", empresaId)
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+  return data as Record<string, unknown>;
+}
+
+/**
+ * Borrado de una fila del módulo.
+ *
+ * Un viaje con reservas no se borra: se perderían las de la gente que ya se
+ * anotó, y el borrado en cascada de la base las arrastraría sin avisar. Lo
+ * mismo con una salida. Para sacar algo de circulación sin perder historia
+ * está el estado `cerrado` / `cancelada`.
+ */
+export async function borrarFilaEventos(
+  sb: AppSupabaseClient,
+  empresaId: string,
+  tipo: "evento" | "salida" | "paquete" | "reserva",
+  id: string
+): Promise<void> {
+  const tabla =
+    tipo === "evento" ? "eventos" : tipo === "salida" ? "salidas" : tipo === "paquete" ? "paquetes" : "reservas";
+
+  if (tipo === "evento" || tipo === "salida") {
+    const col = tipo === "evento" ? "evento_id" : "salida_id";
+    const { count, error } = await sb
+      .from("reservas")
+      .select("id", { count: "exact", head: true })
+      .eq("empresa_id", empresaId)
+      .eq(col, id);
+    if (error) throw new Error(error.message);
+    if ((count ?? 0) > 0) {
+      throw new Error(
+        tipo === "evento"
+          ? `No se puede borrar: el viaje tiene ${count} reserva(s). Pasalo a "cerrado" para sacarlo del sitio.`
+          : `No se puede borrar: la salida tiene ${count} reserva(s). Pasala a "cerrada" para sacarla del sitio.`
+      );
+    }
+  }
+
+  const { error } = await sb.from(tabla).delete().eq("id", id).eq("empresa_id", empresaId);
+  if (error) throw new Error(error.message);
+}
+
 /** Alta o edición de un evento, filtrando a las columnas permitidas. */
 /** Columnas que la pantalla puede escribir sobre `salidas`. */
 export const CAMPOS_SALIDA = [
