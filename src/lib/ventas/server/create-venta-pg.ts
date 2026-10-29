@@ -2,7 +2,13 @@ import { getChatPostgresPool } from "@/lib/supabase/chat-pg-pool";
 import { quoteSchemaTable } from "@/lib/supabase/chat-pg-pool";
 
 export interface CreateVentaItemInput {
+  /**
+   * Vacío en una línea de servicio: lo que se vende no está en el inventario.
+   * Se guarda como NULL y no genera movimiento ni descuento de stock.
+   */
   producto_id: string;
+  /** Línea escrita a mano: un servicio, un trabajo, un viaje. */
+  es_manual?: boolean;
   producto_nombre: string;
   sku: string;
   cantidad: number;
@@ -85,8 +91,16 @@ export async function createVentaTransaccionalPg(
     throw new Error("Los totales no coinciden con los ítems; revisá el carrito.");
   }
 
+  /*
+   * Solo las líneas con producto entran al control de stock. Un servicio no
+   * tiene existencias que descontar ni costo de compra que registrar.
+   */
+  const esManual = (it: CreateVentaItemInput) =>
+    it.es_manual === true || !it.producto_id || !it.producto_id.trim();
+
   const qtyByProduct = new Map<string, number>();
   for (const it of items) {
+    if (esManual(it)) continue;
     const prev = qtyByProduct.get(it.producto_id) ?? 0;
     qtyByProduct.set(it.producto_id, prev + it.cantidad);
   }
@@ -236,7 +250,8 @@ export async function createVentaTransaccionalPg(
     const ventaId = insVenta.rows[0].id;
 
     for (const line of items) {
-      const p = stockMap.get(line.producto_id)!;
+      const manual = esManual(line);
+      const p = manual ? null : stockMap.get(line.producto_id)!;
       await client.query(
         `
         INSERT INTO ${itemsT} (
@@ -252,9 +267,11 @@ export async function createVentaTransaccionalPg(
         [
           params.empresaId,
           ventaId,
-          line.producto_id,
+          manual ? null : line.producto_id,
           line.producto_nombre,
-          line.sku,
+          /* `sku` es NOT NULL: una linea de servicio no tiene codigo, asi que
+             se marca como tal en vez de guardar una cadena vacia. */
+          manual ? (line.sku?.trim() || "SERVICIO") : line.sku,
           line.cantidad,
           line.precio_venta_original,
           line.precio_venta,
@@ -264,6 +281,10 @@ export async function createVentaTransaccionalPg(
           line.total_linea,
         ]
       );
+
+      /* Un servicio no mueve inventario: ni descuenta stock ni deja
+         movimiento. Lo unico que queda es la linea de la venta. */
+      if (manual || !p) continue;
 
       const nuevoStock = p.stock - line.cantidad;
       await client.query(

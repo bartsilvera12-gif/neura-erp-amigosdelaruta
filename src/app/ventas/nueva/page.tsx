@@ -290,7 +290,14 @@ export default function NuevaVentaPage() {
   const totalSubtotal = items.reduce((s, i) => s + i.subtotal, 0);
   const totalIva      = items.reduce((s, i) => s + i.monto_iva, 0);
   const totalGeneral  = items.reduce((s, i) => s + i.total_linea, 0);
-  const ventaValida   = items.length > 0 && (moneda === "GS" || tipoCambioNum > 0);
+  /* Una linea de servicio recien agregada esta vacia: sin concepto y sin
+     precio no se puede confirmar, porque en la factura quedaria una linea
+     muda y en cero. */
+  const manualIncompleta = items.some(
+    (i) => i.es_manual && (!i.producto_nombre.trim() || !(i.precio_venta > 0) || !(i.cantidad > 0))
+  );
+  const ventaValida =
+    items.length > 0 && !manualIncompleta && (moneda === "GS" || tipoCambioNum > 0);
 
   // Vuelto (solo informativo, no se persiste)
   const montoRecibidoNum = parseFloat(montoRecibido) || 0;
@@ -351,6 +358,55 @@ export default function NuevaVentaPage() {
       setComboOpen(false);
       setComboHighlight(-1);
     }
+  }
+
+  /**
+   * Servicio o trabajo escrito a mano.
+   *
+   * Lo que vende Amigos de la Ruta son viajes y servicios, no artículos de
+   * inventario: obligar a crear un producto para cada uno llenaría el stock de
+   * fantasmas. Esta línea no tiene producto, así que no descuenta existencias
+   * ni deja movimiento; se escribe el concepto, la cantidad y el precio.
+   */
+  function agregarServicioManual() {
+    setErrorLinea(null);
+    setItems((prev) => [
+      ...prev,
+      {
+        producto_id: "",
+        es_manual: true,
+        producto_nombre: "",
+        sku: "SERVICIO",
+        cantidad: 1,
+        precio_venta_original: 0,
+        precio_venta: 0,
+        tipo_iva: "10%" as TipoIvaVenta,
+        subtotal: 0,
+        monto_iva: 0,
+        total_linea: 0,
+      },
+    ]);
+  }
+
+  /** Reescribe una línea manual recalculando sus importes. */
+  function editarLineaManual(idx: number, patch: Partial<LineaVenta>) {
+    setItems((prev) =>
+      prev.map((it, i) => {
+        if (i !== idx) return it;
+        const next = { ...it, ...patch };
+        const cant = Number(next.cantidad) || 0;
+        const precio = Number(next.precio_venta) || 0;
+        const subtotal = cant > 0 && precio > 0 ? cant * precio : 0;
+        const iva = calcIva(next.tipo_iva, subtotal);
+        return {
+          ...next,
+          precio_venta_original: precio,
+          subtotal,
+          monto_iva: iva,
+          total_linea: subtotal + iva,
+        };
+      })
+    );
   }
 
   // ── Agregar línea al carrito ──────────────────────────────────────────────
@@ -852,7 +908,17 @@ export default function NuevaVentaPage() {
 
         {/* ── SECCIÓN 3: Carrito + totales + confirmar ─────────────────────── */}
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
-          <SectionTitle>Productos en esta venta</SectionTitle>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <SectionTitle>Productos en esta venta</SectionTitle>
+            <button
+              type="button"
+              onClick={agregarServicioManual}
+              className="rounded-lg border border-[#4FAEB2] bg-[#4FAEB2]/5 px-3 py-1.5 text-xs font-semibold text-[#3F8E91] transition-colors hover:bg-[#4FAEB2]/10"
+              title="Facturar un servicio o trabajo que no está en el inventario"
+            >
+              + Servicio / trabajo a mano
+            </button>
+          </div>
 
           {items.length === 0 ? (
             <div className="py-10 text-center text-gray-400 text-sm border-2 border-dashed border-gray-200 rounded-lg">
@@ -879,16 +945,44 @@ export default function NuevaVentaPage() {
                     {items.map((item, idx) => (
                       <tr key={idx} className="border-b border-slate-200 last:border-0 hover:bg-slate-50 transition-colors">
                         <td className="py-3 pr-3 font-medium text-gray-800">
-                          {item.producto_nombre}
+                          {item.es_manual ? (
+                            <input
+                              value={item.producto_nombre}
+                              onChange={(e) => editarLineaManual(idx, { producto_nombre: e.target.value })}
+                              placeholder="Ej.: Tour Route 66 · seña"
+                              className="w-full min-w-[180px] rounded-lg border border-slate-200 px-2 py-1 text-sm outline-none focus:border-[#4FAEB2]"
+                            />
+                          ) : (
+                            item.producto_nombre
+                          )}
                         </td>
                         <td className="py-3 pr-3 font-mono text-xs text-gray-500">
-                          {item.sku}
+                          {item.es_manual ? "—" : item.sku}
                         </td>
                         <td className="py-3 pr-3 text-right tabular-nums">
-                          {item.cantidad}
+                          {item.es_manual ? (
+                            <input
+                              type="number"
+                              min={1}
+                              value={item.cantidad}
+                              onChange={(e) => editarLineaManual(idx, { cantidad: Number(e.target.value) || 0 })}
+                              className="w-16 rounded-lg border border-slate-200 px-2 py-1 text-right text-sm outline-none focus:border-[#4FAEB2]"
+                            />
+                          ) : (
+                            item.cantidad
+                          )}
                         </td>
                         <td className="py-3 pr-3 text-right tabular-nums text-gray-600 text-xs">
-                          {moneda === "USD"
+                          {item.es_manual ? (
+                            <input
+                              type="number"
+                              min={0}
+                              value={item.precio_venta || ""}
+                              onChange={(e) => editarLineaManual(idx, { precio_venta: Number(e.target.value) || 0 })}
+                              placeholder="Precio"
+                              className="w-28 rounded-lg border border-slate-200 px-2 py-1 text-right text-sm outline-none focus:border-[#4FAEB2]"
+                            />
+                          ) : moneda === "USD"
                             ? <>USD {item.precio_venta_original.toLocaleString("es-PY")}
                                 <br/><span className="text-gray-400">≈ {formatGs(item.precio_venta)}</span>
                               </>
@@ -896,9 +990,23 @@ export default function NuevaVentaPage() {
                           }
                         </td>
                         <td className="py-3 pr-3 text-center">
-                          <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">
-                            {ivaLabel[item.tipo_iva]}
-                          </span>
+                          {item.es_manual ? (
+                            <select
+                              value={item.tipo_iva}
+                              onChange={(e) =>
+                                editarLineaManual(idx, { tipo_iva: e.target.value as TipoIvaVenta })
+                              }
+                              className="rounded-lg border border-slate-200 px-2 py-1 text-xs outline-none focus:border-[#4FAEB2]"
+                            >
+                              <option value="EXENTA">Exenta</option>
+                              <option value="5%">5%</option>
+                              <option value="10%">10%</option>
+                            </select>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">
+                              {ivaLabel[item.tipo_iva]}
+                            </span>
+                          )}
                         </td>
                         <td className="py-3 pr-3 text-right tabular-nums text-gray-600 text-xs">
                           {formatGs(item.subtotal)}

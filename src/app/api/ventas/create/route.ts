@@ -22,6 +22,7 @@ function asItems(body: unknown): CreateVentaItemInput[] | null {
     if (tipoIva !== "EXENTA" && tipoIva !== "5%" && tipoIva !== "10%") return null;
     out.push({
       producto_id: String(r.producto_id ?? ""),
+      es_manual: r.es_manual === true,
       producto_nombre: String(r.producto_nombre ?? ""),
       sku: String(r.sku ?? ""),
       cantidad: Number(r.cantidad),
@@ -33,7 +34,12 @@ function asItems(body: unknown): CreateVentaItemInput[] | null {
       total_linea: Number(r.total_linea),
     });
   }
-  if (out.some((i) => !i.producto_id || !(i.cantidad > 0))) return null;
+  /*
+   * Una linea de servicio no tiene producto, pero si tiene que tener nombre:
+   * sin descripcion, en la factura y en el reporte queda una linea muda.
+   */
+  if (out.some((i) => !(i.cantidad > 0))) return null;
+  if (out.some((i) => (i.es_manual ? !i.producto_nombre.trim() : !i.producto_id))) return null;
   return out;
 }
 

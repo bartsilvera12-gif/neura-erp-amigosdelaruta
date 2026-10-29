@@ -14,7 +14,10 @@ export const METODOS_PAGO_VENTA: { value: MetodoPagoVenta; label: string }[] = [
 
 /** Un ítem dentro de una venta (una línea de producto). */
 export interface LineaVenta {
+  /** Vacío en una línea de servicio: lo que se vende no está en inventario. */
   producto_id:           string;
+  /** Servicio o trabajo escrito a mano: no descuenta stock. */
+  es_manual?:            boolean;
   producto_nombre:       string;
   sku:                   string;
   cantidad:              number;
