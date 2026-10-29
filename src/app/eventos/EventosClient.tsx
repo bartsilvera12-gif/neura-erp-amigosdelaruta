@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { RefreshCw, Route, Save, Plus, AlertCircle, Check } from "lucide-react";
+import { RefreshCw, Route, Save, Plus, Trash2, AlertCircle, Check } from "lucide-react";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import CampoImagen from "@/components/web/CampoImagen";
 
@@ -412,15 +412,29 @@ export default function EventosClient({ seccion }: { seccion: SeccionEventos }) 
                   </div>
                 </div>
                 {formEvento(clave, e)}
-                <button
-                  type="button"
-                  disabled={guardando === clave}
-                  onClick={() => void guardar(id, draft[clave] ?? {}, clave)}
-                  className="mt-4 inline-flex items-center gap-2 rounded-xl bg-[#4FAEB2] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-                >
-                  <Save className="h-4 w-4" />
-                  {guardando === clave ? "Guardando…" : "Guardar"}
-                </button>
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={guardando === clave}
+                    onClick={() => void guardar(id, draft[clave] ?? {}, clave)}
+                    className="inline-flex items-center gap-2 rounded-xl bg-[#4FAEB2] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                  >
+                    <Save className="h-4 w-4" />
+                    {guardando === clave ? "Guardando…" : "Guardar"}
+                  </button>
+                  {/* Borrar el viaje. Se rechaza si tiene reservas: borrarlo
+                      arrastraria en cascada las de la gente ya anotada. */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void borrar("evento", id, `el viaje "${textoDe(e.nombre, "es") || String(e.slug ?? "")}"`)
+                    }
+                    className="inline-flex items-center gap-2 rounded-xl border border-rose-200 px-4 py-2 text-sm font-semibold text-rose-600 transition-colors hover:bg-rose-50"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Borrar viaje
+                  </button>
+                </div>
               </section>
             );
           })}
