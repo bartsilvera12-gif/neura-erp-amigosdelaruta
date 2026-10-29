@@ -563,6 +563,8 @@ function ContactoSitio({
   const [f, setF] = useState({
     whatsapp: txt(actual.whatsapp),
     telefono_visible: txt(actual.telefono_visible),
+    whatsapp2: txt(actual.whatsapp2),
+    telefono_visible2: txt(actual.telefono_visible2),
     email: txt(actual.email),
     ubicacion: txt(actual.ubicacion),
     instagram: txt(redesActuales.instagram),
@@ -579,6 +581,8 @@ function ContactoSitio({
     setF({
       whatsapp: txt(actual.whatsapp),
       telefono_visible: txt(actual.telefono_visible),
+      whatsapp2: txt(actual.whatsapp2),
+      telefono_visible2: txt(actual.telefono_visible2),
       email: txt(actual.email),
       ubicacion: txt(actual.ubicacion),
       instagram: txt(redesActuales.instagram),
@@ -612,6 +616,8 @@ function ContactoSitio({
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         {campo("whatsapp", "WhatsApp", "595971123456", "Solo números, con el código de país y sin el +.")}
         {campo("telefono_visible", "Teléfono como se muestra", "+595 971 123 456", "Si lo dejás vacío se arma con el WhatsApp.")}
+        {campo("whatsapp2", "WhatsApp 2 (opcional)", "595981234567", "Un segundo número de contacto. Si lo dejás vacío, el sitio muestra uno solo.")}
+        {campo("telefono_visible2", "Teléfono 2 como se muestra", "+595 981 234 567")}
         {campo("email", "Email", "hola@amigosderuta.com")}
         {campo("ubicacion", "Ubicación", "Asunción · Paraguay")}
       </div>
@@ -634,6 +640,8 @@ function ContactoSitio({
           void onGuardar({
             whatsapp: f.whatsapp.replace(/[^0-9]/g, ""),
             telefono_visible: f.telefono_visible.trim(),
+            whatsapp2: f.whatsapp2.replace(/[^0-9]/g, ""),
+            telefono_visible2: f.telefono_visible2.trim(),
             email: f.email.trim(),
             ubicacion: f.ubicacion.trim(),
             redes: {
