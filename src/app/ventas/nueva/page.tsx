@@ -8,6 +8,8 @@ import ProductPickerModal, { type ProductoPickerItem, type AgregarVentaPayload }
 import { saveVenta } from "@/lib/ventas/storage";
 import { getClientes } from "@/lib/clientes/storage";
 import { getVentas } from "@/lib/ventas/storage";
+import EmitiendoFacturaOverlay from "@/components/facturas/EmitiendoFacturaOverlay";
+import { emitirFacturaDesdeCaja, type PasoEmision } from "@/lib/sifen/emitir-desde-caja";
 import { nombreClienteDisplay } from "@/lib/clientes/display-name";
 import type { Cliente } from "@/lib/clientes/types";
 import { getProductos } from "@/lib/inventario/storage";
@@ -503,6 +505,10 @@ export default function NuevaVentaPage() {
    * mismo, sin deshacer nada.
    */
   const [previendo, setPreviendo] = useState(false);
+  /* Avance de la emisión automática, para el overlay. */
+  const [pasoEmision, setPasoEmision] = useState<PasoEmision | null>(null);
+  const [errorEmision, setErrorEmision] = useState<string | null>(null);
+  const [facturaEmitida, setFacturaEmitida] = useState<string | null>(null);
   async function verVistaPrevia() {
     setErrorVenta(null);
     setPreviendo(true);
@@ -576,6 +582,8 @@ export default function NuevaVentaPage() {
       }
     }
 
+    if (tipoDocumento === "factura") setPasoEmision("venta");
+
     const resultado = await saveVenta(
       {
         items,
@@ -593,6 +601,7 @@ export default function NuevaVentaPage() {
     );
 
     if (!resultado.success) {
+      setPasoEmision(null);
       setErrorVenta(resultado.error);
       return;
     }
@@ -603,6 +612,7 @@ export default function NuevaVentaPage() {
      * dejaria una venta sin factura que nadie volveria a mirar.
      */
     if (resultado.facturaWarning) {
+      setPasoEmision(null);
       setErrorVenta(
         `La venta se registró, pero la factura no: ${resultado.facturaWarning}`
       );
@@ -610,7 +620,22 @@ export default function NuevaVentaPage() {
     }
 
     if (resultado.factura) {
-      router.push(`/facturas/${resultado.factura.id}`);
+      /*
+       * El circuito de SIFEN lo hace el sistema: el cajero eligió vender y
+       * facturar, no tiene por qué encadenar borrador, XML, firma y envío a
+       * mano. El overlay cuenta en qué paso va, porque el SET tarda y una
+       * pantalla quieta parece colgada.
+       */
+      const facturaId = resultado.factura.id;
+      setFacturaEmitida(facturaId);
+      const r = await emitirFacturaDesdeCaja(facturaId, setPasoEmision);
+      if (!r.ok) {
+        /* La venta ya está hecha: no se deshace por un problema de emisión.
+           Se avisa y se abre la factura, donde está el detalle y el reintento. */
+        setErrorEmision(r.error);
+        return;
+      }
+      router.push(`/facturas/${facturaId}`);
       return;
     }
     router.push("/ventas");
@@ -1250,6 +1275,14 @@ export default function NuevaVentaPage() {
         </div>
 
       </form>
+
+      <EmitiendoFacturaOverlay
+        paso={pasoEmision}
+        error={errorEmision}
+        onCerrar={() => {
+          if (facturaEmitida) router.push(`/facturas/${facturaEmitida}`);
+        }}
+      />
 
       <ProductPickerModal
         open={pickerOpen}
