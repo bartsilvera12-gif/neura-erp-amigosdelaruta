@@ -9,6 +9,7 @@ import type {
   SifenConsultaLoteUltimaPersistida,
 } from "@/lib/sifen/types";
 import { decodeXmlNumericEntities } from "@/lib/sifen/decode-xml-entities";
+import EditarEnCajaButton from "@/components/facturas/EditarEnCajaButton";
 import { SifenEstadoBadge } from "./SifenEstadoBadge";
 import { FacturaCorreccionFiscalNC } from "@/components/facturas/FacturaCorreccionFiscalNC";
 
@@ -737,6 +738,15 @@ export function FacturaElectronicaPanel({
                   Muestra los datos, el IVA y los totales tal como saldrían impresos. No emite el
                   documento ni toma un número de la numeración fiscal.
                 </p>
+              </div>
+            )}
+
+            {/* Si la vista previa muestra algo mal, se vuelve a la caja a
+                corregirlo. Solo mientras el documento no este aceptado por la
+                SET: despues ya no es correccion, es cancelacion o NC. */}
+            {estado !== "aprobado" && estado !== "cancelado" && estado !== "enviado" && (
+              <div className="pt-2">
+                <EditarEnCajaButton facturaId={facturaId} />
               </div>
             )}
 

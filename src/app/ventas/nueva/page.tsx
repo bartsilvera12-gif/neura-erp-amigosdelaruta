@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import MontoInput from "@/components/ui/MontoInput";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
 import ProductPickerModal, { type ProductoPickerItem, type AgregarVentaPayload } from "@/components/inventario/ProductPickerModal";
 import { saveVenta } from "@/lib/ventas/storage";
 import { getClientes } from "@/lib/clientes/storage";
+import { getVentas } from "@/lib/ventas/storage";
 import { nombreClienteDisplay } from "@/lib/clientes/display-name";
 import type { Cliente } from "@/lib/clientes/types";
 import { getProductos } from "@/lib/inventario/storage";
@@ -84,6 +85,7 @@ const ivaLabel: Record<TipoIvaVenta, string> = {
 
 export default function NuevaVentaPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   // ── Estado global ──────────────────────────────────────────────────────────
   const [productos, setProductos]   = useState<Producto[]>([]);
@@ -451,6 +453,30 @@ export default function NuevaVentaPage() {
   function handleEliminarLinea(index: number) {
     setItems((prev) => prev.filter((_, i) => i !== index));
   }
+
+  /*
+   * Rehacer una venta: se llega desde «Editar en la caja» en la factura.
+   *
+   * La venta original ya fue anulada —su stock volvió y su factura quedó sin
+   * efecto— y acá se vuelve a cargar el carrito con lo mismo para corregir lo
+   * que estuviera mal y confirmar de nuevo. Es el camino honesto: una venta
+   * confirmada no se edita en el lugar, se deshace y se rehace, y asi el
+   * inventario y la numeracion quedan coherentes.
+   */
+  const rehacerId = searchParams?.get("rehacer") ?? null;
+  const [rehecha, setRehecha] = useState(false);
+  useEffect(() => {
+    if (!rehacerId || rehecha) return;
+    void getVentas().then((vs) => {
+      const v = vs.find((x) => x.id === rehacerId);
+      if (!v) return;
+      setRehecha(true);
+      setMoneda(v.moneda);
+      setTipoVenta(v.tipo_venta);
+      if (v.metodo_pago) setMetodoPago(v.metodo_pago);
+      setItems(v.items.map((it) => ({ ...it })));
+    });
+  }, [rehacerId, rehecha]);
 
   useEffect(() => {
     if (tipoDocumento !== "factura" || clientes.length > 0) return;
