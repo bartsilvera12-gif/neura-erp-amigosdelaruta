@@ -4,7 +4,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { PDFDocument, StandardFonts, rgb, type PDFImage, type PDFPage, type PDFFont, type RGB } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb, degrees, type PDFImage, type PDFPage, type PDFFont, type RGB } from "pdf-lib";
 import QRCode from "qrcode";
 import type { KudeItemRow, KudeParsedFromXml } from "./parse-kude-from-signed-xml";
 
@@ -28,6 +28,15 @@ export type BuildKudePdfInput = {
   qrUrl: string;
   /** Branding opcional. Si no viene o es inválido, se usa el diseño Neura. */
   branding?: KudeBranding | null;
+  /**
+   * Hoja de control previa a emitir: NO es un documento electrónico.
+   *
+   * Se marca en todas las páginas para que una impresión suelta no pueda
+   * confundirse con una factura. El KuDE real lleva CDC y QR; este no, pero
+   * el parecido es suficiente como para que convenga decirlo en letras
+   * grandes.
+   */
+  vistaPrevia?: boolean;
 };
 
 const A4_W = 595.28;
@@ -253,7 +262,7 @@ function drawTableChunk(
 }
 
 export async function buildKudePdfBuffer(input: BuildKudePdfInput): Promise<Buffer> {
-  const { parsed, numeroFactura, dProtAut, qrUrl, branding } = input;
+  const { parsed, numeroFactura, dProtAut, qrUrl, branding, vistaPrevia } = input;
 
   /**
    * Branding resolution: si la empresa configuró color/logo válidos, los usamos;
@@ -726,6 +735,22 @@ export async function buildKudePdfBuffer(input: BuildKudePdfInput): Promise<Buff
     font,
     color: GRAY,
   });
+
+  if (vistaPrevia) {
+    /* Franja en diagonal sobre cada página. Va al final, encima de todo lo
+       dibujado, y en gris claro para no tapar los números que hay que leer. */
+    for (const pg of pdfDoc.getPages()) {
+      const { width, height } = pg.getSize();
+      pg.drawText("VISTA PREVIA — SIN VALOR FISCAL", {
+        x: width * 0.08,
+        y: height * 0.42,
+        size: 34,
+        font: fontBold,
+        color: rgb(0.85, 0.85, 0.88),
+        rotate: degrees(28),
+      });
+    }
+  }
 
   return Buffer.from(await pdfDoc.save());
 }

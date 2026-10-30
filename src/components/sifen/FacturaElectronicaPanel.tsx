@@ -717,6 +717,29 @@ export function FacturaElectronicaPanel({
               que poder hacerse siempre que el documento esté aprobado, haya o
               no ventana para cancelarlo.
             */}
+            {/*
+              Vista previa: antes de emitir, no despues. Se muestra mientras el
+              documento no este aprobado ni cancelado, que es cuando todavia se
+              puede corregir algo. No crea el documento ni consume numeracion.
+            */}
+            {estado !== "aprobado" && estado !== "cancelado" && (
+              <div className="pt-2">
+                <a
+                  href={`/api/facturas/${facturaId}/sifen/vista-previa`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                  title="Ver cómo va a quedar la factura sin emitirla"
+                >
+                  Vista previa
+                </a>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Muestra los datos, el IVA y los totales tal como saldrían impresos. No emite el
+                  documento ni toma un número de la numeración fiscal.
+                </p>
+              </div>
+            )}
+
             {fe && estado === "aprobado" && (
               <div className="pt-2">
                 <a
