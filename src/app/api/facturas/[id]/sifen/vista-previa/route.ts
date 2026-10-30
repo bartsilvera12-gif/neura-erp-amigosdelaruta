@@ -45,7 +45,9 @@ export async function GET(
      * timbrado— el error aparece acá, que es exactamente el momento en que
      * conviene enterarse.
      */
-    const loaded = await loadValidatedSifenPayload(supabase, auth.empresa_id, fid);
+    const loaded = await loadValidatedSifenPayload(supabase, auth.empresa_id, fid, {
+      sinBorrador: true,
+    });
     if (!loaded.ok) {
       return NextResponse.json(errorResponse(loaded.error.message), {
         status: loaded.error.status,

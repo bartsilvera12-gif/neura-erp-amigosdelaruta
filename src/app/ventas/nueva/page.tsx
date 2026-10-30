@@ -495,6 +495,54 @@ export default function NuevaVentaPage() {
       .slice(0, 8);
   }, [clientes, buscaCliente]);
 
+  /**
+   * Vista previa de la factura, con la venta todavía sin confirmar.
+   *
+   * Es el momento en que mirarla sirve: no hay venta, no hay factura, no hay
+   * numeración tomada ni stock descontado. Si algo está mal se corrige acá
+   * mismo, sin deshacer nada.
+   */
+  const [previendo, setPreviendo] = useState(false);
+  async function verVistaPrevia() {
+    setErrorVenta(null);
+    setPreviendo(true);
+    try {
+      const res = await fetchWithSupabaseSession("/api/ventas/vista-previa-factura", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          moneda,
+          tipo: tipoVenta === "CREDITO" ? "credito" : "contado",
+          cliente_id: facClienteId,
+          cliente_nombre: facNombre.trim(),
+          cliente_ruc: facRuc.trim(),
+          items: items.map((it) => ({
+            descripcion: it.producto_nombre,
+            cantidad: it.cantidad,
+            precio_unitario: it.precio_venta,
+            subtotal: it.subtotal,
+            iva: it.monto_iva,
+            total: it.total_linea,
+          })),
+        }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        setErrorVenta(j?.error ?? "No se pudo generar la vista previa.");
+        return;
+      }
+      /* Se abre en una pestaña nueva para no perder el carrito a medio cargar. */
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener");
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      setErrorVenta(e instanceof Error ? e.message : "No se pudo generar la vista previa.");
+    } finally {
+      setPreviendo(false);
+    }
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setErrorVenta(null);
@@ -1172,6 +1220,17 @@ export default function NuevaVentaPage() {
 
           {/* Acciones */}
           <div className="mt-6 flex gap-4">
+            {tipoDocumento === "factura" && (
+              <button
+                type="button"
+                disabled={!ventaValida || previendo}
+                onClick={() => void verVistaPrevia()}
+                className="border border-slate-300 px-6 py-3 rounded-lg text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Ver cómo va a quedar la factura antes de confirmar"
+              >
+                {previendo ? "Generando…" : "Vista previa"}
+              </button>
+            )}
             <button
               type="submit"
               disabled={!ventaValida}

@@ -25,7 +25,16 @@ function ambienteDesdeConfigRow(raw: unknown): AmbienteSifen {
 export async function loadValidatedSifenPayload(
   supabase: AppSupabaseClient,
   empresaId: string,
-  facturaId: string
+  facturaId: string,
+  /**
+   * Vista previa: no exigir que exista el borrador del documento.
+   *
+   * `validateAndBuildSifenPayload` pide la fila de `factura_electronica` sólo
+   * para un contador interno de regeneraciones. Exigirla para MIRAR cómo va a
+   * quedar la factura invierte el orden: habría que generar el documento para
+   * poder decidir si se quiere generar.
+   */
+  opciones: { sinBorrador?: boolean } = {}
 ): Promise<LoadSifenPayloadResult> {
   const fid = facturaId.trim();
 
@@ -102,7 +111,10 @@ export async function loadValidatedSifenPayload(
     items: (itemsRes.data ?? []) as BuildSifenPayloadInput["items"],
     cliente: clienteRes.data as BuildSifenPayloadInput["cliente"],
     config: configRes.data as BuildSifenPayloadInput["config"],
-    facturaElectronica: electronicaRes.data as BuildSifenPayloadInput["facturaElectronica"],
+    facturaElectronica: (electronicaRes.data ??
+      (opciones.sinBorrador
+        ? { id: "vista-previa", estado_sifen: "borrador" }
+        : null)) as BuildSifenPayloadInput["facturaElectronica"],
   };
 
   const built = validateAndBuildSifenPayload(buildInput);
