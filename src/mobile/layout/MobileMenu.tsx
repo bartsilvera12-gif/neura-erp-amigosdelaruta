@@ -65,7 +65,34 @@ type Section = {
  * la navegación sea coherente en ambos dispositivos. Solo agrupamiento visual:
  * mismas rutas/labels, sin inventar módulos ni cambiar permisos.
  */
-const SECTIONS: Section[] = [
+/*
+ * Rutas que esta instancia NO tiene.
+ *
+ * El menu de escritorio recorta por `INSTANCIA_MENU_KEYS_PERMITIDAS`; este no
+ * recortaba por nada, asi que el celular mostraba el catalogo completo del
+ * sistema base —Omnicanal, Marketing Ops, Sorteos, CRM— y Amigos de la Ruta
+ * veia entradas que al abrirlas rebotan.
+ *
+ * Se filtra por prefijo de ruta para no depender de que el modulo este o no
+ * en `empresa_modulos`: lo que no corresponde a esta instancia no se muestra,
+ * punto. Si algun dia se habilita alguno, se saca de esta lista.
+ */
+const RUTAS_FUERA_DE_ESTA_INSTANCIA = [
+  "/dashboard/conversaciones",
+  /* No es hija de la anterior: su ruta es otra, no un subcamino. */
+  "/dashboard/conversaciones-finalizadas",
+  "/dashboard/monitoreo",
+  "/dashboard/campanas",
+  "/dashboard/etiquetas",
+  "/dashboard/marketing-ops",
+  "/sorteos",
+  "/crm",
+  "/planes",
+  "/comisiones",
+  "/dashboard/proyectos",
+];
+
+const SECTIONS_COMPLETO: Section[] = [
   {
     title: "Inicio",
     items: [
@@ -137,6 +164,14 @@ const SECTIONS: Section[] = [
   //   items: [{ href: "/ayuda", label: "Ayuda en línea", icon: BookOpen }],
   // },
 ];
+
+/** Lo que esta instancia sí muestra. Una sección que queda vacía desaparece. */
+const SECTIONS: Section[] = SECTIONS_COMPLETO.map((s) => ({
+  ...s,
+  items: s.items.filter(
+    (it) => !RUTAS_FUERA_DE_ESTA_INSTANCIA.some((r) => it.href === r || it.href.startsWith(`${r}/`))
+  ),
+})).filter((s) => s.items.length > 0);
 
 export default function MobileMenu({
   open,

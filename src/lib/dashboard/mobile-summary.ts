@@ -33,7 +33,16 @@ export async function fetchDashboardMobileSummary(
 
   const hoy = new Date();
   const inicioMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, "0")}-01`;
-  const finMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, "0")}-31`;
+  /*
+   * Ultimo dia real del mes, no 31 fijo.
+   *
+   * En un mes de 30 dias —o en febrero— "2026-11-31" no es una fecha: Postgres
+   * la rechaza y la consulta entera falla, asi que el inicio en el celular
+   * mostraba "no se pudieron cargar los datos" durante todo ese mes. El dia 0
+   * del mes siguiente es el ultimo del actual.
+   */
+  const ultimoDia = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).getDate();
+  const finMes = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, "0")}-${String(ultimoDia).padStart(2, "0")}`;
 
   const [facturasMesQ, facturasPendQ, clientesQ, productosQ, recientesQ] = await Promise.all([
     supabase

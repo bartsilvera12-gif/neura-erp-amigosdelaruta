@@ -39,6 +39,11 @@ export default function DashboardMobile({
       <div className="mx-auto max-w-md p-4">
         <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           No se pudieron cargar los datos. Refrescá para reintentar.
+          {/* El motivo, a la vista: sin esto cualquier falla se ve igual y hay
+              que adivinar si es sesión, permisos o un error del servidor. */}
+          {error instanceof Error && error.message ? (
+            <span className="mt-1 block text-xs text-red-600/80">{error.message}</span>
+          ) : null}
         </div>
       </div>
     );
