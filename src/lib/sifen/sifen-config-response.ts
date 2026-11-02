@@ -1,5 +1,26 @@
-import type { AmbienteSifen, EmpresaSifenConfigDTO, KudeLogoEntry } from "./types";
+import type { AmbienteSifen, EmpresaSifenConfigDTO, KudeLogoEntry, ActividadEconomicaEntry } from "./types";
 import { normalizePlazoCancelacionHoras } from "./sifen-cancelacion-rules";
+
+/**
+ * Normaliza el valor crudo de `actividades_economicas` (JSONB) a un arreglo
+ * tipado. Descarta entradas sin código o descripción y códigos duplicados.
+ * Nunca lanza: ante cualquier forma inesperada devuelve `[]`.
+ */
+export function normalizeActividadesEconomicas(raw: unknown): ActividadEconomicaEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ActividadEconomicaEntry[] = [];
+  const vistos = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const codigo = o.codigo == null ? "" : String(o.codigo).trim();
+    const descripcion = o.descripcion == null ? "" : String(o.descripcion).trim();
+    if (!codigo || !descripcion || vistos.has(codigo)) continue;
+    vistos.add(codigo);
+    out.push({ codigo, descripcion });
+  }
+  return out;
+}
 
 /**
  * Normaliza el valor crudo de `kude_logos` (JSONB) a un arreglo tipado.
@@ -89,6 +110,7 @@ export function toEmpresaSifenConfigPublicDto(
         ? null
         : String(row.kude_color_primario_fill).trim().toLowerCase(),
     kude_logos: normalizeKudeLogos(row.kude_logos),
+    actividades_economicas: normalizeActividadesEconomicas(row.actividades_economicas),
     created_at: String(row.created_at ?? ""),
     updated_at: String(row.updated_at ?? ""),
   };

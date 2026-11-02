@@ -19,10 +19,16 @@ export interface EmpresaSifenConfigDTO {
   timbrado_numero: string;
   /** Inicio vigencia timbrado YYYY-MM-DD (gTimb.dFeIniT); como figura en la documentación DNIT. */
   timbrado_fecha_inicio_vigencia: string | null;
-  /** Catálogo SET (gEmis.gActEco.cActEco). */
+  /** Catálogo SET (gEmis.gActEco.cActEco). Actividad principal. */
   actividad_economica_codigo: string | null;
   /** Texto oficial del catálogo (dDesActEco). */
   actividad_economica_descripcion: string | null;
+  /**
+   * Actividades económicas adicionales/secundarias del emisor. SIFEN admite
+   * varias gActEco: si hay elementos acá, se emiten todas en la factura.
+   * La principal (arriba) se incluye igual. No cambia los datos fiscales.
+   */
+  actividades_economicas: ActividadEconomicaEntry[];
   establecimiento: string;
   punto_expedicion: string;
   csc: string | null;
@@ -53,6 +59,14 @@ export interface EmpresaSifenConfigDTO {
   kude_logos: KudeLogoEntry[];
   created_at: string;
   updated_at: string;
+}
+
+/** Una actividad económica del emisor (SIFEN gActEco: cActEco + dDesActEco). */
+export interface ActividadEconomicaEntry {
+  /** Código del catálogo SET (cActEco). */
+  codigo: string;
+  /** Descripción oficial del catálogo (dDesActEco). */
+  descripcion: string;
 }
 
 /** Un logo de la galería KuDE (metadata; el PNG vive en el bucket `sifen`). */

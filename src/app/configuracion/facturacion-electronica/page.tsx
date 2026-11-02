@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
-import type { AmbienteSifen, EmpresaSifenConfigDTO, KudeLogoEntry } from "@/lib/sifen/types";
+import type { AmbienteSifen, EmpresaSifenConfigDTO, KudeLogoEntry, ActividadEconomicaEntry } from "@/lib/sifen/types";
 import { FechaSelect } from "@/components/ui/FechaSelect";
 
 const fLabel = "block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1";
@@ -73,6 +73,10 @@ export default function FacturacionElectronicaSifenPage() {
   const [timbradoFechaIni, setTimbradoFechaIni] = useState("");
   const [actEcoCodigo, setActEcoCodigo] = useState("");
   const [actEcoDescripcion, setActEcoDescripcion] = useState("");
+  /** Actividades económicas adicionales (se emiten junto a la principal). */
+  const [actividadesExtra, setActividadesExtra] = useState<ActividadEconomicaEntry[]>([]);
+  const [nuevoActCodigo, setNuevoActCodigo] = useState("");
+  const [nuevoActDescripcion, setNuevoActDescripcion] = useState("");
   const [establecimiento, setEstablecimiento] = useState("");
   const [puntoExpedicion, setPuntoExpedicion] = useState("");
   const [csc, setCsc] = useState("");
@@ -141,6 +145,7 @@ export default function FacturacionElectronicaSifenPage() {
         setTimbradoFechaIni(ymdToDateInput(d.timbrado_fecha_inicio_vigencia));
         setActEcoCodigo(d.actividad_economica_codigo ?? "");
         setActEcoDescripcion(d.actividad_economica_descripcion ?? "");
+        setActividadesExtra(Array.isArray(d.actividades_economicas) ? d.actividades_economicas : []);
         setEstablecimiento(d.establecimiento);
         setPuntoExpedicion(d.punto_expedicion);
         setCsc(d.csc ?? "");
@@ -223,6 +228,7 @@ export default function FacturacionElectronicaSifenPage() {
           timbrado_fecha_inicio_vigencia: timbradoFechaIni.trim(),
           actividad_economica_codigo: actEcoCodigo.trim(),
           actividad_economica_descripcion: actEcoDescripcion.trim(),
+          actividades_economicas: actividadesExtra,
           establecimiento: establecimiento.trim(),
           punto_expedicion: puntoExpedicion.trim(),
           csc: csc.trim() || null,
@@ -257,6 +263,7 @@ export default function FacturacionElectronicaSifenPage() {
           timbrado_fecha_inicio_vigencia: timbradoFechaIni.trim(),
           actividad_economica_codigo: actEcoCodigo.trim(),
           actividad_economica_descripcion: actEcoDescripcion.trim(),
+          actividades_economicas: actividadesExtra,
           establecimiento: establecimiento.trim(),
           punto_expedicion: puntoExpedicion.trim(),
           csc: csc.trim() || null,
@@ -802,6 +809,71 @@ export default function FacturacionElectronicaSifenPage() {
                 catálogo en e-kuatia o de tu constancia. Si no coinciden con lo que tiene la SET, devuelve error <span className="font-mono">1261</span>.
               </p>
             </div>
+            <div className="sm:col-span-2">
+              <label className={fLabel}>Actividades económicas adicionales (opcional)</label>
+              <p className="text-xs text-slate-500 mb-2 leading-relaxed">
+                Si tu RUC tiene varias actividades, agregalas acá: se incluyen <span className="font-medium">todas</span> en la
+                factura (varias <span className="font-mono">gActEco</span>). La principal de arriba va siempre. Cada código debe
+                coincidir con la SET.
+              </p>
+              {actividadesExtra.length > 0 && (
+                <ul className="space-y-2 mb-3">
+                  {actividadesExtra.map((a, i) => (
+                    <li
+                      key={a.codigo}
+                      className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-2"
+                    >
+                      <span className="min-w-0">
+                        <span className="font-mono text-sm font-medium text-slate-800">{a.codigo}</span>
+                        <span className="block truncate text-xs text-slate-500">{a.descripcion}</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setActividadesExtra(actividadesExtra.filter((_, j) => j !== i))}
+                        className="shrink-0 rounded-lg border border-rose-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                      >
+                        Quitar
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[130px_1fr_auto] sm:items-start">
+                <input
+                  className={fInput}
+                  inputMode="numeric"
+                  placeholder="Código"
+                  value={nuevoActCodigo}
+                  onChange={(e) => setNuevoActCodigo(e.target.value.replace(/\D/g, "").slice(0, 8))}
+                />
+                <input
+                  className={fInput}
+                  placeholder="Descripción oficial del catálogo SET"
+                  value={nuevoActDescripcion}
+                  onChange={(e) => setNuevoActDescripcion(e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const c = nuevoActCodigo.trim();
+                    const d = nuevoActDescripcion.trim();
+                    if (!c || !d) return;
+                    if (c === actEcoCodigo.trim() || actividadesExtra.some((x) => x.codigo === c)) {
+                      setNuevoActCodigo("");
+                      setNuevoActDescripcion("");
+                      return;
+                    }
+                    setActividadesExtra([...actividadesExtra, { codigo: c, descripcion: d }]);
+                    setNuevoActCodigo("");
+                    setNuevoActDescripcion("");
+                  }}
+                  className="rounded-lg bg-[#4FAEB2] px-3 py-2 text-sm font-semibold text-white hover:bg-[#3F8E91]"
+                >
+                  Agregar
+                </button>
+              </div>
+              <p className="mt-1.5 text-xs text-slate-500">Se guardan al pulsar «Guardar cambios».</p>
+            </div>
             <div>
               <label className={fLabel}>Establecimiento</label>
               <input className={fInput} value={establecimiento} onChange={(e) => setEstablecimiento(e.target.value)} required />
@@ -1153,6 +1225,7 @@ export default function FacturacionElectronicaSifenPage() {
                   setTimbradoFechaIni(ymdToDateInput(cfg.timbrado_fecha_inicio_vigencia));
                   setActEcoCodigo(cfg.actividad_economica_codigo ?? "");
                   setActEcoDescripcion(cfg.actividad_economica_descripcion ?? "");
+                  setActividadesExtra(Array.isArray(cfg.actividades_economicas) ? cfg.actividades_economicas : []);
                   setEstablecimiento(cfg.establecimiento);
                   setPuntoExpedicion(cfg.punto_expedicion);
                   setCsc(cfg.csc ?? "");

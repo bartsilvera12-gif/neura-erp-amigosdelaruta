@@ -77,7 +77,9 @@ export async function POST(
      * coincide con ningún logo registrado se guarda null (usa el predeterminado).
      * El body puede venir vacío (emisión encadenada sin elegir logo).
      */
-    const body = (await request.json().catch(() => null)) as { logoId?: unknown } | null;
+    const body = (await request.json().catch(() => null)) as
+      | { logoId?: unknown; tipoTransaccion?: unknown }
+      | null;
     const logoIdPedido =
       body && typeof body.logoId === "string" ? body.logoId.trim() : "";
     const logosEmpresa = normalizeKudeLogos(
@@ -85,6 +87,13 @@ export async function POST(
     );
     const kudeLogoId =
       logoIdPedido && logosEmpresa.some((l) => l.id === logoIdPedido) ? logoIdPedido : null;
+
+    /**
+     * Tipo de transacción (iTipTra): 1 mercadería, 2 servicios, 3 mixto.
+     * Solo afecta el XML. Fuera de 1/2/3 se guarda null (= 1 por defecto).
+     */
+    const tipoTxNum = body == null ? NaN : Number(body.tipoTransaccion);
+    const sifenTipoTransaccion = [1, 2, 3].includes(tipoTxNum) ? tipoTxNum : null;
 
     const { data: existente, error: errExistente } = await supabase
       .from("factura_electronica")
@@ -97,13 +106,24 @@ export async function POST(
       return NextResponse.json(errorResponse(errExistente.message), { status: 400 });
     }
     if (existente) {
-      // Si ya existe el borrador y se eligió un logo distinto, se actualiza.
-      const actual = (existente as { kude_logo_id?: string | null }).kude_logo_id ?? null;
-      if (kudeLogoId && kudeLogoId !== actual) {
+      // Si ya existe el borrador y se eligió logo/tipo distinto, se actualiza.
+      const ex = existente as {
+        id: string;
+        kude_logo_id?: string | null;
+        sifen_tipo_transaccion?: number | null;
+      };
+      const cambios: Record<string, unknown> = {};
+      if (kudeLogoId && kudeLogoId !== (ex.kude_logo_id ?? null)) {
+        cambios.kude_logo_id = kudeLogoId;
+      }
+      if (sifenTipoTransaccion != null && sifenTipoTransaccion !== (ex.sifen_tipo_transaccion ?? null)) {
+        cambios.sifen_tipo_transaccion = sifenTipoTransaccion;
+      }
+      if (Object.keys(cambios).length > 0) {
         const { data: actualizada, error: errUpd } = await supabase
           .from("factura_electronica")
-          .update({ kude_logo_id: kudeLogoId })
-          .eq("id", (existente as { id: string }).id)
+          .update(cambios)
+          .eq("id", ex.id)
           .eq("empresa_id", auth.empresa_id)
           .select()
           .single();
@@ -121,6 +141,7 @@ export async function POST(
         factura_id: fid,
         estado_sifen: "borrador",
         kude_logo_id: kudeLogoId,
+        sifen_tipo_transaccion: sifenTipoTransaccion,
       })
       .select()
       .single();

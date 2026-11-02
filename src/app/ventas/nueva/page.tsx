@@ -132,6 +132,11 @@ export default function NuevaVentaPage() {
    */
   const [logosKude, setLogosKude] = useState<KudeLogoEntry[]>([]);
   const [logoKudeId, setLogoKudeId] = useState<string>("");
+  /**
+   * Tipo de transacción SIFEN (iTipTra) de esta factura: 1 Venta de mercadería,
+   * 2 Prestación de servicios, 3 Mixto. Solo afecta el XML, no los datos fiscales.
+   */
+  const [tipoTransaccion, setTipoTransaccion] = useState<number>(1);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [buscaCliente, setBuscaCliente] = useState("");
   const [listaAbierta, setListaAbierta] = useState(false);
@@ -654,7 +659,10 @@ export default function NuevaVentaPage() {
        */
       const facturaId = resultado.factura.id;
       setFacturaEmitida(facturaId);
-      const r = await emitirFacturaDesdeCaja(facturaId, setPasoEmision, logoKudeId || undefined);
+      const r = await emitirFacturaDesdeCaja(facturaId, setPasoEmision, {
+        logoId: logoKudeId || undefined,
+        tipoTransaccion,
+      });
       if (!r.ok) {
         /* La venta ya está hecha: no se deshace por un problema de emisión.
            Se avisa y se abre la factura, donde está el detalle y el reintento. */
@@ -812,6 +820,22 @@ export default function NuevaVentaPage() {
                   />
                   <p className="mt-1 text-xs text-gray-400">
                     Si el cliente no existe se crea solo. La factura necesita un receptor.
+                  </p>
+                </div>
+
+                <div className="md:col-start-1">
+                  <label className={labelClass}>Tipo de transacción (SIFEN)</label>
+                  <select
+                    value={tipoTransaccion}
+                    onChange={(e) => setTipoTransaccion(Number(e.target.value))}
+                    className={inputClass}
+                  >
+                    <option value={1}>Venta de mercadería</option>
+                    <option value={2}>Prestación de servicios</option>
+                    <option value={3}>Mixto (mercadería y servicios)</option>
+                  </select>
+                  <p className="mt-1 text-xs text-gray-400">
+                    Define el campo iTipTra de la factura electrónica.
                   </p>
                 </div>
 
