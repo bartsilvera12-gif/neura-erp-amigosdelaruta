@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
-import type { AmbienteSifen, EmpresaSifenConfigDTO } from "@/lib/sifen/types";
+import type { AmbienteSifen, EmpresaSifenConfigDTO, KudeLogoEntry } from "@/lib/sifen/types";
 import { FechaSelect } from "@/components/ui/FechaSelect";
 
 const fLabel = "block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1";
@@ -108,6 +108,18 @@ export default function FacturacionElectronicaSifenPage() {
   const kudeLogoInputId = useId();
   const kudeLogoInputRef = useRef<HTMLInputElement>(null);
 
+  /**
+   * Galería de logos KuDE (múltiples). Permite elegir cuál usar al facturar.
+   * Igual que el logo único: SOLO afecta el PDF/KuDE; nunca XML/firma/SET.
+   */
+  const [logosGaleria, setLogosGaleria] = useState<KudeLogoEntry[]>([]);
+  const [nombreNuevoLogo, setNombreNuevoLogo] = useState("");
+  const [subiendoLogoGaleria, setSubiendoLogoGaleria] = useState(false);
+  /** Id del logo con una acción en curso (predeterminado/eliminar). */
+  const [accionLogoId, setAccionLogoId] = useState<string | null>(null);
+  const galeriaLogoInputId = useId();
+  const galeriaLogoInputRef = useRef<HTMLInputElement>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -141,6 +153,7 @@ export default function FacturacionElectronicaSifenPage() {
         );
         setCertVenc(isoToDateInput(d.certificado_vencimiento));
         setKudeLogoPathActual(d.kude_logo_path ?? null);
+        setLogosGaleria(Array.isArray(d.kude_logos) ? d.kude_logos : []);
         setKudeColorPrimario(d.kude_color_primario ?? "");
         setKudeColorPrimarioFill(d.kude_color_primario_fill ?? "");
         setDerivarFill(!d.kude_color_primario_fill);
@@ -394,6 +407,105 @@ export default function FacturacionElectronicaSifenPage() {
       setError("Error de red al restaurar el logo");
     } finally {
       setEliminandoLogo(false);
+    }
+  }
+
+  async function onSubirLogoGaleria(ev: React.ChangeEvent<HTMLInputElement>) {
+    const file = ev.target.files?.[0];
+    ev.target.value = "";
+    if (!file) return;
+    if (file.type && file.type !== "image/png") {
+      setError("Solo se acepta logo en formato PNG.");
+      return;
+    }
+    if (file.size > 1 * 1024 * 1024) {
+      setError("El logo supera el máximo permitido (1 MB).");
+      return;
+    }
+    setError(null);
+    setSuccess(null);
+    setSubiendoLogoGaleria(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("nombre", nombreNuevoLogo.trim() || file.name.replace(/\.png$/i, ""));
+      const res = await fetchWithSupabaseSession("/api/configuracion/sifen/kude-logos", {
+        method: "POST",
+        body: fd,
+      });
+      const j = (await res.json()) as {
+        success?: boolean;
+        data?: { logos?: KudeLogoEntry[]; config?: EmpresaSifenConfigDTO };
+        error?: string;
+      };
+      if (!res.ok || !j.success) {
+        setError(j.error ?? "No se pudo agregar el logo a la galería");
+        return;
+      }
+      if (j.data?.logos) setLogosGaleria(j.data.logos);
+      if (j.data?.config) setCfg(j.data.config);
+      setNombreNuevoLogo("");
+      setSuccess("Logo agregado a la galería. Solo afecta al PDF/KuDE.");
+    } catch {
+      setError("Error de red al agregar el logo");
+    } finally {
+      setSubiendoLogoGaleria(false);
+    }
+  }
+
+  async function marcarLogoPredeterminado(id: string) {
+    setError(null);
+    setSuccess(null);
+    setAccionLogoId(id);
+    try {
+      const res = await fetchWithSupabaseSession(`/api/configuracion/sifen/kude-logos/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ predeterminado: true }),
+      });
+      const j = (await res.json()) as {
+        success?: boolean;
+        data?: { logos?: KudeLogoEntry[]; config?: EmpresaSifenConfigDTO };
+        error?: string;
+      };
+      if (!res.ok || !j.success) {
+        setError(j.error ?? "No se pudo marcar el logo como predeterminado");
+        return;
+      }
+      if (j.data?.logos) setLogosGaleria(j.data.logos);
+      if (j.data?.config) setCfg(j.data.config);
+      setSuccess("Logo predeterminado actualizado.");
+    } catch {
+      setError("Error de red al actualizar el logo predeterminado");
+    } finally {
+      setAccionLogoId(null);
+    }
+  }
+
+  async function eliminarLogoGaleria(id: string) {
+    setError(null);
+    setSuccess(null);
+    setAccionLogoId(id);
+    try {
+      const res = await fetchWithSupabaseSession(`/api/configuracion/sifen/kude-logos/${id}`, {
+        method: "DELETE",
+      });
+      const j = (await res.json()) as {
+        success?: boolean;
+        data?: { logos?: KudeLogoEntry[]; config?: EmpresaSifenConfigDTO };
+        error?: string;
+      };
+      if (!res.ok || !j.success) {
+        setError(j.error ?? "No se pudo eliminar el logo");
+        return;
+      }
+      if (j.data?.logos) setLogosGaleria(j.data.logos);
+      if (j.data?.config) setCfg(j.data.config);
+      setSuccess("Logo eliminado de la galería.");
+    } catch {
+      setError("Error de red al eliminar el logo");
+    } finally {
+      setAccionLogoId(null);
     }
   }
 
@@ -864,6 +976,87 @@ export default function FacturacionElectronicaSifenPage() {
               {!cfg && (
                 <p className="text-xs text-amber-700 mt-2">
                   Guardá primero la configuración SIFEN base para habilitar la subida del logo.
+                </p>
+              )}
+            </div>
+
+            <div className="border-t border-slate-100 pt-5">
+              <label className={fLabel}>Galería de logos (elegís cuál usar al facturar)</label>
+              <p className="text-xs text-slate-500 mb-3 leading-relaxed">
+                Registrá varios logos y marcá uno como predeterminado. Al facturar vas a poder
+                elegir cuál sale en el KuDE.{" "}
+                <span className="font-medium text-slate-700">No cambia el RUC ni los datos fiscales.</span>
+              </p>
+              {logosGaleria.length === 0 ? (
+                <p className="text-xs text-slate-500">Todavía no hay logos en la galería.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {logosGaleria.map((l) => (
+                    <li
+                      key={l.id}
+                      className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2"
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-sm font-medium text-slate-800">{l.nombre}</span>
+                        {l.predeterminado && (
+                          <span className="shrink-0 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
+                            Predeterminado
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {!l.predeterminado && (
+                          <button
+                            type="button"
+                            disabled={accionLogoId === l.id}
+                            onClick={() => marcarLogoPredeterminado(l.id)}
+                            className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                          >
+                            {accionLogoId === l.id ? "…" : "Usar por defecto"}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={accionLogoId === l.id}
+                          onClick={() => eliminarLogoGaleria(l.id)}
+                          className="rounded-lg border border-rose-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                        >
+                          Eliminar
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                <input
+                  className={fInput}
+                  value={nombreNuevoLogo}
+                  onChange={(e) => setNombreNuevoLogo(e.target.value)}
+                  placeholder="Nombre del logo (ej. BLB Asociados)"
+                  maxLength={60}
+                />
+                <input
+                  ref={galeriaLogoInputRef}
+                  id={galeriaLogoInputId}
+                  type="file"
+                  accept="image/png"
+                  disabled={!cfg || subiendoLogoGaleria}
+                  onChange={onSubirLogoGaleria}
+                  className="sr-only"
+                />
+                <button
+                  type="button"
+                  disabled={!cfg || subiendoLogoGaleria}
+                  onClick={() => galeriaLogoInputRef.current?.click()}
+                  className="w-fit shrink-0 rounded-lg bg-[#4FAEB2] px-3 py-2 text-sm font-semibold text-white hover:bg-[#3F8E91] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {subiendoLogoGaleria ? "Subiendo…" : "Agregar logo PNG"}
+                </button>
+              </div>
+              {!cfg && (
+                <p className="mt-2 text-xs text-amber-700">
+                  Guardá primero la configuración SIFEN base para habilitar la galería.
                 </p>
               )}
             </div>

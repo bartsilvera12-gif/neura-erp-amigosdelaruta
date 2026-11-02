@@ -10,6 +10,7 @@ import { getClientes } from "@/lib/clientes/storage";
 import { getVentas } from "@/lib/ventas/storage";
 import EmitiendoFacturaOverlay from "@/components/facturas/EmitiendoFacturaOverlay";
 import { emitirFacturaDesdeCaja, type PasoEmision } from "@/lib/sifen/emitir-desde-caja";
+import type { KudeLogoEntry } from "@/lib/sifen/types";
 import { nombreClienteDisplay } from "@/lib/clientes/display-name";
 import type { Cliente } from "@/lib/clientes/types";
 import { getProductos } from "@/lib/inventario/storage";
@@ -125,6 +126,12 @@ export default function NuevaVentaPage() {
    * diferencia de tipeo en el nombre.
    */
   const [facClienteId, setFacClienteId] = useState<string | null>(null);
+  /**
+   * Logos del KuDE disponibles (galería de la empresa) y el elegido para esta
+   * factura. "" = usar el predeterminado. Solo afecta el PDF/KuDE.
+   */
+  const [logosKude, setLogosKude] = useState<KudeLogoEntry[]>([]);
+  const [logoKudeId, setLogoKudeId] = useState<string>("");
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [buscaCliente, setBuscaCliente] = useState("");
   const [listaAbierta, setListaAbierta] = useState(false);
@@ -236,6 +243,24 @@ export default function NuevaVentaPage() {
     getProductos().then((data) => {
       if (!cancelled) setProductos(data);
     });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Galería de logos KuDE de la empresa (para elegir cuál sale en la factura).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetchWithSupabaseSession("/api/configuracion/sifen/kude-logos");
+        if (!res.ok) return;
+        const j = (await res.json()) as { success?: boolean; data?: { logos?: KudeLogoEntry[] } };
+        if (!cancelled && j?.success && Array.isArray(j.data?.logos)) {
+          setLogosKude(j.data.logos);
+        }
+      } catch {
+        /* Sin galería no se muestra el selector; se usa el logo predeterminado. */
+      }
+    })();
     return () => { cancelled = true; };
   }, []);
 
@@ -522,6 +547,7 @@ export default function NuevaVentaPage() {
           cliente_id: facClienteId,
           cliente_nombre: facNombre.trim(),
           cliente_ruc: facRuc.trim(),
+          logoId: logoKudeId || undefined,
           items: items.map((it) => ({
             descripcion: it.producto_nombre,
             cantidad: it.cantidad,
@@ -628,7 +654,7 @@ export default function NuevaVentaPage() {
        */
       const facturaId = resultado.factura.id;
       setFacturaEmitida(facturaId);
-      const r = await emitirFacturaDesdeCaja(facturaId, setPasoEmision);
+      const r = await emitirFacturaDesdeCaja(facturaId, setPasoEmision, logoKudeId || undefined);
       if (!r.ok) {
         /* La venta ya está hecha: no se deshace por un problema de emisión.
            Se avisa y se abre la factura, donde está el detalle y el reintento. */
@@ -788,6 +814,33 @@ export default function NuevaVentaPage() {
                     Si el cliente no existe se crea solo. La factura necesita un receptor.
                   </p>
                 </div>
+
+                {logosKude.length > 0 && (
+                  <div className="md:col-start-1">
+                    <label className={labelClass}>Logo de la factura (KuDE)</label>
+                    <select
+                      value={logoKudeId}
+                      onChange={(e) => setLogoKudeId(e.target.value)}
+                      className={inputClass}
+                    >
+                      <option value="">
+                        Predeterminado
+                        {(() => {
+                          const def = logosKude.find((l) => l.predeterminado);
+                          return def ? ` (${def.nombre})` : "";
+                        })()}
+                      </option>
+                      {logosKude.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.nombre}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-gray-400">
+                      Solo cambia el logo del PDF; no afecta el RUC ni los datos fiscales.
+                    </p>
+                  </div>
+                )}
               </>
             )}
 

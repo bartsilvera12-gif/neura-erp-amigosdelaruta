@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getFacturasSupabaseFromAuth } from "@/lib/facturacion/facturas-service-client";
 import { successResponse, errorResponse } from "@/lib/api/response";
 import { API_ERRORS } from "@/lib/api/errors";
+import { normalizeKudeLogos } from "@/lib/sifen/sifen-config-response";
 import type { FacturaElectronicaDTO, SifenBorradorGeneracionDetalle } from "@/lib/sifen/types";
 
 
@@ -43,7 +44,7 @@ export async function POST(
 
     const { data: sifenConfig, error: errConfig } = await supabase
       .from("empresa_sifen_config")
-      .select("id, activo")
+      .select("id, activo, kude_logos")
       .eq("empresa_id", auth.empresa_id)
       .maybeSingle();
 
@@ -67,6 +68,21 @@ export async function POST(
       );
     }
 
+    /**
+     * Logo del KuDE elegido para esta factura (galería de la empresa). Es
+     * opcional y SOLO afecta el PDF/KuDE. Se valida contra la galería: si no
+     * coincide con ningún logo registrado se guarda null (usa el predeterminado).
+     * El body puede venir vacío (emisión encadenada sin elegir logo).
+     */
+    const body = (await request.json().catch(() => null)) as { logoId?: unknown } | null;
+    const logoIdPedido =
+      body && typeof body.logoId === "string" ? body.logoId.trim() : "";
+    const logosEmpresa = normalizeKudeLogos(
+      (sifenConfig as { kude_logos?: unknown }).kude_logos
+    );
+    const kudeLogoId =
+      logoIdPedido && logosEmpresa.some((l) => l.id === logoIdPedido) ? logoIdPedido : null;
+
     const { data: existente, error: errExistente } = await supabase
       .from("factura_electronica")
       .select("*")
@@ -78,6 +94,20 @@ export async function POST(
       return NextResponse.json(errorResponse(errExistente.message), { status: 400 });
     }
     if (existente) {
+      // Si ya existe el borrador y se eligió un logo distinto, se actualiza.
+      const actual = (existente as { kude_logo_id?: string | null }).kude_logo_id ?? null;
+      if (kudeLogoId && kudeLogoId !== actual) {
+        const { data: actualizada, error: errUpd } = await supabase
+          .from("factura_electronica")
+          .update({ kude_logo_id: kudeLogoId })
+          .eq("id", (existente as { id: string }).id)
+          .eq("empresa_id", auth.empresa_id)
+          .select()
+          .single();
+        if (!errUpd && actualizada) {
+          return NextResponse.json(successResponse(actualizada as FacturaElectronicaDTO));
+        }
+      }
       return NextResponse.json(successResponse(existente as FacturaElectronicaDTO));
     }
 
@@ -87,6 +117,7 @@ export async function POST(
         empresa_id: auth.empresa_id,
         factura_id: fid,
         estado_sifen: "borrador",
+        kude_logo_id: kudeLogoId,
       })
       .select()
       .single();

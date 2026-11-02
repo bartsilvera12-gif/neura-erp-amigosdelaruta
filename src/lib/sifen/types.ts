@@ -45,8 +45,26 @@ export interface EmpresaSifenConfigDTO {
   kude_color_primario: string | null;
   /** `#RRGGBB` (validado en DB con CHECK). */
   kude_color_primario_fill: string | null;
+  /**
+   * Galería de logos KuDE. Permite registrar varios y elegir cuál usar al
+   * facturar. Solo afecta el PDF/KuDE; nunca el XML, la firma ni los datos
+   * fiscales. Si está vacía, se usa `kude_logo_path` (legacy) o el logo Neura.
+   */
+  kude_logos: KudeLogoEntry[];
   created_at: string;
   updated_at: string;
+}
+
+/** Un logo de la galería KuDE (metadata; el PNG vive en el bucket `sifen`). */
+export interface KudeLogoEntry {
+  /** UUID del logo; también es el nombre del objeto en storage. */
+  id: string;
+  /** Etiqueta visible en el selector (p. ej. "BLB Asociados"). */
+  nombre: string;
+  /** Ruta del PNG dentro del bucket privado `sifen`. */
+  path: string;
+  /** true en a lo sumo uno: se usa cuando no se elige otro al facturar. */
+  predeterminado: boolean;
 }
 
 /** Body POST /api/configuracion/sifen */

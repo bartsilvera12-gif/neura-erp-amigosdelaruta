@@ -18,8 +18,14 @@ export type ResultadoEmision =
   | { ok: true; estado: "aprobado" | "enviado" }
   | { ok: false; paso: PasoEmision; error: string };
 
-async function post(path: string): Promise<{ ok: true } | { ok: false; error: string }> {
-  const res = await fetchWithSupabaseSession(path, { method: "POST" });
+async function post(
+  path: string,
+  body?: Record<string, unknown>
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const init: RequestInit = body
+    ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+    : { method: "POST" };
+  const res = await fetchWithSupabaseSession(path, init);
   if (res.ok) return { ok: true };
   const j = (await res.json().catch(() => ({}))) as { error?: string };
   return { ok: false, error: j?.error ?? `Error ${res.status}` };
@@ -37,14 +43,19 @@ async function estadoActual(facturaId: string): Promise<string> {
 
 export async function emitirFacturaDesdeCaja(
   facturaId: string,
-  onPaso: (p: PasoEmision) => void
+  onPaso: (p: PasoEmision) => void,
+  /** Logo del KuDE elegido en la caja (galería de la empresa). Solo afecta el PDF. */
+  logoId?: string | null
 ): Promise<ResultadoEmision> {
   try {
     onPaso("documento");
 
     let st = await estadoActual(facturaId);
     if (!st) {
-      const r = await post(`/api/facturas/${facturaId}/sifen/borrador`);
+      const r = await post(
+        `/api/facturas/${facturaId}/sifen/borrador`,
+        logoId ? { logoId } : undefined
+      );
       if (!r.ok) return { ok: false, paso: "documento", error: r.error };
       st = await estadoActual(facturaId);
     }

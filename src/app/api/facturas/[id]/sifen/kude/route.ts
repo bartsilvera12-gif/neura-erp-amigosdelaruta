@@ -81,7 +81,7 @@ export async function GET(
 
     const { data: feRow, error: errFe } = await supabase
       .from("factura_electronica")
-      .select("estado_sifen, xml_firmado_path, cdc, sifen_ultima_respuesta_consulta_lote")
+      .select("estado_sifen, xml_firmado_path, cdc, sifen_ultima_respuesta_consulta_lote, kude_logo_id")
       .eq("factura_id", fid)
       .eq("empresa_id", auth.empresa_id)
       .maybeSingle();
@@ -146,9 +146,17 @@ export async function GET(
      * No participa de XML/firma/SET/CDC. Si la empresa no configuró nada o
      * la descarga del logo falla, se cae silenciosamente al diseño Neura.
      */
+    /**
+     * Logo elegido para esta factura (galería KuDE). Prioridad: el logo que se
+     * guardó en la factura al emitir (así reimpresiones son consistentes); si
+     * no, un override por query; si no, el predeterminado de la empresa.
+     */
+    const logoIdGuardado = (feRow as { kude_logo_id?: string | null }).kude_logo_id ?? null;
+    const logoIdSel = logoIdGuardado ?? request.nextUrl.searchParams.get("logoId");
     const branding = await loadKudeBranding(
       supabase,
-      auth.empresa_id
+      auth.empresa_id,
+      { logoId: logoIdSel }
     ).catch((e) => {
       console.warn("[kude] branding load failed, using default", {
         empresa_id: auth.empresa_id,
