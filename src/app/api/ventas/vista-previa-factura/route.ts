@@ -119,7 +119,8 @@ export async function POST(request: NextRequest) {
 
     let branding = null;
     try {
-      branding = await loadKudeBranding(supabase, auth.empresa_id);
+      const logoIdSel = typeof body.logoId === "string" ? body.logoId : null;
+      branding = await loadKudeBranding(supabase, auth.empresa_id, { logoId: logoIdSel });
     } catch {
       /* Sin branding se usa el diseño por defecto. */
     }

@@ -33,6 +33,15 @@ export function buildKudeLogoObjectPath(empresaId: string): string {
   return `${empresaId}/branding/kude-logo.png`;
 }
 
+/**
+ * Ruta de un logo de la galería KuDE (múltiples logos por empresa).
+ * Cada logo se guarda por su id para poder tener varios en paralelo.
+ * Igual que el logo único: SOLO para KuDE/PDF; no participa de XML/firma/SET.
+ */
+export function buildKudeLogoByIdObjectPath(empresaId: string, logoId: string): string {
+  return `${empresaId}/branding/logos/${logoId}.png`;
+}
+
 export async function ensureSifenStorageBucket(supabase: AppSupabaseClient): Promise<{ ok: true } | { ok: false; message: string }> {
   const { data: buckets, error: listErr } = await supabase.storage.listBuckets();
   if (listErr) {

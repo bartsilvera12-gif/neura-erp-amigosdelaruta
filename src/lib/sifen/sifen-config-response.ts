@@ -1,5 +1,31 @@
-import type { AmbienteSifen, EmpresaSifenConfigDTO } from "./types";
+import type { AmbienteSifen, EmpresaSifenConfigDTO, KudeLogoEntry } from "./types";
 import { normalizePlazoCancelacionHoras } from "./sifen-cancelacion-rules";
+
+/**
+ * Normaliza el valor crudo de `kude_logos` (JSONB) a un arreglo tipado.
+ * Descarta entradas sin id/path; garantiza a lo sumo un `predeterminado`.
+ * Nunca lanza: ante cualquier forma inesperada devuelve `[]`.
+ */
+export function normalizeKudeLogos(raw: unknown): KudeLogoEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const out: KudeLogoEntry[] = [];
+  let yaHayPredeterminado = false;
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const id = o.id == null ? "" : String(o.id).trim();
+    const path = o.path == null ? "" : String(o.path).trim();
+    if (!id || !path) continue;
+    const nombre = o.nombre == null ? "" : String(o.nombre).trim();
+    let predeterminado = Boolean(o.predeterminado);
+    if (predeterminado && yaHayPredeterminado) predeterminado = false;
+    if (predeterminado) yaHayPredeterminado = true;
+    out.push({ id, path, nombre: nombre || "Logo", predeterminado });
+  }
+  // Si ninguno quedó marcado, el primero actúa como predeterminado implícito.
+  if (out.length > 0 && !yaHayPredeterminado) out[0].predeterminado = true;
+  return out;
+}
 
 /**
  * Convierte una fila de BD (con columna cifrada) al DTO expuesto por la API.
@@ -62,6 +88,7 @@ export function toEmpresaSifenConfigPublicDto(
       row.kude_color_primario_fill == null || String(row.kude_color_primario_fill).trim() === ""
         ? null
         : String(row.kude_color_primario_fill).trim().toLowerCase(),
+    kude_logos: normalizeKudeLogos(row.kude_logos),
     created_at: String(row.created_at ?? ""),
     updated_at: String(row.updated_at ?? ""),
   };
