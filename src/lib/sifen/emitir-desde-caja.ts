@@ -44,17 +44,21 @@ async function estadoActual(facturaId: string): Promise<string> {
 export async function emitirFacturaDesdeCaja(
   facturaId: string,
   onPaso: (p: PasoEmision) => void,
-  /** Logo del KuDE elegido en la caja (galería de la empresa). Solo afecta el PDF. */
-  logoId?: string | null
+  /** Opciones elegidas en la caja: logo del KuDE y tipo de transacción (iTipTra). */
+  opts?: { logoId?: string | null; tipoTransaccion?: number | null }
 ): Promise<ResultadoEmision> {
   try {
     onPaso("documento");
+
+    const borradorBody: Record<string, unknown> = {};
+    if (opts?.logoId) borradorBody.logoId = opts.logoId;
+    if (opts?.tipoTransaccion != null) borradorBody.tipoTransaccion = opts.tipoTransaccion;
 
     let st = await estadoActual(facturaId);
     if (!st) {
       const r = await post(
         `/api/facturas/${facturaId}/sifen/borrador`,
-        logoId ? { logoId } : undefined
+        Object.keys(borradorBody).length > 0 ? borradorBody : undefined
       );
       if (!r.ok) return { ok: false, paso: "documento", error: r.error };
       st = await estadoActual(facturaId);

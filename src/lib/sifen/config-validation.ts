@@ -272,6 +272,25 @@ export function buildPatchUpdate(raw: unknown): EmpresaSifenConfigPatchResult {
     patch.actividad_economica_codigo = act.codigo;
     patch.actividad_economica_descripcion = act.descripcion;
   }
+  if ("actividades_economicas" in b) {
+    // Actividades adicionales del emisor (varias gActEco). Solo afecta el XML.
+    const arr = b.actividades_economicas;
+    if (arr !== null && !Array.isArray(arr)) {
+      return { ok: false, error: "actividades_economicas debe ser un arreglo" };
+    }
+    const out: { codigo: string; descripcion: string }[] = [];
+    const vistos = new Set<string>();
+    for (const it of Array.isArray(arr) ? arr : []) {
+      if (!it || typeof it !== "object") continue;
+      const o = it as Record<string, unknown>;
+      const codigo = trimStr(o.codigo).replace(/\D/g, "").slice(0, 8);
+      const descripcion = trimStr(o.descripcion);
+      if (!codigo || !descripcion || vistos.has(codigo)) continue;
+      vistos.add(codigo);
+      out.push({ codigo, descripcion });
+    }
+    patch.actividades_economicas = out;
+  }
   if ("establecimiento" in b) {
     const v = trimStr(b.establecimiento);
     if (!v) return { ok: false, error: "establecimiento no puede quedar vacío" };

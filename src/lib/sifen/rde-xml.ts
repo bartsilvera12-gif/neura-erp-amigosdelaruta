@@ -37,6 +37,19 @@ const RDE_XSI_SCHEMA_LOCATION = `${NS} ${SIFEN_SIRECEP_DE_V150_XSD_FILE}`;
 /** Enumeraciones / literales exactos según DE_Types_v150.xsd (y catálogos referidos). */
 const XSD_DES_TI_DE_FACTURA = "Factura electrónica";
 const XSD_DES_TIP_TRA_VENTA_MERC = "Venta de mercadería";
+const XSD_DES_TIP_TRA_PREST_SERV = "Prestación de servicios";
+const XSD_DES_TIP_TRA_MIXTO = "Mixto (Venta de mercadería y servicios)";
+
+/**
+ * Tipo de transacción (gOpeCom.iTipTra). El pedido cubre 1/2/3; si llega otro
+ * valor o ninguno se mantiene el comportamiento actual (1 = venta de mercadería).
+ */
+function resolveTipTra(tipo: number | string | null | undefined): { cod: string; des: string } {
+  const n = typeof tipo === "number" ? tipo : parseInt(String(tipo ?? "").trim(), 10);
+  if (n === 2) return { cod: "2", des: XSD_DES_TIP_TRA_PREST_SERV };
+  if (n === 3) return { cod: "3", des: XSD_DES_TIP_TRA_MIXTO };
+  return { cod: "1", des: XSD_DES_TIP_TRA_VENTA_MERC };
+}
 const XSD_DES_IND_PRES_PRESENCIAL = "Operación presencial";
 const XSD_DES_T_IMP_IVA = "IVA";
 const XSD_DES_MONE_PYG = "Guarani";
@@ -299,6 +312,17 @@ export interface BuildRdeXmlOptions {
   /** Actividad económica principal (código + descripción). */
   actividadEconomicaCodigo?: string;
   actividadEconomicaDescripcion?: string;
+  /**
+   * Actividades económicas del emisor (SIFEN admite varias gActEco). Si viene
+   * con elementos, se emiten todas; si no, se usa la principal de arriba.
+   * Cada código debe coincidir con el catálogo SET del RUC (error 1261 si no).
+   */
+  actividadesEconomicas?: { codigo: string; descripcion: string }[];
+  /**
+   * Tipo de transacción (gOpeCom.iTipTra): 1 Venta de mercadería,
+   * 2 Prestación de servicios, 3 Mixto. Por defecto 1.
+   */
+  tipoTransaccion?: number | string | null;
   /** Momento de emisión / firma (por defecto ahora). */
   fechaHoraEmision?: Date;
 }
@@ -452,11 +476,32 @@ export function buildOfficialRdeFacturaElectronicaXml(
   const depDes = (opts.emisorDepartamentoDescripcion ?? "CAPITAL").trim();
   const cAct = opts.actividadEconomicaCodigo?.trim() ?? "";
   const dActDes = opts.actividadEconomicaDescripcion?.trim() ?? "";
-  if (!cAct || !dActDes) {
+  /**
+   * Lista de actividades económicas a emitir. Si llega el arreglo con
+   * elementos válidos, se usan todas; si no, se cae a la principal. SIFEN admite
+   * varias gActEco. Se descartan entradas sin código o descripción y duplicados.
+   */
+  const actividades: { codigo: string; descripcion: string }[] = [];
+  const vistos = new Set<string>();
+  const candidatas =
+    opts.actividadesEconomicas && opts.actividadesEconomicas.length > 0
+      ? opts.actividadesEconomicas
+      : [{ codigo: cAct, descripcion: dActDes }];
+  for (const a of candidatas) {
+    const codigo = (a?.codigo ?? "").trim();
+    const descripcion = (a?.descripcion ?? "").trim();
+    if (!codigo || !descripcion || vistos.has(codigo)) continue;
+    vistos.add(codigo);
+    actividades.push({ codigo, descripcion });
+  }
+  if (actividades.length === 0) {
     throw new Error(
-      "Faltan actividadEconomicaCodigo y actividadEconomicaDescripcion (gEmis.gActEco). Configúrelos en Facturación electrónica; deben coincidir con el catálogo SET para su RUC (error 1261 si no)."
+      "Faltan actividades económicas del emisor (gEmis.gActEco). Configúrelas en Facturación electrónica; deben coincidir con el catálogo SET para su RUC (error 1261 si no)."
     );
   }
+
+  /** Tipo de transacción (iTipTra): 1 mercadería / 2 servicios / 3 mixto. */
+  const tipTra = resolveTipTra(opts.tipoTransaccion);
 
   const dNomEmi = esAmbienteTest ? SIFEN_TEST_LITERAL_DOCUMENTO : emisor.razon_social.trim();
 
@@ -487,10 +532,12 @@ export function buildOfficialRdeFacturaElectronicaXml(
 
   gEmisParts.push(textEl("dTelEmi", telEmi));
   gEmisParts.push(textEl("dEmailE", opts.emisorEmail.trim()));
-  gEmisParts.push("<gActEco>");
-  gEmisParts.push(textEl("cActEco", cAct));
-  gEmisParts.push(textEl("dDesActEco", dActDes));
-  gEmisParts.push("</gActEco>");
+  for (const a of actividades) {
+    gEmisParts.push("<gActEco>");
+    gEmisParts.push(textEl("cActEco", a.codigo));
+    gEmisParts.push(textEl("dDesActEco", a.descripcion));
+    gEmisParts.push("</gActEco>");
+  }
   gEmisParts.push("</gEmis>");
 
   /**
@@ -806,9 +853,9 @@ export function buildOfficialRdeFacturaElectronicaXml(
     "<gDatGralOpe>",
     textEl("dFeEmiDE", dFeEmiDE),
     "<gOpeCom>",
-    /** iTipTra: el XSD no acopla iTipTra con iTiOpe B2F; se mantiene venta de mercadería (1) salvo normativa adicional. */
-    textEl("iTipTra", "1"),
-    textEl("dDesTipTra", XSD_DES_TIP_TRA_VENTA_MERC),
+    /** iTipTra: tipo de transacción elegido (1 mercadería / 2 servicios / 3 mixto); default 1. */
+    textEl("iTipTra", tipTra.cod),
+    textEl("dDesTipTra", tipTra.des),
     textEl("iTImp", "1"),
     textEl("dDesTImp", XSD_DES_T_IMP_IVA),
     textEl("cMoneOpe", "PYG"),

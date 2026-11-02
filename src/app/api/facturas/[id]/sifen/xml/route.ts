@@ -4,6 +4,7 @@ import { successResponse, errorResponse } from "@/lib/api/response";
 import { API_ERRORS } from "@/lib/api/errors";
 import { loadValidatedSifenPayload } from "@/lib/sifen/load-factura-payload";
 import { buildOfficialRdeFacturaElectronicaXml } from "@/lib/sifen/rde-xml";
+import { normalizeActividadesEconomicas } from "@/lib/sifen/sifen-config-response";
 import {
   buildSifenXmlObjectPath,
   ensureSifenStorageBucket,
@@ -51,7 +52,7 @@ export async function POST(
     const { data: feSnapshot, error: errSnap } = await supabase
       .from("factura_electronica")
       .select(
-        "id, xml_path, xml_firmado_path, estado_sifen, sifen_regeneracion_seq, error, cdc, sifen_d_prot_cons_lote, sifen_ultima_respuesta_consulta_lote, sifen_ultima_respuesta_recibe_lote"
+        "id, xml_path, xml_firmado_path, estado_sifen, sifen_regeneracion_seq, error, cdc, sifen_d_prot_cons_lote, sifen_ultima_respuesta_consulta_lote, sifen_ultima_respuesta_recibe_lote, sifen_tipo_transaccion"
       )
       .eq("factura_id", fid)
       .eq("empresa_id", auth.empresa_id)
@@ -136,6 +137,22 @@ export async function POST(
 
     const fecha = loaded.payload.documento.fecha.trim();
     const yAnio = /^(\d{4})/.exec(fecha)?.[1] ?? String(new Date().getFullYear());
+
+    /**
+     * Actividades económicas adicionales del emisor (además de la principal).
+     * SIFEN admite varias gActEco. Se leen de empresa_sifen_config; si la
+     * columna no existe (tenant sin migración), el select "*" la trae undefined
+     * y queda []. No cambia los datos fiscales ni el resto del XML.
+     */
+    const { data: cfgActEco } = await supabase
+      .from("empresa_sifen_config")
+      .select("*")
+      .eq("empresa_id", auth.empresa_id)
+      .maybeSingle();
+    const actividadesExtra = normalizeActividadesEconomicas(
+      (cfgActEco as { actividades_economicas?: unknown } | null)?.actividades_economicas
+    );
+
     let xmlString: string;
     try {
       xmlString = buildOfficialRdeFacturaElectronicaXml(loaded.payload, {
@@ -148,6 +165,15 @@ export async function POST(
         emisorNumCasa: 0,
         actividadEconomicaCodigo: loaded.payload.emisor.actividad_economica_codigo,
         actividadEconomicaDescripcion: loaded.payload.emisor.actividad_economica_descripcion,
+        actividadesEconomicas: [
+          {
+            codigo: loaded.payload.emisor.actividad_economica_codigo,
+            descripcion: loaded.payload.emisor.actividad_economica_descripcion,
+          },
+          ...actividadesExtra,
+        ],
+        tipoTransaccion: (feSnapshot as { sifen_tipo_transaccion?: number | null })
+          .sifen_tipo_transaccion,
       });
     } catch (e) {
       await revertBumpRegSeq();
