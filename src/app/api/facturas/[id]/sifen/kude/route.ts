@@ -81,7 +81,10 @@ export async function GET(
 
     const { data: feRow, error: errFe } = await supabase
       .from("factura_electronica")
-      .select("estado_sifen, xml_firmado_path, cdc, sifen_ultima_respuesta_consulta_lote, kude_logo_id")
+      // `select("*")` a propósito: en tenants sin la migración `kude_logo_id`,
+      // pedir la columna explícita haría fallar el query y rompería el KuDE.
+      // Con "*" viene undefined donde no existe y se usa el logo predeterminado.
+      .select("*")
       .eq("factura_id", fid)
       .eq("empresa_id", auth.empresa_id)
       .maybeSingle();

@@ -20,7 +20,7 @@ async function cargarLogos(
 > {
   const { data, error } = await supabase
     .from("empresa_sifen_config")
-    .select("id, kude_logos")
+    .select("*")
     .eq("empresa_id", empresaId)
     .maybeSingle();
   if (error) return { ok: false, status: 400, message: error.message };

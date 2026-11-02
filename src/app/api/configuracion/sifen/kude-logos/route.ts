@@ -49,9 +49,10 @@ export async function GET(request: NextRequest) {
     }
     const { auth, supabase } = ctx;
 
+    // "*" para tolerar schemas sin la columna `kude_logos` (devuelve []).
     const { data, error } = await supabase
       .from("empresa_sifen_config")
-      .select("kude_logos")
+      .select("*")
       .eq("empresa_id", auth.empresa_id)
       .maybeSingle();
 
@@ -115,7 +116,7 @@ export async function POST(request: NextRequest) {
 
     const { data: configRow, error: errCfg } = await supabase
       .from("empresa_sifen_config")
-      .select("id, kude_logos")
+      .select("*")
       .eq("empresa_id", auth.empresa_id)
       .maybeSingle();
 

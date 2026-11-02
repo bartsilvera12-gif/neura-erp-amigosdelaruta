@@ -32,9 +32,13 @@ export async function loadKudeBranding(
   empresaId: string,
   opts: LoadKudeBrandingOptions = {}
 ): Promise<KudeBranding | null> {
+  // `select("*")` a propósito: en schemas donde todavía no existe `kude_logos`
+  // (tenants sin la migración), pedir la columna explícita haría fallar el query
+  // y se perdería el branding. Con "*" la columna simplemente viene undefined y
+  // se cae al logo legacy/Neura. Mismo criterio en borrador y KuDE.
   const { data, error } = await supabase
     .from("empresa_sifen_config")
-    .select("kude_logo_path, kude_logos, kude_color_primario, kude_color_primario_fill")
+    .select("*")
     .eq("empresa_id", empresaId)
     .maybeSingle();
 
