@@ -1,10 +1,27 @@
-import type { AmbienteSifen, EmpresaSifenConfigDTO } from "./types";
+import type { AmbienteSifen, EmpresaSifenConfigDTO, KudeLogoDTO } from "./types";
 import { normalizePlazoCancelacionHoras } from "./sifen-cancelacion-rules";
+import { parseActividadesSecundarias } from "./actividades-economicas";
+import { parseKudeLogos } from "./kude-logos";
 
 /**
  * Convierte una fila de BD (con columna cifrada) al DTO expuesto por la API.
  * Nunca incluye la contraseña ni el ciphertext.
  */
+/** Lectura tolerante de actividades secundarias desde la fila (nunca lanza). */
+function parseActividadesSecundariasSafe(raw: unknown): EmpresaSifenConfigDTO["actividades_economicas_secundarias"] {
+  const r = parseActividadesSecundarias(raw);
+  return r.ok ? r.actividades : [];
+}
+
+/** Lectura tolerante de logos del KuDE desde la fila (nunca lanza). */
+function parseKudeLogosSafe(raw: unknown): KudeLogoDTO[] {
+  try {
+    return parseKudeLogos(raw);
+  } catch {
+    return [];
+  }
+}
+
 export function toEmpresaSifenConfigPublicDto(
   row: Record<string, unknown> | null
 ): EmpresaSifenConfigDTO | null {
@@ -62,6 +79,10 @@ export function toEmpresaSifenConfigPublicDto(
       row.kude_color_primario_fill == null || String(row.kude_color_primario_fill).trim() === ""
         ? null
         : String(row.kude_color_primario_fill).trim().toLowerCase(),
+    actividades_economicas_secundarias: parseActividadesSecundariasSafe(
+      row.actividades_economicas_json
+    ),
+    kude_logos: parseKudeLogosSafe(row.kude_logos_json),
     created_at: String(row.created_at ?? ""),
     updated_at: String(row.updated_at ?? ""),
   };

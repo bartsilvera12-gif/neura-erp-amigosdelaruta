@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
     const { data: config, error: errCfg } = await supabase
       .from("empresa_sifen_config")
       .select(
-        "ruc, razon_social, direccion_fiscal, timbrado_numero, timbrado_fecha_inicio_vigencia, actividad_economica_codigo, actividad_economica_descripcion, establecimiento, punto_expedicion, csc, activo"
+        "ruc, razon_social, direccion_fiscal, timbrado_numero, timbrado_fecha_inicio_vigencia, actividad_economica_codigo, actividad_economica_descripcion, actividades_economicas_json, establecimiento, punto_expedicion, csc, activo"
       )
       .eq("empresa_id", auth.empresa_id)
       .maybeSingle();
@@ -92,6 +92,13 @@ export async function POST(request: NextRequest) {
 
     const total = items.reduce((a, i) => a + i.total, 0);
     const moneda = body.moneda === "USD" ? "USD" : "GS";
+    const tipoTxBody = body.tipo_transaccion;
+    const sifenTipoTransaccion =
+      tipoTxBody === 1 || tipoTxBody === 2 || tipoTxBody === 3 ? tipoTxBody : null;
+    const kudeLogoId =
+      body.kude_logo_id == null || String(body.kude_logo_id).trim() === ""
+        ? null
+        : String(body.kude_logo_id).trim();
 
     const built = validateAndBuildSifenPayload({
       factura: {
@@ -104,6 +111,8 @@ export async function POST(request: NextRequest) {
         moneda,
         monto: total,
         saldo: 0,
+        sifen_tipo_transaccion: sifenTipoTransaccion,
+        kude_logo_id: kudeLogoId,
       } as Parameters<typeof validateAndBuildSifenPayload>[0]["factura"],
       items: items as unknown as Parameters<typeof validateAndBuildSifenPayload>[0]["items"],
       cliente: cliente as unknown as Parameters<typeof validateAndBuildSifenPayload>[0]["cliente"],
@@ -119,7 +128,7 @@ export async function POST(request: NextRequest) {
 
     let branding = null;
     try {
-      branding = await loadKudeBranding(supabase, auth.empresa_id);
+      branding = await loadKudeBranding(supabase, auth.empresa_id, kudeLogoId);
     } catch {
       /* Sin branding se usa el diseño por defecto. */
     }

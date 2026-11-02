@@ -1,6 +1,7 @@
 import "server-only";
 import type { KudeParsedFromXml, KudeItemRow } from "./parse-kude-from-signed-xml";
 import type { SifenFacturaPayloadBase } from "./types";
+import { DES_TIPO_TRANSACCION } from "./actividades-economicas";
 
 /**
  * KuDE de vista previa, armado desde el borrador comercial.
@@ -103,7 +104,10 @@ export function kudeParsedDesdeBorrador(payload: SifenFacturaPayloadBase): KudeP
     },
     operacion: {
       condicionVenta: documento.tipo === "credito" ? "Crédito" : "Contado",
-      tipoOperacion: "Venta de mercadería y/o servicio",
+      tipoOperacion:
+        documento.tipo_transaccion != null
+          ? DES_TIPO_TRANSACCION[documento.tipo_transaccion] ?? "Venta de mercadería"
+          : "Venta de mercadería y/o servicio",
     },
     totales: {
       dSubExe: n2(subExe),

@@ -27,6 +27,11 @@ import {
   sifenDFeEmiDeYFecFirma,
   sifenEmisorITipContCodigo,
 } from "./rde-xml";
+import {
+  actividadesParaEmision,
+  normalizarActividad,
+  type ActividadEconomica,
+} from "./actividades-economicas";
 
 const NS = SIFEN_EKUATIA_TARGET_NS;
 const XMLNS_XSI = "http://www.w3.org/2001/XMLSchema-instance";
@@ -245,10 +250,19 @@ export function buildOfficialRdeNotaCreditoElectronicaXml(
   }
   gEmisParts.push(textEl("dTelEmi", telEmi));
   gEmisParts.push(textEl("dEmailE", opts.emisorEmail.trim()));
-  gEmisParts.push("<gActEco>");
-  gEmisParts.push(textEl("cActEco", cAct));
-  gEmisParts.push(textEl("dDesActEco", dActDes));
-  gEmisParts.push("</gActEco>");
+  /** Principal + secundarias (gActEco se repite), igual que la factura de origen. */
+  for (const act of actividadesParaEmision(
+    { codigo: cAct, descripcion: dActDes },
+    (opts.actividadesSecundarias ?? [])
+      .map((a) => normalizarActividad(a?.codigo, a?.descripcion))
+      .filter((r): r is { ok: true; actividad: ActividadEconomica } => r.ok)
+      .map((r) => r.actividad)
+  )) {
+    gEmisParts.push("<gActEco>");
+    gEmisParts.push(textEl("cActEco", act.codigo));
+    gEmisParts.push(textEl("dDesActEco", act.descripcion));
+    gEmisParts.push("</gActEco>");
+  }
   gEmisParts.push("</gEmis>");
 
   /**

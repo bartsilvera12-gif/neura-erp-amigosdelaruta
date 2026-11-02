@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { fetchWithSupabaseSession } from "@/lib/api/fetch-with-supabase-session";
-import type { AmbienteSifen, EmpresaSifenConfigDTO } from "@/lib/sifen/types";
+import type { AmbienteSifen, EmpresaSifenConfigDTO, KudeLogoDTO } from "@/lib/sifen/types";
+import type { ActividadEconomica } from "@/lib/sifen/actividades-economicas";
 import { FechaSelect } from "@/components/ui/FechaSelect";
 
 const fLabel = "block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1";
@@ -73,6 +74,8 @@ export default function FacturacionElectronicaSifenPage() {
   const [timbradoFechaIni, setTimbradoFechaIni] = useState("");
   const [actEcoCodigo, setActEcoCodigo] = useState("");
   const [actEcoDescripcion, setActEcoDescripcion] = useState("");
+  /** Actividades económicas secundarias del RUC (además de la principal). */
+  const [actividadesSec, setActividadesSec] = useState<ActividadEconomica[]>([]);
   const [establecimiento, setEstablecimiento] = useState("");
   const [puntoExpedicion, setPuntoExpedicion] = useState("");
   const [csc, setCsc] = useState("");
@@ -102,6 +105,12 @@ export default function FacturacionElectronicaSifenPage() {
   const [kudeColorPrimario, setKudeColorPrimario] = useState("");
   const [kudeColorPrimarioFill, setKudeColorPrimarioFill] = useState("");
   const [kudeLogoPathActual, setKudeLogoPathActual] = useState<string | null>(null);
+  /** Logos adicionales (con nombre) para elegir al facturar. */
+  const [kudeLogos, setKudeLogos] = useState<KudeLogoDTO[]>([]);
+  const [nombreNuevoLogo, setNombreNuevoLogo] = useState("");
+  const [subiendoLogoExtra, setSubiendoLogoExtra] = useState(false);
+  const [eliminandoLogoId, setEliminandoLogoId] = useState<string | null>(null);
+  const logoExtraInputRef = useRef<HTMLInputElement>(null);
   const [subiendoLogo, setSubiendoLogo] = useState(false);
   const [eliminandoLogo, setEliminandoLogo] = useState(false);
   const [derivarFill, setDerivarFill] = useState(true);
@@ -129,6 +138,11 @@ export default function FacturacionElectronicaSifenPage() {
         setTimbradoFechaIni(ymdToDateInput(d.timbrado_fecha_inicio_vigencia));
         setActEcoCodigo(d.actividad_economica_codigo ?? "");
         setActEcoDescripcion(d.actividad_economica_descripcion ?? "");
+        setActividadesSec(
+          Array.isArray(d.actividades_economicas_secundarias)
+            ? d.actividades_economicas_secundarias.map((a) => ({ codigo: a.codigo, descripcion: a.descripcion }))
+            : []
+        );
         setEstablecimiento(d.establecimiento);
         setPuntoExpedicion(d.punto_expedicion);
         setCsc(d.csc ?? "");
@@ -141,6 +155,7 @@ export default function FacturacionElectronicaSifenPage() {
         );
         setCertVenc(isoToDateInput(d.certificado_vencimiento));
         setKudeLogoPathActual(d.kude_logo_path ?? null);
+        setKudeLogos(Array.isArray(d.kude_logos) ? d.kude_logos : []);
         setKudeColorPrimario(d.kude_color_primario ?? "");
         setKudeColorPrimarioFill(d.kude_color_primario_fill ?? "");
         setDerivarFill(!d.kude_color_primario_fill);
@@ -200,6 +215,11 @@ export default function FacturacionElectronicaSifenPage() {
       }
       const { iso: venc } = vencRes;
 
+      /** Solo filas con código Y descripción (las a medio cargar se descartan). */
+      const actividadesSecLimpias = actividadesSec
+        .map((a) => ({ codigo: a.codigo.trim(), descripcion: a.descripcion.trim() }))
+        .filter((a) => a.codigo !== "" && a.descripcion !== "");
+
       if (!cfg) {
         const body: Record<string, unknown> = {
           ambiente,
@@ -210,6 +230,7 @@ export default function FacturacionElectronicaSifenPage() {
           timbrado_fecha_inicio_vigencia: timbradoFechaIni.trim(),
           actividad_economica_codigo: actEcoCodigo.trim(),
           actividad_economica_descripcion: actEcoDescripcion.trim(),
+          actividades_economicas_secundarias: actividadesSecLimpias,
           establecimiento: establecimiento.trim(),
           punto_expedicion: puntoExpedicion.trim(),
           csc: csc.trim() || null,
@@ -244,6 +265,7 @@ export default function FacturacionElectronicaSifenPage() {
           timbrado_fecha_inicio_vigencia: timbradoFechaIni.trim(),
           actividad_economica_codigo: actEcoCodigo.trim(),
           actividad_economica_descripcion: actEcoDescripcion.trim(),
+          actividades_economicas_secundarias: actividadesSecLimpias,
           establecimiento: establecimiento.trim(),
           punto_expedicion: puntoExpedicion.trim(),
           csc: csc.trim() || null,
@@ -397,6 +419,79 @@ export default function FacturacionElectronicaSifenPage() {
     }
   }
 
+  /** Sube un logo ADICIONAL (con nombre) para poder elegirlo al facturar. */
+  async function onLogoExtraFileChange(ev: React.ChangeEvent<HTMLInputElement>) {
+    const file = ev.target.files?.[0] ?? null;
+    if (ev.target) ev.target.value = "";
+    if (!file) return;
+    const nombre = nombreNuevoLogo.trim();
+    if (!nombre) {
+      setError("Primero escribí un nombre para el logo (p. ej. «BLB» o «ADR»).");
+      return;
+    }
+    if (file.type && file.type !== "image/png") {
+      setError("Solo se acepta logo en formato PNG.");
+      return;
+    }
+    if (file.size > 1024 * 1024) {
+      setError("El logo supera el máximo permitido (1 MB).");
+      return;
+    }
+    setError(null);
+    setSuccess(null);
+    setSubiendoLogoExtra(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("nombre", nombre);
+      const res = await fetchWithSupabaseSession("/api/configuracion/sifen/kude-logos", {
+        method: "POST",
+        body: fd,
+      });
+      const j = (await res.json()) as { success?: boolean; data?: { config?: EmpresaSifenConfigDTO }; error?: string };
+      if (!res.ok || !j.success) {
+        setError(j.error ?? "No se pudo subir el logo");
+        return;
+      }
+      if (j.data?.config) {
+        setCfg(j.data.config);
+        setKudeLogos(j.data.config.kude_logos ?? []);
+      }
+      setNombreNuevoLogo("");
+      setSuccess("Logo agregado. Podés elegirlo al facturar. Solo afecta el KuDE/PDF.");
+    } catch {
+      setError("Error de red al subir el logo");
+    } finally {
+      setSubiendoLogoExtra(false);
+    }
+  }
+
+  async function eliminarLogoExtra(logoId: string) {
+    setError(null);
+    setSuccess(null);
+    setEliminandoLogoId(logoId);
+    try {
+      const res = await fetchWithSupabaseSession(
+        `/api/configuracion/sifen/kude-logos?logo_id=${encodeURIComponent(logoId)}`,
+        { method: "DELETE" }
+      );
+      const j = (await res.json()) as { success?: boolean; data?: { config?: EmpresaSifenConfigDTO }; error?: string };
+      if (!res.ok || !j.success) {
+        setError(j.error ?? "No se pudo eliminar el logo");
+        return;
+      }
+      if (j.data?.config) {
+        setCfg(j.data.config);
+        setKudeLogos(j.data.config.kude_logos ?? []);
+      }
+      setSuccess("Logo eliminado.");
+    } catch {
+      setError("Error de red al eliminar el logo");
+    } finally {
+      setEliminandoLogoId(null);
+    }
+  }
+
   async function onCertFileChange(ev: React.ChangeEvent<HTMLInputElement>) {
     const file = ev.target.files?.[0];
     ev.target.value = "";
@@ -519,7 +614,20 @@ export default function FacturacionElectronicaSifenPage() {
                 {cfg.actividad_economica_descripcion ? (
                   <span className="block text-slate-600 mt-0.5">{cfg.actividad_economica_descripcion}</span>
                 ) : null}
+                {cfg.actividades_economicas_secundarias?.length ? (
+                  <span className="block text-slate-500 mt-0.5 text-xs">
+                    + {cfg.actividades_economicas_secundarias.length} actividad(es) secundaria(s) en la factura
+                  </span>
+                ) : null}
               </li>
+              {cfg.kude_logos?.length ? (
+                <li>
+                  <span className="text-slate-500">Logos KuDE adicionales:</span>{" "}
+                  <span className="font-medium text-slate-700">
+                    {cfg.kude_logos.map((l) => l.nombre).join(", ")}
+                  </span>
+                </li>
+              ) : null}
               <li>
                 <span className="text-slate-500">Certificado .p12:</span>{" "}
                 <span className="font-medium text-emerald-800">Cargado</span>
@@ -690,6 +798,65 @@ export default function FacturacionElectronicaSifenPage() {
                 catálogo en e-kuatia o de tu constancia. Si no coinciden con lo que tiene la SET, devuelve error <span className="font-mono">1261</span>.
               </p>
             </div>
+
+            {/* ── Actividades económicas secundarias ───────────────────────── */}
+            <div className="sm:col-span-2">
+              <div className="flex items-center justify-between gap-2">
+                <label className={fLabel}>Actividades económicas secundarias</label>
+                <button
+                  type="button"
+                  className="text-xs font-semibold text-[#2563eb] hover:underline disabled:opacity-40"
+                  disabled={actividadesSec.length >= 8}
+                  onClick={() => setActividadesSec((prev) => [...prev, { codigo: "", descripcion: "" }])}
+                >
+                  + Agregar actividad
+                </button>
+              </div>
+              <p className="text-xs text-slate-500 mb-2 leading-relaxed">
+                Las demás actividades que figuran en tu constancia de RUC ante la DNIT. Se incluyen todas en la misma factura
+                (grupos <span className="font-mono">gActEco</span> del XML), así no hay que cambiar el rubro en cada emisión. Máx. 8.
+              </p>
+              {actividadesSec.length === 0 ? (
+                <p className="text-xs text-slate-400 italic">
+                  Sin actividades secundarias. La factura mostrará solo la actividad principal.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {actividadesSec.map((a, i) => (
+                    <div key={i} className="flex flex-col sm:flex-row gap-2 items-start">
+                      <input
+                        className={`${fInput} sm:w-32`}
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        placeholder="Código"
+                        value={a.codigo}
+                        onChange={(e) => {
+                          const v = e.target.value.replace(/\D/g, "").slice(0, 8);
+                          setActividadesSec((prev) => prev.map((x, j) => (j === i ? { ...x, codigo: v } : x)));
+                        }}
+                      />
+                      <input
+                        className={`${fInput} flex-1`}
+                        placeholder="Descripción exacta del catálogo SET"
+                        value={a.descripcion}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setActividadesSec((prev) => prev.map((x, j) => (j === i ? { ...x, descripcion: v } : x)));
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="text-xs font-semibold text-red-600 hover:underline px-2 py-2 shrink-0"
+                        onClick={() => setActividadesSec((prev) => prev.filter((_, j) => j !== i))}
+                      >
+                        Quitar
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div>
               <label className={fLabel}>Establecimiento</label>
               <input className={fInput} value={establecimiento} onChange={(e) => setEstablecimiento(e.target.value)} required />
@@ -865,6 +1032,66 @@ export default function FacturacionElectronicaSifenPage() {
                 <p className="text-xs text-amber-700 mt-2">
                   Guardá primero la configuración SIFEN base para habilitar la subida del logo.
                 </p>
+              )}
+            </div>
+
+            {/* ── Logos adicionales (se elige cuál usar al facturar) ───────── */}
+            <div className="border-t border-slate-100 pt-4">
+              <label className={fLabel}>Logos adicionales (para elegir al facturar)</label>
+              <p className="text-xs text-slate-500 mb-3 leading-relaxed">
+                Cargá otros logos con un nombre (p. ej. «BLB», «ADR») y al emitir cada factura elegís cuál usar en el KuDE.
+                Los datos fiscales del emisor no cambian: siguen los del RUC configurado. Solo afecta el PDF/KuDE.
+              </p>
+
+              {kudeLogos.length > 0 && (
+                <ul className="mb-3 space-y-2">
+                  {kudeLogos.map((l) => (
+                    <li
+                      key={l.id}
+                      className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2"
+                    >
+                      <span className="text-sm font-medium text-slate-800 truncate">{l.nombre}</span>
+                      <button
+                        type="button"
+                        disabled={eliminandoLogoId === l.id}
+                        onClick={() => eliminarLogoExtra(l.id)}
+                        className="text-xs font-semibold text-rose-700 hover:underline disabled:opacity-40 shrink-0"
+                      >
+                        {eliminandoLogoId === l.id ? "Eliminando…" : "Eliminar"}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <input
+                  className={`${fInput} sm:w-48`}
+                  placeholder="Nombre del logo"
+                  maxLength={60}
+                  value={nombreNuevoLogo}
+                  disabled={!cfg || subiendoLogoExtra}
+                  onChange={(e) => setNombreNuevoLogo(e.target.value)}
+                />
+                <input
+                  ref={logoExtraInputRef}
+                  type="file"
+                  accept="image/png"
+                  disabled={!cfg || subiendoLogoExtra}
+                  onChange={onLogoExtraFileChange}
+                  className="sr-only"
+                />
+                <button
+                  type="button"
+                  disabled={!cfg || subiendoLogoExtra || !nombreNuevoLogo.trim() || kudeLogos.length >= 8}
+                  onClick={() => logoExtraInputRef.current?.click()}
+                  className="w-fit rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {subiendoLogoExtra ? "Subiendo…" : "Agregar logo (PNG, máx. 1 MB)"}
+                </button>
+              </div>
+              {kudeLogos.length >= 8 && (
+                <p className="text-xs text-amber-700 mt-2">Alcanzaste el máximo de 8 logos adicionales.</p>
               )}
             </div>
 

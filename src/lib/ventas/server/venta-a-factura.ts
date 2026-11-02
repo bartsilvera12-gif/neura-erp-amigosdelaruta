@@ -44,6 +44,10 @@ export async function crearFacturaDesdeVenta(
     fecha: string;
     fechaVencimiento: string;
     observaciones?: string | null;
+    /** SIFEN gOpeCom.iTipTra elegido en la caja (1/2/3). Null = default. */
+    sifenTipoTransaccion?: 1 | 2 | 3 | null;
+    /** Logo del KuDE elegido en la caja (id). Null = predeterminado. */
+    kudeLogoId?: string | null;
   }
 ): Promise<VentaAFacturaResultado> {
   const numeroFactura = await obtenerSiguienteNumeroFacturaEmpresa(sb, params.empresaId);
@@ -69,6 +73,10 @@ export async function crearFacturaDesdeVenta(
         tipo: esCredito ? "credito" : "contado",
         moneda: params.moneda === "USD" ? "USD" : "GS",
         ...(params.observaciones ? { observaciones: params.observaciones } : {}),
+        ...(params.sifenTipoTransaccion != null
+          ? { sifen_tipo_transaccion: params.sifenTipoTransaccion }
+          : {}),
+        ...(params.kudeLogoId ? { kude_logo_id: params.kudeLogoId } : {}),
       },
     ])
     .select("id")

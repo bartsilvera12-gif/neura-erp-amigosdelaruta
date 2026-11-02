@@ -2,7 +2,19 @@
  * Tipos para el módulo SIFEN (configuración y documentos electrónicos).
  */
 
+import type { ActividadEconomica, TipoTransaccionSifen } from "./actividades-economicas";
+
 export type AmbienteSifen = "test" | "produccion";
+
+/** Logo adicional del KuDE (persistido en empresa_sifen_config.kude_logos_json). */
+export interface KudeLogoDTO {
+  /** Identificador estable usado en facturas.kude_logo_id. */
+  id: string;
+  /** Nombre visible para elegir el logo al facturar (p. ej. "BLB", "ADR"). */
+  nombre: string;
+  /** Ruta del PNG dentro del bucket privado `sifen`. */
+  path: string;
+}
 
 /**
  * Configuración SIFEN expuesta por la API (sin contraseña ni ciphertext).
@@ -23,6 +35,12 @@ export interface EmpresaSifenConfigDTO {
   actividad_economica_codigo: string | null;
   /** Texto oficial del catálogo (dDesActEco). */
   actividad_economica_descripcion: string | null;
+  /**
+   * Actividades económicas SECUNDARIAS del RUC (además de la principal). Se
+   * emiten como grupos gEmis.gActEco adicionales en el mismo DE. Vacío = solo
+   * la principal (comportamiento anterior).
+   */
+  actividades_economicas_secundarias: ActividadEconomica[];
   establecimiento: string;
   punto_expedicion: string;
   csc: string | null;
@@ -45,6 +63,11 @@ export interface EmpresaSifenConfigDTO {
   kude_color_primario: string | null;
   /** `#RRGGBB` (validado en DB con CHECK). */
   kude_color_primario_fill: string | null;
+  /**
+   * Logos adicionales disponibles para elegir al facturar. El `kude_logo_path`
+   * de arriba sigue siendo el predeterminado. Solo afectan el KuDE/PDF.
+   */
+  kude_logos: KudeLogoDTO[];
   created_at: string;
   updated_at: string;
 }
@@ -60,6 +83,8 @@ export interface EmpresaSifenConfigCreateBody {
   /** Código numérico catálogo SET (principal para el RUC). */
   actividad_economica_codigo: string;
   actividad_economica_descripcion: string;
+  /** Actividades secundarias del RUC (opcional). */
+  actividades_economicas_secundarias?: ActividadEconomica[];
   establecimiento: string;
   punto_expedicion: string;
   ambiente: AmbienteSifen;
@@ -85,6 +110,8 @@ export interface EmpresaSifenConfigPatchBody {
   timbrado_fecha_inicio_vigencia?: string;
   actividad_economica_codigo?: string;
   actividad_economica_descripcion?: string;
+  /** Reemplaza la lista completa de actividades secundarias (opcional). */
+  actividades_economicas_secundarias?: ActividadEconomica[];
   establecimiento?: string;
   punto_expedicion?: string;
   ambiente?: AmbienteSifen;
@@ -218,6 +245,8 @@ export interface SifenPayloadEmisor {
   timbrado_fecha_inicio_vigencia: string;
   actividad_economica_codigo: string;
   actividad_economica_descripcion: string;
+  /** Actividades económicas secundarias del RUC (gActEco adicionales). */
+  actividades_economicas_secundarias: ActividadEconomica[];
   establecimiento: string;
   punto_expedicion: string;
   /** Código de seguridad del timbrado (SET); obligatorio para generar el DE oficial. */
@@ -234,6 +263,13 @@ export interface SifenPayloadDocumento {
   moneda: string;
   monto: number;
   saldo: number;
+  /**
+   * Tipo de transacción comercial (gOpeCom.iTipTra): 1 mercadería, 2 servicio,
+   * 3 mixto. Ausente/null = 1 (comportamiento anterior).
+   */
+  tipo_transaccion?: TipoTransaccionSifen | null;
+  /** Logo del KuDE elegido para esta factura (id en kude_logos). No afecta XML. */
+  kude_logo_id?: string | null;
 }
 
 export interface SifenPayloadReceptor {

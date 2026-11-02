@@ -58,7 +58,11 @@ export async function GET(
 
     let branding = null;
     try {
-      branding = await loadKudeBranding(supabase, auth.empresa_id);
+      branding = await loadKudeBranding(
+        supabase,
+        auth.empresa_id,
+        loaded.payload.documento.kude_logo_id ?? null
+      );
     } catch {
       /* Sin branding se usa el diseño por defecto; no vale fallar por el logo. */
     }

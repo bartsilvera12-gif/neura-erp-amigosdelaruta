@@ -133,6 +133,19 @@ export async function POST(request: NextRequest) {
         : String(o.observaciones).slice(0, 4000);
 
     /*
+     * Datos SIFEN que la caja elige por factura (solo se usan si emitir_factura):
+     *   - tipo de transacción comercial (gOpeCom.iTipTra): 1/2/3, null = default.
+     *   - logo del KuDE (id). Solo afecta el PDF; no toca XML/firma/SET.
+     */
+    const tipoTxRaw = o.sifen_tipo_transaccion;
+    const sifenTipoTransaccion =
+      tipoTxRaw === 1 || tipoTxRaw === 2 || tipoTxRaw === 3 ? tipoTxRaw : null;
+    const kudeLogoId =
+      o.kude_logo_id == null || String(o.kude_logo_id).trim() === ""
+        ? null
+        : String(o.kude_logo_id).trim();
+
+    /*
      * Cómo se cobró. Lo suma el arqueo de la caja, así que se valida contra la
      * lista cerrada en vez de guardar lo que venga: un "Efectivo" con mayúscula
      * saldría del cálculo sin que nadie se entere. Si no viene, queda null y la
@@ -235,6 +248,8 @@ export async function POST(request: NextRequest) {
               ? fechaMasDiasCalendario(fechaCal, plazoDias as number)
               : fechaCal,
           observaciones,
+          sifenTipoTransaccion,
+          kudeLogoId,
         });
         factura = { id: r.facturaId, numero_factura: r.numeroFactura };
       } catch (e) {
