@@ -42,9 +42,12 @@ export async function POST(
       return NextResponse.json(errorResponse("Factura no encontrada"), { status: 404 });
     }
 
+    // `select("*")` a propósito: en tenants sin la migración `kude_logos`,
+    // pedir la columna explícita haría fallar el query y rompería el borrador.
+    // Con "*" la columna viene undefined donde no existe y se ignora el logo.
     const { data: sifenConfig, error: errConfig } = await supabase
       .from("empresa_sifen_config")
-      .select("id, activo, kude_logos")
+      .select("*")
       .eq("empresa_id", auth.empresa_id)
       .maybeSingle();
 
