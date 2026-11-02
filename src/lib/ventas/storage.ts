@@ -18,6 +18,10 @@ export type OpcionesFacturaVenta = {
   emitirFactura?: boolean;
   /** Obligatorio si se emite factura: SIFEN necesita un receptor. */
   clienteId?: string | null;
+  /** Tipo de transacción comercial SIFEN (gOpeCom.iTipTra): 1/2/3. */
+  tipoTransaccion?: 1 | 2 | 3 | null;
+  /** Logo del KuDE elegido para esta factura (id). Solo afecta el PDF. */
+  kudeLogoId?: string | null;
 };
 
 /**
@@ -70,6 +74,8 @@ export async function saveVenta(
         cliente_id: opciones.clienteId ?? null,
         observaciones: null,
         emitir_factura: opciones.emitirFactura === true,
+        sifen_tipo_transaccion: opciones.tipoTransaccion ?? null,
+        kude_logo_id: opciones.kudeLogoId ?? null,
       }),
     });
 

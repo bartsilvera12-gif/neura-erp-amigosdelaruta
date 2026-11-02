@@ -3,6 +3,13 @@ import type { SifenNotaCreditoPayload } from "./types";
 import type { AmbienteSifen } from "./types";
 import { MSG_CONFIG_TIMBRADO_INVALIDA } from "./validar-timbrado-origen-nc";
 import { validarXmlFirmadoFacturaOrigenParaNc } from "./validar-factura-origen-xml-para-nc";
+import { parseActividadesSecundarias, type ActividadEconomica } from "./actividades-economicas";
+
+/** Actividades secundarias de la config (tolerante: nunca lanza). */
+function actividadesSecundariasDeConfig(raw: unknown): ActividadEconomica[] {
+  const r = parseActividadesSecundarias(raw);
+  return r.ok ? r.actividades : [];
+}
 
 export type LoadNotaCreditoSifenPayloadOpts = {
   /** Si se define, el XML rDE usa este ambiente (p. ej. test con ALLOW_TEST_MODE + pipeline *-test). */
@@ -159,7 +166,7 @@ export async function loadValidatedNotaCreditoSifenPayload(
     supabase
       .from("empresa_sifen_config")
       .select(
-        "ruc, razon_social, direccion_fiscal, timbrado_numero, timbrado_fecha_inicio_vigencia, actividad_economica_codigo, actividad_economica_descripcion, establecimiento, punto_expedicion, csc, activo, ambiente"
+        "ruc, razon_social, direccion_fiscal, timbrado_numero, timbrado_fecha_inicio_vigencia, actividad_economica_codigo, actividad_economica_descripcion, actividades_economicas_json, establecimiento, punto_expedicion, csc, activo, ambiente"
       )
       .eq("empresa_id", empresaId)
       .maybeSingle(),
@@ -220,6 +227,9 @@ export async function loadValidatedNotaCreditoSifenPayload(
       timbrado_fecha_inicio_vigencia: fx.timbrado_fecha_inicio_vigencia_iso,
       actividad_economica_codigo: fx.actividad_codigo,
       actividad_economica_descripcion: fx.actividad_descripcion,
+      actividades_economicas_secundarias: actividadesSecundariasDeConfig(
+        cfg.actividades_economicas_json
+      ),
       establecimiento: fx.establecimiento,
       punto_expedicion: fx.punto_expedicion,
       csc: cfg.csc == null ? null : String(cfg.csc).trim(),

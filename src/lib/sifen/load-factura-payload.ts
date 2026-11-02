@@ -40,7 +40,7 @@ export async function loadValidatedSifenPayload(
 
   const { data: factura, error: errFactura } = await supabase
     .from("facturas")
-    .select("id, cliente_id, numero_factura, fecha, tipo, moneda, monto, saldo")
+    .select("id, cliente_id, numero_factura, fecha, tipo, moneda, monto, saldo, sifen_tipo_transaccion, kude_logo_id")
     .eq("id", fid)
     .eq("empresa_id", empresaId)
     .maybeSingle();
@@ -72,7 +72,7 @@ export async function loadValidatedSifenPayload(
     supabase
       .from("empresa_sifen_config")
       .select(
-        "ruc, razon_social, direccion_fiscal, timbrado_numero, timbrado_fecha_inicio_vigencia, actividad_economica_codigo, actividad_economica_descripcion, establecimiento, punto_expedicion, csc, activo, ambiente"
+        "ruc, razon_social, direccion_fiscal, timbrado_numero, timbrado_fecha_inicio_vigencia, actividad_economica_codigo, actividad_economica_descripcion, actividades_economicas_json, establecimiento, punto_expedicion, csc, activo, ambiente"
       )
       .eq("empresa_id", empresaId)
       .maybeSingle(),
@@ -107,6 +107,8 @@ export async function loadValidatedSifenPayload(
       moneda: factura.moneda as string,
       monto: factura.monto,
       saldo: factura.saldo,
+      sifen_tipo_transaccion: (factura as { sifen_tipo_transaccion?: number | string | null }).sifen_tipo_transaccion ?? null,
+      kude_logo_id: (factura as { kude_logo_id?: string | null }).kude_logo_id ?? null,
     },
     items: (itemsRes.data ?? []) as BuildSifenPayloadInput["items"],
     cliente: clienteRes.data as BuildSifenPayloadInput["cliente"],

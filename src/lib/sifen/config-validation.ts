@@ -6,6 +6,7 @@ import type {
   SifenCertificadoPasswordPatchAction,
 } from "./types";
 import { normalizePlazoCancelacionHoras } from "./sifen-cancelacion-rules";
+import { parseActividadesSecundarias } from "./actividades-economicas";
 
 function trimStr(v: unknown): string {
   if (v == null) return "";
@@ -147,6 +148,8 @@ export function validateCreateBody(raw: unknown): EmpresaSifenConfigCreateResult
   if (!tin.ok) return { ok: false, error: tin.error };
   const act = normalizeActividadEconomica(b.actividad_economica_codigo, b.actividad_economica_descripcion);
   if (!act.ok) return { ok: false, error: act.error };
+  const actSec = parseActividadesSecundarias(b.actividades_economicas_secundarias);
+  if (!actSec.ok) return { ok: false, error: actSec.error };
   if (!establecimiento) return { ok: false, error: "establecimiento es obligatorio" };
   if (!punto_expedicion) return { ok: false, error: "punto_expedicion es obligatorio" };
 
@@ -175,6 +178,7 @@ export function validateCreateBody(raw: unknown): EmpresaSifenConfigCreateResult
     timbrado_fecha_inicio_vigencia: tin.value,
     actividad_economica_codigo: act.codigo,
     actividad_economica_descripcion: act.descripcion,
+    actividades_economicas_secundarias: actSec.actividades,
     establecimiento,
     punto_expedicion,
     ambiente,
@@ -272,6 +276,11 @@ export function buildPatchUpdate(raw: unknown): EmpresaSifenConfigPatchResult {
     patch.actividad_economica_codigo = act.codigo;
     patch.actividad_economica_descripcion = act.descripcion;
   }
+  if ("actividades_economicas_secundarias" in b) {
+    const actSec = parseActividadesSecundarias(b.actividades_economicas_secundarias);
+    if (!actSec.ok) return { ok: false, error: actSec.error };
+    patch.actividades_economicas_json = actSec.actividades;
+  }
   if ("establecimiento" in b) {
     const v = trimStr(b.establecimiento);
     if (!v) return { ok: false, error: "establecimiento no puede quedar vacío" };
@@ -356,6 +365,7 @@ export function rowFromCreateBody(empresaId: string, body: EmpresaSifenConfigCre
     timbrado_fecha_inicio_vigencia: body.timbrado_fecha_inicio_vigencia,
     actividad_economica_codigo: body.actividad_economica_codigo,
     actividad_economica_descripcion: body.actividad_economica_descripcion,
+    actividades_economicas_json: body.actividades_economicas_secundarias ?? [],
     establecimiento: body.establecimiento,
     punto_expedicion: body.punto_expedicion,
     csc: body.csc ?? null,

@@ -67,7 +67,7 @@ export async function GET(
 
     const { data: fac, error: errFac } = await supabase
       .from("facturas")
-      .select("id, numero_factura")
+      .select("id, numero_factura, kude_logo_id")
       .eq("id", fid)
       .eq("empresa_id", auth.empresa_id)
       .maybeSingle();
@@ -146,9 +146,14 @@ export async function GET(
      * No participa de XML/firma/SET/CDC. Si la empresa no configuró nada o
      * la descarga del logo falla, se cae silenciosamente al diseño Neura.
      */
+    const logoIdFactura =
+      (fac as { kude_logo_id?: string | null }).kude_logo_id == null
+        ? null
+        : String((fac as { kude_logo_id?: string | null }).kude_logo_id).trim() || null;
     const branding = await loadKudeBranding(
       supabase,
-      auth.empresa_id
+      auth.empresa_id,
+      logoIdFactura
     ).catch((e) => {
       console.warn("[kude] branding load failed, using default", {
         empresa_id: auth.empresa_id,

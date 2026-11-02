@@ -148,6 +148,8 @@ export async function POST(
         emisorNumCasa: 0,
         actividadEconomicaCodigo: loaded.payload.emisor.actividad_economica_codigo,
         actividadEconomicaDescripcion: loaded.payload.emisor.actividad_economica_descripcion,
+        actividadesSecundarias: loaded.payload.emisor.actividades_economicas_secundarias,
+        tipoTransaccion: loaded.payload.documento.tipo_transaccion ?? undefined,
       });
     } catch (e) {
       await revertBumpRegSeq();

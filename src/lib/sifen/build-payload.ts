@@ -8,6 +8,7 @@ import type {
   SifenPayloadReceptor,
 } from "./types";
 import { normalizeActividadEconomica, normalizeTimbradoFechaInicioVigencia } from "./config-validation";
+import { parseActividadesSecundarias, normalizarTipoTransaccion } from "./actividades-economicas";
 import { splitRucParaXml } from "./sifen-cdc";
 import {
   normalizarTipoDocReceptorSifen,
@@ -42,6 +43,10 @@ export interface SifenBuildFacturaRow {
   moneda: string;
   monto: unknown;
   saldo: unknown;
+  /** gOpeCom.iTipTra elegido al facturar (1/2/3). Null/ausente = 1. */
+  sifen_tipo_transaccion?: number | string | null;
+  /** Logo del KuDE elegido para esta factura (id). Solo afecta el PDF. */
+  kude_logo_id?: string | null;
 }
 
 export interface SifenBuildItemRow {
@@ -89,6 +94,8 @@ export interface SifenBuildConfigRow {
   timbrado_fecha_inicio_vigencia?: string | null;
   actividad_economica_codigo?: string | null;
   actividad_economica_descripcion?: string | null;
+  /** Actividades secundarias (jsonb o string JSON). Opcional. */
+  actividades_economicas_json?: unknown;
   establecimiento: string;
   punto_expedicion: string;
   csc: string | null;
@@ -178,6 +185,13 @@ function validateEmisor(config: SifenBuildConfigRow | null): { ok: true; emisor:
       error: `Configuración SIFEN: ${act.error} Configuración → Facturación electrónica.`,
     };
   }
+  const actSec = parseActividadesSecundarias(config.actividades_economicas_json);
+  if (!actSec.ok) {
+    return {
+      ok: false,
+      error: `Configuración SIFEN: ${actSec.error} Configuración → Facturación electrónica.`,
+    };
+  }
   return {
     ok: true,
     emisor: {
@@ -188,6 +202,7 @@ function validateEmisor(config: SifenBuildConfigRow | null): { ok: true; emisor:
       timbrado_fecha_inicio_vigencia: tin.value,
       actividad_economica_codigo: act.codigo,
       actividad_economica_descripcion: act.descripcion,
+      actividades_economicas_secundarias: actSec.actividades,
       establecimiento,
       punto_expedicion,
       csc: cscRaw === "" ? null : cscRaw,
@@ -407,6 +422,11 @@ export function validateAndBuildSifenPayload(input: BuildSifenPayloadInput): Bui
     moneda: trimStr(factura.moneda) || "GS",
     monto: num(factura.monto),
     saldo: num(factura.saldo),
+    tipo_transaccion:
+      factura.sifen_tipo_transaccion == null
+        ? null
+        : normalizarTipoTransaccion(factura.sifen_tipo_transaccion),
+    kude_logo_id: trimStr(factura.kude_logo_id) || null,
   };
 
   if (!documento.numero_factura) {

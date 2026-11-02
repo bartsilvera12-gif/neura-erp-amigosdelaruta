@@ -131,6 +131,7 @@ export async function handleNcSifenXmlPost(opts: {
     emisorNumCasa: 0,
     actividadEconomicaCodigo: loaded.payload.emisor.actividad_economica_codigo,
     actividadEconomicaDescripcion: loaded.payload.emisor.actividad_economica_descripcion,
+    actividadesSecundarias: loaded.payload.emisor.actividades_economicas_secundarias,
   };
 
   let xmlString: string;

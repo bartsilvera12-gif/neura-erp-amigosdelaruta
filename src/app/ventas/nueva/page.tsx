@@ -128,6 +128,15 @@ export default function NuevaVentaPage() {
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [buscaCliente, setBuscaCliente] = useState("");
   const [listaAbierta, setListaAbierta] = useState(false);
+  /*
+   * SIFEN por factura: tipo de transacción comercial (mercaderías / servicios /
+   * mixto) y logo del KuDE elegido. El logo solo cambia el PDF; los datos
+   * fiscales del emisor siguen siendo los del RUC configurado.
+   */
+  const [sifenTipoTx, setSifenTipoTx] = useState<1 | 2 | 3>(1);
+  const [sifenLogoId, setSifenLogoId] = useState<string>("");
+  const [logosFactura, setLogosFactura] = useState<{ id: string; nombre: string }[]>([]);
+  const [tieneLogoDefault, setTieneLogoDefault] = useState(false);
 
   // ── Cobro (solo CONTADO, no se persiste — solo ayuda al cajero) ───────────
   const [montoRecibido, setMontoRecibido] = useState("");
@@ -485,6 +494,24 @@ export default function NuevaVentaPage() {
     void getClientes().then(setClientes);
   }, [tipoDocumento, clientes.length]);
 
+  /* Logos disponibles para el KuDE (predeterminado + adicionales con nombre). */
+  useEffect(() => {
+    if (tipoDocumento !== "factura" || logosFactura.length > 0) return;
+    let vivo = true;
+    void fetchWithSupabaseSession("/api/configuracion/sifen")
+      .then((r) => r.json())
+      .then((j: { data?: { kude_logos?: { id: string; nombre: string }[]; kude_logo_path?: string | null } | null }) => {
+        if (!vivo) return;
+        const logos = Array.isArray(j?.data?.kude_logos) ? j.data!.kude_logos! : [];
+        setLogosFactura(logos);
+        setTieneLogoDefault(Boolean(j?.data?.kude_logo_path));
+      })
+      .catch(() => {});
+    return () => {
+      vivo = false;
+    };
+  }, [tipoDocumento, logosFactura.length]);
+
   const clientesFiltrados = useMemo(() => {
     const q = buscaCliente.trim().toLowerCase();
     if (!q) return clientes.slice(0, 8);
@@ -522,6 +549,8 @@ export default function NuevaVentaPage() {
           cliente_id: facClienteId,
           cliente_nombre: facNombre.trim(),
           cliente_ruc: facRuc.trim(),
+          tipo_transaccion: sifenTipoTx,
+          kude_logo_id: sifenLogoId || null,
           items: items.map((it) => ({
             descripcion: it.producto_nombre,
             cantidad: it.cantidad,
@@ -597,7 +626,12 @@ export default function NuevaVentaPage() {
         plazo_dias:
           tipoVenta === "CREDITO" && plazoDias ? parseInt(plazoDias) : undefined,
       },
-      { emitirFactura: tipoDocumento === "factura", clienteId }
+      {
+        emitirFactura: tipoDocumento === "factura",
+        clienteId,
+        tipoTransaccion: tipoDocumento === "factura" ? sifenTipoTx : null,
+        kudeLogoId: tipoDocumento === "factura" ? sifenLogoId || null : null,
+      }
     );
 
     if (!resultado.success) {
@@ -788,6 +822,45 @@ export default function NuevaVentaPage() {
                     Si el cliente no existe se crea solo. La factura necesita un receptor.
                   </p>
                 </div>
+
+                <div className="md:col-start-1">
+                  <label className={labelClass}>Tipo de operación</label>
+                  <SegmentedControl<"1" | "2" | "3">
+                    value={String(sifenTipoTx) as "1" | "2" | "3"}
+                    options={[
+                      { value: "1", label: "Mercaderías" },
+                      { value: "2", label: "Servicios" },
+                      { value: "3", label: "Mixto" },
+                    ]}
+                    onChange={(v) => setSifenTipoTx(Number(v) as 1 | 2 | 3)}
+                  />
+                  <p className="mt-1 text-xs text-gray-400">
+                    Qué se está vendiendo. Va en la factura electrónica (SIFEN iTipTra).
+                  </p>
+                </div>
+
+                {(logosFactura.length > 0 || tieneLogoDefault) && (
+                  <div>
+                    <label className={labelClass}>Logo de la factura (KuDE)</label>
+                    <select
+                      value={sifenLogoId}
+                      onChange={(e) => setSifenLogoId(e.target.value)}
+                      className={inputClass}
+                    >
+                      <option value="">
+                        {tieneLogoDefault ? "Logo predeterminado" : "Logo por defecto (Neura)"}
+                      </option>
+                      {logosFactura.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.nombre}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-gray-400">
+                      Solo cambia la imagen del KuDE. Los datos fiscales siguen siendo los del RUC configurado.
+                    </p>
+                  </div>
+                )}
               </>
             )}
 

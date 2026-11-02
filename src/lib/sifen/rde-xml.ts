@@ -8,6 +8,13 @@
 import { createHash } from "node:crypto";
 import type { AmbienteSifen, SifenFacturaPayloadBase } from "./types";
 import {
+  actividadesParaEmision,
+  normalizarActividad,
+  DES_TIPO_TRANSACCION,
+  type ActividadEconomica,
+  type TipoTransaccionSifen,
+} from "./actividades-economicas";
+import {
   SIFEN_TEST_CSC_GENERICO,
   SIFEN_TEST_LITERAL_DOCUMENTO,
 } from "./sifen-ambiente-test";
@@ -299,6 +306,17 @@ export interface BuildRdeXmlOptions {
   /** Actividad económica principal (código + descripción). */
   actividadEconomicaCodigo?: string;
   actividadEconomicaDescripcion?: string;
+  /**
+   * Actividades económicas SECUNDARIAS del RUC. Se emiten como grupos
+   * gEmis.gActEco adicionales, después de la principal. SIFEN permite declarar
+   * varias actividades en el mismo documento.
+   */
+  actividadesSecundarias?: ActividadEconomica[];
+  /**
+   * Tipo de transacción comercial (gOpeCom.iTipTra): 1 mercadería, 2 servicio,
+   * 3 mixto. Ausente = 1 (venta de mercadería), como antes. Solo factura (iTiDE=1).
+   */
+  tipoTransaccion?: TipoTransaccionSifen;
   /** Momento de emisión / firma (por defecto ahora). */
   fechaHoraEmision?: Date;
 }
@@ -338,6 +356,27 @@ function fechaEnVentanaGraciaCierreMes(docFechaYmd: string, emiYmd: string): boo
   if (fy !== py || fm !== pm) return false;
   const ultimo = diasDelMes(py, pm);
   return fd >= ultimo - (GRACE_ULTIMOS_DIAS_MES - 1);
+}
+
+/**
+ * Lista final de actividades económicas a emitir (principal + secundarias
+ * válidas, sin repetir). Una secundaria mal formada no frena la emisión: se
+ * omite (la principal ya quedó validada aparte).
+ */
+function emisorActividades(
+  opts: BuildRdeXmlOptions,
+  codigoPrincipal: string,
+  descPrincipal: string
+): ActividadEconomica[] {
+  const secundarias: ActividadEconomica[] = [];
+  for (const a of opts.actividadesSecundarias ?? []) {
+    const n = normalizarActividad(a?.codigo, a?.descripcion);
+    if (n.ok) secundarias.push(n.actividad);
+  }
+  return actividadesParaEmision(
+    { codigo: codigoPrincipal, descripcion: descPrincipal },
+    secundarias
+  );
 }
 
 /**
@@ -460,6 +499,10 @@ export function buildOfficialRdeFacturaElectronicaXml(
 
   const dNomEmi = esAmbienteTest ? SIFEN_TEST_LITERAL_DOCUMENTO : emisor.razon_social.trim();
 
+  /** Tipo de transacción comercial (gOpeCom). Default 1 = venta de mercadería. */
+  const iTipTra: TipoTransaccionSifen = opts.tipoTransaccion ?? 1;
+  const dDesTipTra = DES_TIPO_TRANSACCION[iTipTra] ?? XSD_DES_TIP_TRA_VENTA_MERC;
+
   const gEmisParts: string[] = [
     "<gEmis>",
     /** Mismo relleno 8 dígitos que en el CDC; si no, SET TEST rechaza 1000. */
@@ -487,10 +530,18 @@ export function buildOfficialRdeFacturaElectronicaXml(
 
   gEmisParts.push(textEl("dTelEmi", telEmi));
   gEmisParts.push(textEl("dEmailE", opts.emisorEmail.trim()));
-  gEmisParts.push("<gActEco>");
-  gEmisParts.push(textEl("cActEco", cAct));
-  gEmisParts.push(textEl("dDesActEco", dActDes));
-  gEmisParts.push("</gActEco>");
+  /**
+   * Una o varias actividades económicas (gEmis.gActEco se repite). La principal
+   * primero, luego las secundarias del RUC, sin repetir códigos. Así el único
+   * formato de factura muestra todas las actividades declaradas ante la DNIT
+   * sin tener que cambiar el rubro en cada emisión.
+   */
+  for (const act of emisorActividades(opts, cAct, dActDes)) {
+    gEmisParts.push("<gActEco>");
+    gEmisParts.push(textEl("cActEco", act.codigo));
+    gEmisParts.push(textEl("dDesActEco", act.descripcion));
+    gEmisParts.push("</gActEco>");
+  }
   gEmisParts.push("</gEmis>");
 
   /**
@@ -806,9 +857,14 @@ export function buildOfficialRdeFacturaElectronicaXml(
     "<gDatGralOpe>",
     textEl("dFeEmiDE", dFeEmiDE),
     "<gOpeCom>",
-    /** iTipTra: el XSD no acopla iTipTra con iTiOpe B2F; se mantiene venta de mercadería (1) salvo normativa adicional. */
-    textEl("iTipTra", "1"),
-    textEl("dDesTipTra", XSD_DES_TIP_TRA_VENTA_MERC),
+    /**
+     * iTipTra: tipo de transacción comercial elegido al facturar (mercadería /
+     * servicio / mixto). Por defecto 1 (venta de mercadería), igual que antes.
+     * El XSD no acopla iTipTra con iTiOpe B2F, así que los tres valores son
+     * válidos para la factura electrónica.
+     */
+    textEl("iTipTra", String(iTipTra)),
+    textEl("dDesTipTra", dDesTipTra),
     textEl("iTImp", "1"),
     textEl("dDesTImp", XSD_DES_T_IMP_IVA),
     textEl("cMoneOpe", "PYG"),
