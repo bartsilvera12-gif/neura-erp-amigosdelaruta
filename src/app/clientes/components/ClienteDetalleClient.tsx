@@ -1386,24 +1386,11 @@ export default function ClienteDetalleClient({
           {(
             [
               { label: "Origen", value: cliente.origen },
-              {
-                label: "Tipo servicio",
-                value: etiquetaVisibleTipoServicio(
-                  cliente.tipo_servicio_cliente ?? null,
-                  labelTipoServicioMap
-                ),
-              },
+              /* Tipo servicio, Plan activo y Project Manager salen de la franja:
+                 son del sistema base —servicios de software, suscripciones
+                 mensuales y responsables de desarrollo— y en ADR mostraban
+                 siempre un guion. Ya se habian quitado del formulario. */
               { label: "Condición", value: cliente.condicion_pago ?? "—" },
-              {
-                label: "Plan activo",
-                value: cargandoDetalleCliente ? (
-                  <span className="inline-block h-4 w-36 max-w-full animate-pulse rounded-md bg-slate-200" aria-hidden />
-                ) : suscripcionActiva ? (
-                  `${planes.find((p) => p.id === suscripcionActiva.plan_id)?.nombre ?? suscripcionActiva.plan_nombre ?? "Plan"} (${suscripcionActiva.moneda})`
-                ) : (
-                  "—"
-                ),
-              },
               { label: "Moneda", value: cliente.moneda_preferida ?? "GS" },
               {
                 label: "Vendedor",
@@ -1415,15 +1402,6 @@ export default function ClienteDetalleClient({
                     if (nom) return nom;
                   }
                   return cliente.vendedor_asignado ?? "—";
-                })(),
-              },
-              {
-                label: "Project Manager",
-                value: (() => {
-                  const uid = cliente.project_manager_id?.trim();
-                  if (!uid) return <span className="text-slate-400">Sin asignar</span>;
-                  const u = usuariosEmpresa.find((x) => x.id === uid);
-                  return (u?.nombre ?? "").trim() || u?.email?.trim() || "Asignado";
                 })(),
               },
               { label: "Creado por", value: cliente.created_by_nombre?.trim() || "—" },
@@ -2087,6 +2065,10 @@ export default function ClienteDetalleClient({
                   </div>
                 </div>
 
+                {/* Project Manager: oculto a pedido de ADR. Es el responsable de un
+                    desarrollo de software en el sistema base; una operadora de viajes
+                    no asigna PMs a sus clientes. Mismo criterio que "Tipo de servicio".
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className={labelClass}>Project Manager</label>
@@ -2114,6 +2096,8 @@ export default function ClienteDetalleClient({
                     ) : null}
                   </div>
                 </div>
+                */}
+
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
