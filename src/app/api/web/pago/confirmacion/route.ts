@@ -37,7 +37,12 @@ export async function POST(request: Request) {
   try {
     const empresaId = await empresaDeLaInstancia();
     const r = await registrarConfirmacion(empresaId, c);
-    if (r.tipo === "desconocido") return no(404, "UnknownShopProcessId");
+    if (r.tipo === "desconocido") {
+      // Firma válida pero el pago no es nuestro: el simulador del portal ("Cliente de prueba") confirma acá sus propias
+      // compras. Se acusa recibo y no se anota nada.
+      console.info("[bancard] confirmación de un pago que no es del sitio (cliente de prueba)", c.shopProcessId);
+      return ok();
+    }
     if (r.estado === "aprobado") {
       // Si falla por algo pasajero queda 'aprobado' y lo reintenta la pantalla de resultado; igual se le contesta a
       // Bancard que se recibió, porque el cobro ya quedó anotado.
