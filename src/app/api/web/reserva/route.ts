@@ -237,6 +237,8 @@ export async function POST(request: Request) {
     return jsonPublico(request, {
       ok: true,
       codigo: String((reserva as Record<string, unknown>).codigo),
+      // Con el id (no el código, que es correlativo y se adivina) el sitio puede abrir el pago de la seña.
+      id: reservaId,
     });
   } catch (e) {
     // El trigger de cupo corta con check_violation. Ese sí se le cuenta al

@@ -1,3 +1,4 @@
+import { configBancard } from "@/lib/bancard/cliente";
 import { getChatServiceClientForEmpresa } from "@/app/api/chat/_chat-service-client";
 import {
   empresaDeLaInstancia,
@@ -121,6 +122,8 @@ export async function GET(request: Request) {
       faqs: faqs.data ?? [],
       encuentros: encuentros.data ?? [],
       config: configuracion,
+      // Si el pago con tarjeta está encendido. Las claves no salen de acá: sólo el entorno.
+      pago_tarjeta: configBancard() ? { proveedor: "bancard" } : null,
     });
   } catch (e) {
     // El detalle va al log del servidor, no al navegador de un visitante.

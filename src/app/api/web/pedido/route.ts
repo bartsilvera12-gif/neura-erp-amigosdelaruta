@@ -159,6 +159,8 @@ export async function POST(request: Request) {
       ok: true,
       numero: Number((pedido as Record<string, unknown>).numero),
       total,
+      // Con el id (no el número, que es correlativo) el sitio puede abrir el pago con tarjeta.
+      id: pedidoId,
     });
   } catch (e) {
     console.error("[api/web/pedido]", e);
