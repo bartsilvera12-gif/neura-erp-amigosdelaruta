@@ -140,7 +140,8 @@ export async function POST(request: Request) {
         documento: textoLimpio(body.documento, 40),
         pais: textoLimpio(body.pais, 60),
         comentario: textoLimpio(body.comentario, 1000),
-        moneda: "USD",
+        // `productos.precio_venta` está en guaraníes (Inventario: "Precio de venta (Gs.)").
+        moneda: "PYG",
         total,
         medio_pago: textoLimpio(body.medio_pago, 40),
         user_agent: (request.headers.get("user-agent") ?? "").slice(0, 300),
