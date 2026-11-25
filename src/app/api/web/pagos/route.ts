@@ -29,13 +29,13 @@ export async function GET(request: Request) {
     if (!id) return NextResponse.json(successResponse({ pagos: await ultimosPagos(a.empresaId) }));
     if (!UUID.test(id)) return fallo("Pago inválido.", 400);
     const cfg = configBancard();
-    if (!cfg) return fallo("Bancard no está configurado (faltan las variables BANCARD_*).", 503);
+    if (!cfg) return fallo("Bancard no está configurado (faltan las variables BANCARD_*).", 409);
     const r = await consultarPagoEnBancard(cfg, a.empresaId, id);
     return NextResponse.json(successResponse({ consulta: r }));
   } catch (e) {
     if (e instanceof ErrorPago) return fallo(e.message, e.status);
     console.error("[api/web/pagos GET]", e);
-    return fallo(e instanceof Error ? e.message : "Error", 500);
+    return fallo(e instanceof Error ? e.message : "Error", 422);
   }
 }
 
@@ -49,7 +49,7 @@ export async function POST(request: Request) {
   if (body.accion !== "devolver") return fallo("Acción desconocida.", 400);
 
   const cfg = configBancard();
-  if (!cfg) return fallo("Bancard no está configurado (faltan las variables BANCARD_*).", 503);
+  if (!cfg) return fallo("Bancard no está configurado (faltan las variables BANCARD_*).", 409);
   try {
     const r = await devolverPago(cfg, a.empresaId, id);
     console.info("[bancard] devolución", id, r.estado, "por", a.email ?? a.usuarioCatalogId);
@@ -57,6 +57,6 @@ export async function POST(request: Request) {
   } catch (e) {
     if (e instanceof ErrorPago) return fallo(e.message, e.status);
     console.error("[api/web/pagos POST]", e);
-    return fallo(e instanceof Error ? e.message : "Error", 500);
+    return fallo(e instanceof Error ? e.message : "Error", 422);
   }
 }

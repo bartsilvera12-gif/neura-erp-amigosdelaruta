@@ -20,6 +20,9 @@ export const dynamic = "force-dynamic";
  * GET  ?id=<uuid del pago>                → cómo terminó, para la pantalla de resultado.
  *
  * Los ids son uuid, no el código de reserva ni el número de pedido: esos son correlativos y se adivinan.
+ *
+ * Ningún error con mensaje sale con 5xx: el proxy delante del ERP reemplaza el cuerpo de un 5xx por una página suya
+ * sin CORS, y el navegador sólo ve "Failed to fetch". Por eso 409/422.
  */
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -33,7 +36,7 @@ export async function POST(request: Request) {
     return errorPublico(request, "Demasiados intentos. Probá en un minuto.", 429);
   }
   const cfg = configBancard();
-  if (!cfg) return errorPublico(request, "El pago con tarjeta no está disponible.", 503);
+  if (!cfg) return errorPublico(request, "El pago con tarjeta no está disponible.", 409);
 
   let body: Record<string, unknown>;
   try {
@@ -59,7 +62,7 @@ export async function POST(request: Request) {
   } catch (e) {
     if (e instanceof ErrorPago) return errorPublico(request, e.message, e.status);
     console.error("[api/web/pago]", e);
-    return errorPublico(request, "No se pudo abrir el pago con tarjeta.", 500);
+    return errorPublico(request, "No se pudo abrir el pago con tarjeta.", 422);
   }
 }
 
@@ -84,6 +87,6 @@ export async function GET(request: Request) {
     });
   } catch (e) {
     console.error("[api/web/pago GET]", e);
-    return errorPublico(request, "No se pudo consultar el pago.", 500);
+    return errorPublico(request, "No se pudo consultar el pago.", 422);
   }
 }

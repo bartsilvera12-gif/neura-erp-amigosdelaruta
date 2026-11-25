@@ -42,7 +42,7 @@ export async function leerCobroConfig(sb: Sb, empresaId: string): Promise<CobroC
   const senaUsd = Number(v.sena_usd);
   const tasaUsdPyg = Number(v.tasa_usd_pyg);
   if (!(senaUsd > 0) || !(tasaUsdPyg > 0)) {
-    throw new ErrorPago("El pago con tarjeta no está configurado (falta la seña o la cotización).", 503);
+    throw new ErrorPago("El pago con tarjeta no está configurado (falta la seña o la cotización).", 409);
   }
   return { senaUsd, tasaUsdPyg, fechaTasa: typeof v.fecha_tasa === "string" ? v.fecha_tasa : null };
 }
@@ -151,7 +151,7 @@ export async function abrirPago(
   if (!r.ok) {
     await sb.from("bancard_pago").update({ estado: "error", motivo: r.detalle.slice(0, 500) }).eq("id", pagoId);
     console.error("[bancard] single_buy rechazado", spid, r.detalle);
-    throw new ErrorPago("No se pudo abrir el pago con tarjeta. Probá de nuevo en un momento.", 502);
+    throw new ErrorPago("No se pudo abrir el pago con tarjeta. Probá de nuevo en un momento.", 409);
   }
   await sb.from("bancard_pago").update({ estado: "pendiente", process_id: r.processId }).eq("id", pagoId);
   return { pagoId, processId: r.processId, scriptUrl: scriptCheckout(cfg), montoGs, descripcion };
@@ -407,7 +407,7 @@ export async function devolverPago(
       await sb.from("bancard_pago").update({ estado: "rechazado", motivo: "Cancelado por rollback (sin cobro)" }).eq("id", pagoId);
       return { estado: "rechazado", detalle: "No había cobro; el intento quedó cancelado." };
     }
-    throw new ErrorPago(`Bancard no aceptó la devolución: ${r.detalle}`, 502);
+    throw new ErrorPago(`Bancard no aceptó la devolución: ${r.detalle}`, 409);
   }
 
   const motivo = `Devuelto por rollback de Bancard (${new Date().toISOString().slice(0, 16).replace("T", " ")})`;
